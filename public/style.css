@@ -920,3 +920,14 @@ body.fav-on .favbar { display: flex; }
 
 /* 没有要显示的计价币余额时，整块隐藏 */
 #holdQuote:empty { display: none; }
+
+/* 强制登录：整页遮罩（关不掉，登录后自动消失） */
+.authgate { z-index: 20000; background: rgba(5, 7, 10, .96); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.authgate .lockbox { width: min(520px, 100%); text-align: left; }
+.authgate .ag-logo { display: block; margin: 0 auto 10px; border-radius: 14px; }
+.authgate h3 { text-align: center; }
+.ag-steps { margin: 12px 0 14px; padding-left: 20px; line-height: 1.7; font-size: 13px; }
+.ag-steps li { margin: 6px 0; }
+.ag-cmd { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line2); background: var(--panel2); }
+.ag-cmd code { flex: 1; font-size: 13px; color: var(--y); }
+.ag-note { font-size: 11px; margin-top: 8px; word-break: break-all; }

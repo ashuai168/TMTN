@@ -56,24 +56,31 @@ export class LiveTrader extends EventEmitter {
       clearInterval(this.balTimer); this.balTimer = setInterval(() => this.refreshBalance(), 20_000);
     } catch (e) { this.status.connected = false; this.status.error = e.message; }
     await this.checkAuth();
-    clearInterval(this.authTimer); this.authTimer = setInterval(() => this.checkAuth(), 30_000);
+    clearInterval(this.authTimer); this.authTimer = setInterval(() => this.checkAuth(), 10_000);   // 每 10 秒检查一次登录状态（baw wallet status，约 0.3 秒）
     clearInterval(this.lockTimer); this.lockTimer = setInterval(() => this.lockStatus(true).catch(() => {}), 5_000);   // 钱包锁状态后台每 5 秒刷新，下单时直接用
     clearInterval(this.claimTimer); this.claimTimer = setInterval(() => this.scanClaims(), 60_000); setTimeout(() => this.scanClaims(), 20_000);
     clearInterval(this.ruleTimer); this.ruleTimer = setInterval(() => this.ruleTick().catch((e) => console.error('tokenRule:', e.message)), 2_000);
   }
 
   // 顶栏显示的 baw 登录状态：baw wallet status（CONNECTED 才算已登录）+ wallet agent-id（.ai 域名）
+  // 登录状态：baw wallet status（CONNECTED 才算已登录）+ wallet agent-id（.ai 域名）。
+  // 偶尔一次超时 / 网络错误不算掉线：连续 2 次不正常才改成未登录（页面才会挡住）；一次正常马上恢复
   async checkAuth() {
     const a = this.status.auth;
+    let state, message = '';
     try {
       const st = await baw.walletStatus();
-      a.state = st === 'CONNECTED' && !AUTH_SIMULATE_LOGGED_OUT ? 'ok' : 'logged_out'; a.message = a.state === 'ok' ? '' : `baw 状态：${AUTH_SIMULATE_LOGGED_OUT ? 'UNCONNECTED（调试模拟）' : st}`;
-      if (a.state === 'ok' && !a.agentId) { try { const id = await baw.agentId(); a.agentId = id.claimed ? id.agentId : null; if (a.agentId) this.market.names?.set(this.wallets[0]?.address, a.agentId); } catch { /* 域名拿不到不影响登录状态 */ } }
-      a.address = this.wallets[0]?.address || a.address;
+      state = st === 'CONNECTED' && !AUTH_SIMULATE_LOGGED_OUT ? 'ok' : 'logged_out'; message = state === 'ok' ? '' : `baw 状态：${AUTH_SIMULATE_LOGGED_OUT ? 'UNCONNECTED（调试模拟）' : st}`;
     } catch (e) {
-      a.state = /找不到 baw/.test(e.message) ? 'missing' : /sign|auth|login|登录|401|unauthor/i.test(e.message) ? 'logged_out' : 'error';
-      a.message = e.message;
+      state = /找不到 baw/.test(e.message) ? 'missing' : /sign|auth|login|登录|401|unauthor/i.test(e.message) ? 'logged_out' : 'error';
+      message = e.message;
     }
+    if (state === 'ok') this.authFails = 0; else this.authFails = (this.authFails || 0) + 1;
+    if (state === 'ok' || this.authFails >= 2) { a.state = state; a.message = message; }
+    else if (a.state === 'ok') a.message = `检查失败一次，稍后再确认：${message}`;
+    if (state !== 'ok' && this.authFails === 1) setTimeout(() => this.checkAuth(), 3_000);   // 第一次失败 3 秒后马上再确认
+    if (a.state === 'ok' && !a.agentId) { try { const id = await baw.agentId(); a.agentId = id.claimed ? id.agentId : null; if (a.agentId) this.market.names?.set(this.wallets[0]?.address, a.agentId); } catch { /* 域名拿不到不影响登录状态 */ } }
+    a.address = this.wallets[0]?.address || a.address;
     a.checkedAt = Date.now();
     return a;
   }

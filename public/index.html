@@ -156,13 +156,14 @@
 
 <!-- 下单确认 -->
 <!-- 币安钱包未登录时的锁定弹窗：不能用 Esc 或点背景关闭，登录成功后自动消失 -->
-<div class="lockmodal hidden" id="loginModal">
+<div class="lockmodal authgate hidden" id="loginModal" role="dialog" aria-modal="true">
   <div class="lockbox">
-    <h3>请先登录币安 Agentic 钱包</h3>
-    <p class="muted">实盘下单要通过 baw 使用你的币安 Agentic 钱包。现在检测到钱包<b class="r">未登录</b>，登录前不能买卖。</p>
-    <div id="loginBody"></div>
-    <div class="lockbtns"><button class="big-btn" id="loginGo">登录</button><button class="big-btn ghost" id="loginRecheck">重新检查</button></div>
-    <p class="muted" style="font-size:11px">也可以在终端运行 <code>baw auth signin</code> 登录，完成后点「重新检查」。</p>
+    <img class="ag-logo" src="logo.svg?v=2" width="64" height="64" alt="TMTN" />
+    <h3>请先登录币安 Agentic Wallet</h3>
+    <p class="muted" id="loginLead">检测到币安钱包<b class="r">未登录</b>。登录前所有功能都不能使用。</p>
+    <ol class="ag-steps" id="loginBody"></ol>
+    <div class="lockbtns"><button class="big-btn" id="loginRecheck">我已登录，重新检测</button></div>
+    <p class="muted ag-note" id="loginNote"></p>
   </div>
 </div>
 <div class="modal hidden" id="confirmModal">

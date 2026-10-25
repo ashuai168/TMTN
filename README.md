@@ -51,6 +51,8 @@ baw auth signin            # 按提示在币安 App 里扫码 / 确认
 baw wallet status          # 显示 CONNECTED 即可
 ```
 
+> **必须先登录。** 实盘模式（`MODE=live`）下，程序每 10 秒用 `baw wallet status` 检查一次登录状态。未登录（或登录过期）时，页面会被一个关不掉的遮罩挡住，提示在终端运行 `baw auth signin`、在币安 App 中确认；所有动用资金的接口（下单、兑换、换回 BNB、领取、撤销授权、单币转出规则）都会返回 401「币安钱包未登录」。登录完成后遮罩自动消失。偶尔一次检查失败不算掉线，连续 2 次才会锁定。没装 baw 时遮罩会提示安装命令。模拟盘不受影响。
+
 - 交易 Four 专属模板需要币安的技能脚本（提供 `agent-id-exclusive-token-launches.mjs`）：
 
 ```bash

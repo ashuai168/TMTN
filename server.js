@@ -57,6 +57,12 @@ const modeInfo = () => ({ mode: LIVE ? 'live' : 'sim', baw: LIVE ? trader.status
 
 const app = express();
 app.use(express.json());
+// 强制登录：实盘模式下币安钱包未登录时，所有动用资金的接口一律拒绝（买卖、兑换、换回 BNB、领取、撤销授权、单币转出规则）
+const AUTH_GATED = new Set(['/api/order', '/api/swap', '/api/quote-to-bnb', '/api/claim', '/api/approvals/revoke', '/api/token-rules']);
+app.use((req, res, next) => {
+  if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 const state = () => ({

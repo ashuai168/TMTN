@@ -270,22 +270,21 @@ function select(addr) {
 function renderAuth() {
   const pill = $('#authPill'), modal = $('#loginModal'), a = S.baw?.auth;
   if (!LIVE() || !a) { pill.classList.add('hidden'); modal.classList.add('hidden'); return; }
-  const addr = a.address ? short(a.address, 6, 4) : '';
   pill.classList.remove('hidden', 'bad', 'warn');
   if (a.state === 'ok') { pill.querySelector('span').textContent = '币安钱包已登录'; pill.title = `${a.agentId || ''} ${a.address || ''}`.trim(); modal.classList.add('hidden'); return; }
   pill.classList.add(a.state === 'checking' ? 'warn' : 'bad');
   pill.querySelector('span').textContent = a.state === 'checking' ? '检查登录中…' : '币安钱包未登录';
   pill.title = a.message || '';
-  if (a.state === 'checking') return;
+  if (a.state === 'checking') return;   // 还在检查（或只失败了一次）时不挡住页面
+  // 未登录：整页遮罩，关不掉；登录检测通过后自动消失。登录命令要在终端里自己运行，页面不代为执行
   modal.classList.remove('hidden');
-  const l = S.baw.login;
-  const k = [a.state, a.message, l?.state, l?.pairingCode, l?.message].join('|');
+  const k = [a.state, a.message].join('|');
   if (modal.dataset.k === k) return; modal.dataset.k = k;
-  $('#loginBody').innerHTML = a.state === 'missing' ? '<p class="r">找不到 baw 命令，请先在终端安装：<code>npm i -g @binance/agentic-wallet</code></p>'
-    : l?.state === 'waiting' ? `<p>在浏览器打开登录页，用币安 App 扫码，并确认 App 里显示的配对码和下面一致：</p><div class="pairing">${esc(l.pairingCode || '')}</div>
-      <p><a href="${esc(l.urlForWeb)}" target="_blank" rel="noopener">打开币安登录页（二维码）↗</a></p><p class="muted" style="font-size:11px">二维码约 5 分钟内有效；App 里确认后这里会自动关闭。</p>`
-    : l?.state === 'failed' ? `<p class="r">登录没有完成：${esc(l.message || '')}。可以再点一次「登录」获取新的二维码。</p>`
-    : a.state === 'error' ? `<p class="r">状态检查出错：${esc(a.message)}</p>` : '';
+  const cmd = (c) => `<div class="ag-cmd"><code>${esc(c)}</code><button class="ui-copy" data-agcopy="${esc(c)}">复制</button></div>`;
+  $('#loginLead').innerHTML = a.state === 'missing' ? '没有找到币安 Agentic Wallet 命令行工具（baw）。先安装，再登录。' : '检测到币安钱包<b class="r">未登录</b>（或登录已过期）。登录前所有功能都不能使用。';
+  $('#loginBody').innerHTML = (a.state === 'missing' ? `<li>在终端安装 baw：${cmd('npm i -g @binance/agentic-wallet')}</li>` : '')
+    + `<li>在终端运行：${cmd('baw auth signin')}</li><li>打开终端里给出的链接 / 二维码，在<b>币安 App</b> 中确认登录</li><li>回到这里点「我已登录，重新检测」（每 10 秒也会自动检测）</li>`;
+  $('#loginNote').textContent = a.state === 'error' ? `检测出错：${a.message || ''}` : a.message || '';
 }
 async function startLogin() {
   const btn = $('#loginGo'); btn.disabled = true; btn.textContent = '正在获取登录二维码…';
@@ -293,7 +292,8 @@ async function startLogin() {
   catch (e) { if (S.baw) S.baw.login = { state: 'failed', message: e.message }; }
   btn.disabled = false; btn.textContent = '登录'; $('#loginModal').dataset.k = ''; renderAuth();
 }
-$('#loginGo').addEventListener('click', startLogin);
+$('#loginGo')?.addEventListener('click', startLogin);   // 页面上不再提供登录按钮（登录命令在终端运行）
+$('#loginModal').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; try { await navigator.clipboard.writeText(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } setTimeout(() => (b.textContent = '复制'), 1500); });
 $('#loginRecheck').addEventListener('click', async () => { const r = await api('/api/auth/check', {}); if (r && S.baw) S.baw.auth = r; $('#loginModal').dataset.k = ''; renderAuth(); });
 
 function renderTop() {
