@@ -7,6 +7,7 @@ import { AgentCurve } from './agentCurve.js';
 import { FourMeme, AGENT_ID_TEMPLATE } from './fourMeme.js';
 import { MetaFetcher, ipfsUrl } from './meta.js';
 import { GangFun } from './gangFun.js';
+import { GangChain } from './gangChain.js';
 import { GangV2 } from './gangV2Pads.js';
 import { NameCache } from './names.js';
 import { ShrineFeeds, tokenInfo } from './shrine.js';
@@ -29,6 +30,8 @@ export class LiveMarket extends EventEmitter {
     this.curve = new AgentCurve(this.provider);
     this.four = new FourMeme();
     this.gang = new GangFun();
+    this.gangChain = new GangChain(this.provider);   // 链上创建事件，比接口轮询快
+    this.gangChain.on('token', (it) => this.onGangChainToken(it));
     this.meta = new MetaFetcher();
     this.names = new NameCache();
     this.feeds = new ShrineFeeds();
@@ -50,7 +53,7 @@ export class LiveMarket extends EventEmitter {
     this.four.start();
     this.fourRestore();
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
-    this.gang.start();
+    this.gang.start(); this.gangChain.start();
     this.feeds.start();
     const blk = async () => { const t0 = Date.now(); try { this.block = await this.provider.getBlockNumber(); this.rpcMs = Date.now() - t0; this.rpcError = null; } catch (e) { this.rpcError = e.shortMessage || e.message; } };
     const px = async () => { try { const j = await (await fetch(BNB_PRICE_URL)).json(); if (+j.price) this.bnbUsd = +j.price; } catch { /* 保留上次 */ } };
@@ -199,10 +202,22 @@ export class LiveMarket extends EventEmitter {
     if (it.logo) t.image = it.logo;
     // V2 报价币（GANG / ZEC / 币股…）的美元价用 gang.fun 给的，quoteUsd() 换美元要用
     if (it.quoteAddress && it.quoteUsd && !(this.qUsd[it.quoteAddress.toLowerCase()] > 0)) this.qUsd[it.quoteAddress.toLowerCase()] = it.quoteUsd;
-    if (isNew) this.emit('launch', { ...this.summary(t), detectMs: Math.max(0, Date.now() - t.createdAt) });
+    if (isNew && !existed) this.emit('launch', { ...this.summary(t), detectMs: Math.max(0, Date.now() - t.createdAt) });   // 链上已经先发现过的，接口再看到时不重复提示
     // 最近有成交的几个 + 当前选中的，定时拉成交
     const hot = [...this.tokens.values()].filter((x) => x.source === 'gang' && x.lastTradeAt).sort((a, b) => b.lastTradeAt - a.lastTradeAt).slice(0, 5).map((x) => x.address);
     this.gang.setHot(hot);
+  }
+
+  // 链上发现的 Gang 新盘：先上列表（名称、符号、创建者、计价币都来自事件），市值 / 头像等等接口轮询补上
+  onGangChainToken(it) {
+    const lat = it.seenAt - it.createdAt * 1000;
+    (this.gangLat ||= []).unshift({ symbol: it.symbol, address: it.address, block: it.block, createdAt: it.createdAt * 1000, seenAt: it.seenAt, latencyMs: lat, viaApiFirst: this.tokens.has(this.key(it.address)) }); this.gangLat.length = Math.min(this.gangLat.length, 20);
+    console.log(`[Gang 链上] 新盘 ${it.symbol}（${it.track === 'v2' ? 'V2 · ' + it.quoteSymbol : '老盘 · BNB'}）区块 ${it.block}，出块后 ${lat}ms 发现${this.tokens.has(this.key(it.address)) ? '（接口已先收录）' : ''}`);
+    if (this.tokens.has(this.key(it.address))) return;
+    this.gang.seen.set(it.address, -1);
+    this.upsertGang(it, true);
+    const t = this.get(it.address);
+    if (t && it.track === 'v2') this.gangV2Curve(t).then(() => { if (!(t.price > 0) && t.launchPrice > 0) { t.price = t.launchPrice; const q = this.quoteUsd(t); if (q && !(t.mcapUsd > 0)) t.mcapUsd = t.price * 1e9 * q; } }).catch(() => {});
   }
 
   onGangTrade(tr, live) {
@@ -504,6 +519,6 @@ export class LiveMarket extends EventEmitter {
 
   netStatus() {
     const l = this.feeds.status.launch;
-    return { wss: l.connected ? l.rttMs ?? 0 : null, rpc: this.rpcError ? null : this.rpcMs, rpcError: this.rpcError, rpcNode: { ...this.provider.info, four: nodeName(this.four.status?.rpcActive || this.four.status?.rpc), curve: nodeName(this.curve.status?.rpc) }, shrine: this.feeds.status, curve: this.curve.status, four: this.four.status, gang: this.gang.status };
+    return { wss: l.connected ? l.rttMs ?? 0 : null, rpc: this.rpcError ? null : this.rpcMs, rpcError: this.rpcError, rpcNode: { ...this.provider.info, four: nodeName(this.four.status?.rpcActive || this.four.status?.rpc), curve: nodeName(this.curve.status?.rpc) }, shrine: this.feeds.status, curve: this.curve.status, four: this.four.status, gang: this.gang.status, gangChain: { ...this.gangChain.status, recent: (this.gangLat || []).slice(0, 8) } };
   }
 }

@@ -82,7 +82,7 @@ npm run live:8788           # 实盘：真实行情 + baw 真实下单（只有�
 | `AUTO_TRANSFER_TO` | （空） | 自动转出的目标地址。**请设成你自己的地址**；留空时三个自动转出开关都打不开 |
 | `AUTO_TRANSFER_FOUR` | `0` | 旧开关：`1` = Four 发射后自动转出（现在一般用页面上的开关） |
 | `PREAPPROVE` | `0` | 旧功能：买入后无限额预授权，**不建议打开** |
-| `NODEREAL_RPC` | （空） | 私有 RPC（例如 NodeReal，含 key，只放 `.env`）。填了就作为主节点：读链、查确认、扫 Four 事件（一次约 5 万块），公共节点自动备用 |
+| `NODEREAL_RPC` | （空） | 私有 RPC（例如 NodeReal，含 key，只放 `.env`）。填了就作为主节点：读链、查确认、扫 Four 事件（一次约 5 万块），并通过它的 WSS 订阅 Gang 新盘创建事件；公共节点自动备用 |
 | `RPC_URL` | 有 `NODEREAL_RPC` 用它，否则 `https://bsc-dataseed.bnbchain.org` | 读链用的 BSC RPC |
 | `FOUR_LOG_RPC` | 有 `NODEREAL_RPC` 用它，否则 `https://bsc-rpc.publicnode.com` | 扫 Four 事件用的 RPC（getLogs） |
 | `FOUR_LOG_STEP` | NodeReal `49000` / 公共节点 `5000` | 每次 getLogs 查多少块 |
@@ -128,6 +128,7 @@ engine/
     agentCurve.js fsi.js shrine.js       Flap Agent 曲线数据（Reader、fsi、shrine）
     fourMeme.js openFour.js              Four：链上事件、OpenFour 技能脚本
     gangFun.js gangTrade.js gangV2Pads.js  gang.fun：接口、老盘、V2 盘
+    gangChain.js     gang.fun 新盘：监听链上创建事件（WSS 订阅 + getLogs 补查），比接口轮询快
     portal.js        Flap Portal 买 / 卖 / 领取、发交易并等回执
     liveTrader.js    下单流程、自动领取、单币规则 / 自动转出、计价币换回 BNB、授权管理
     holdings.js      持仓与盈亏（钱包历史、历史 BNB 价格、链上卖出报价核对）

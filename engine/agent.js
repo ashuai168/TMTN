@@ -81,7 +81,7 @@ export class Agent extends EventEmitter {
 
   async onLaunch(s) {
     const detectMs = s.detectMs ?? 40 + Math.round(Math.random() * 160);
-    this.log('info', `🆕 链上检测到新内盘 ${s.symbol}（${s.platform === 'four' ? 'Four·Agent 专属' : 'Flap·Agent 曲线'}，${s.quote} 报价）· ${detectMs}ms`, { token: s.address, kind: 'launch', detectMs });
+    this.log('info', `🆕 链上检测到新内盘 ${s.symbol}（${s.platform === 'four' ? 'Four·Agent 专属' : s.platform === 'gang' ? (s.gangTrack === 'v2' ? 'Gang V2' : 'Gang') : 'Flap·Agent 曲线'}，${s.quote} 报价）· ${detectMs}ms`, { token: s.address, kind: 'launch', detectMs });
     this.emit('detect', detectMs);
     // 自动买入已移除：发现新币只记日志，不再狙击 / 下单
     return;
