@@ -2171,3 +2171,27 @@ function histClick(e) {
   histSet(c ? [] : histGet().filter((x) => x.address !== d.dataset.hdel)); renderHist(); return true;
 }
 sIn.addEventListener('focus', () => { if (!sIn.value.trim()) { searchIdx = 0; renderHist(); } });
+
+/* ---------- 打赏作者 ---------- */
+const DONATE_ADDR = '0xcD4750b7b09dc39d20F8bC1E92456615Da7B6688';
+function openDonate() {
+  if (document.querySelector('.donate-dlg')) return;
+  const wrap = document.createElement('div'); wrap.className = 'ui-dlg-back';
+  wrap.innerHTML = `<div class="ui-dlg donate-dlg" role="dialog" aria-modal="true"><div class="ui-h">☕ 打赏作者</div>
+    <div class="ui-b"><div class="donate-qr"><img src="donate-qr.png?v=1" width="200" height="200" alt="打赏地址二维码" /></div>
+      <div class="ui-addr"><span class="mono donate-addr" data-dcopy title="点击复制">${DONATE_ADDR}</span><button class="ui-copy" data-dcopy>复制</button></div>
+      <div class="ui-note" style="text-align:center">BSC / BEP20 · 支持 BNB 及 BEP20 代币</div></div>
+    <div class="ui-f"><button class="ui-btn" data-dclose>关闭</button></div></div>`;
+  document.body.appendChild(wrap); requestAnimationFrame(() => wrap.classList.add('in'));
+  const close = () => { document.removeEventListener('keydown', key, true); wrap.classList.remove('in'); setTimeout(() => wrap.remove(), 150); };
+  const key = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(); } };
+  document.addEventListener('keydown', key, true);
+  wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
+  wrap.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-dclose]')) return close();
+    if (e.target.closest('[data-dcopy]')) { let ok = false; try { await navigator.clipboard.writeText(DONATE_ADDR); ok = true; } catch { /* 剪贴板接口不可用时退回旧办法 */ }
+      if (!ok) { const ta = document.createElement('textarea'); ta.value = DONATE_ADDR; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch { ok = false; } ta.remove(); }
+      note(ok ? '已复制' : '复制失败，请手动选择地址', ok ? 'ok' : 'info'); }
+  });
+}
+$('#donateBtn')?.addEventListener('click', openDonate);

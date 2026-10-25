@@ -893,3 +893,9 @@ body.fav-on .favbar { display: flex; }
 .flowt th, .flowt td { padding-left: 8px; padding-right: 8px; white-space: nowrap; }
 .flowt td .hsub { font-size: 10px; }
 .wallet-sel .handle:empty { display: none; }
+
+/* 打赏作者 */
+.donate-qr { display: grid; place-items: center; margin: 6px auto 10px; padding: 12px; width: fit-content; background: #fff; border-radius: 14px; }
+.donate-qr img { display: block; width: 200px; height: 200px; image-rendering: pixelated; }
+.donate-addr { cursor: pointer; }
+.donate-addr:hover { text-decoration: underline; text-underline-offset: 2px; }
