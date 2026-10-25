@@ -909,3 +909,11 @@ body.fav-on .favbar { display: flex; }
 .hold .acts { white-space: nowrap; width: 1%; }
 .hold .acts .qb { display: inline-block; margin: 0 0 0 3px; padding: 0 6px; height: 24px; font-size: 12px; }
 @media (max-width: 1360px) { .hold .acts { white-space: normal; width: auto; min-width: 116px; } .hold .acts .qb { margin: 2px 0 2px 3px; } .hold table { font-size: 13px; } .hold th, .hold td { padding: 5px 4px; } .hold td.l:first-child { min-width: 110px; max-width: 160px; } .hold td.l:first-child .hsub { max-width: 130px; } }
+/* 持仓页宽度：屏幕的 70%（至少 1100px，窗口更窄就占满），居中；操作按钮放不下时自动换两行 */
+.hold-in { max-width: min(100%, max(70vw, 1100px)); margin: 0 auto; }
+.hold .acts { white-space: normal; width: auto; min-width: 116px; }
+.hold .acts .qb { margin: 2px 0 2px 3px; }
+.hold td:nth-child(11) { white-space: nowrap; }
+.hold table { font-size: 13px; } .hold th { font-size: 12px; } .hold .hsub { font-size: 11px; }
+.hold th, .hold td { padding: 5px 4px; }
+.hold td.l:first-child { min-width: 110px; max-width: 150px; } .hold td.l:first-child b { font-size: 14px; } .hold td.l:first-child .hsub { max-width: 120px; }
