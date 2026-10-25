@@ -17,7 +17,7 @@ const FOUR_REG = new URL('../../data/fourTokens.json', import.meta.url);
 const FLAP_REG = new URL('../../data/flapCreated.json', import.meta.url);
 const BOOT = Date.now();
 
-const MAX = 320;                       // Flap Agent 曲线市场不参与淘汰，超出时淘汰最老的 Four 盘
+const MAX = 1000;                      // Flap Agent 曲线市场、持有中 / 收藏的币不参与淘汰，超出时淘汰最老的盘
 const num = (v) => { if (v == null || v === '') return null; if (typeof v === 'number') return v; const m = String(v).replace(/[$,\s]/g, '').match(/^(-?[\d.]+)([KMB])?$/i); if (!m) return Number(v) || null; return Number(m[1]) * ({ K: 1e3, M: 1e6, B: 1e9 }[(m[2] || '').toUpperCase()] || 1); };
 const sec2ms = (v) => { const x = Number(v); return !x ? Date.now() : x < 1e12 ? x * 1000 : x; };
 const isAgentish = (l) => l.agentExclusive === true || l.agent === true || l.isAgent === true || (Array.isArray(l.tags) && l.tags.some((t) => /agent/i.test(t)));
@@ -76,7 +76,8 @@ export class LiveMarket extends EventEmitter {
         remaining: 0, holders: null, buys: 0, sells: 0,   // holders：null = 还不知道，页面显示「—」
  volume: 0, buyTax: 0, sellTax: 0, feeBps: null, trades: [], candles: [], creator: '', market: null });
       if (this.tokens.size > MAX) {
-        const old = [...this.tokens.values()].filter((t) => !t.pinned && t.source !== 'agent-curve' && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
+        const keep = this.keepSet?.() || new Set();   // 持有中、收藏的币（server.js 设置），永远不淘汰
+        const old = [...this.tokens.values()].filter((t) => !t.pinned && !keep.has(t.address) && t.source !== 'agent-curve' && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
         if (old) this.tokens.delete(old.address);
       }
     }
