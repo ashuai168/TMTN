@@ -917,3 +917,6 @@ body.fav-on .favbar { display: flex; }
 .hold table { font-size: 13px; } .hold th { font-size: 12px; } .hold .hsub { font-size: 11px; }
 .hold th, .hold td { padding: 5px 4px; }
 .hold td.l:first-child { min-width: 110px; max-width: 150px; } .hold td.l:first-child b { font-size: 14px; } .hold td.l:first-child .hsub { max-width: 120px; }
+
+/* 没有要显示的计价币余额时，整块隐藏 */
+#holdQuote:empty { display: none; }

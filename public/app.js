@@ -1726,7 +1726,7 @@ async function loadQuoteBal(force = true) {
 }
 function renderQuoteBal() {
   const box = $('#holdQuote'); if (!box || S.view !== 'hold') return;
-  const q = HOLD.quote || [];
+  const q = (HOLD.quote || []).filter((r) => !(r.valueUsd != null && r.valueUsd < 0.5));   // 价值不到 $0.5 的零头不显示（只是不显示，余额和换回逻辑不变）
   if (!q.length && !HOLD.quoteErr) { box.innerHTML = ''; return; }
   const busy = (a) => S.orders?.some((o) => o.status === 'pending' && String(o.token).toLowerCase() === a.toLowerCase());
   box.innerHTML = `<div class="hq-h"><b>计价币余额</b><span class="hsub">Flap / Gang V2 买卖时中间换出来、还没换回 BNB 的币。按钮按点击那一刻的余额全部换回</span></div>
