@@ -26,3 +26,6 @@ OPEN_SOURCE_CHECKLIST.md
 
 # 多钱包：其他钱包后端的数据目录
 data-*/
+
+# 额外钱包的容器配置：登录信息（baw/）、数据、访问令牌都在这里，不要提交
+wallets/

@@ -77,17 +77,15 @@ npm run live:8788           # 实盘：真实行情 + baw 真实下单（只有�
 
 ### 多钱包同时下单（可选）
 
-每个币安 Agentic 钱包跑一个独立的后端：各自的 baw 登录目录（`BINANCE_BAW_DIR`）、设备标识（`BINANCE_INSTANCE_ID`）、数据目录（`DATA_DIR`），设置、授权、自动转出都分开（第二个钱包的自动转出默认关闭）。主后端（钱包 1）在 `.env` 里登记其他钱包：
+币安 Agentic Wallet 用网卡 MAC 识别设备，同一台电脑上登录两个账号会互相挤掉。所以钱包 1 照常跑在电脑上，钱包 2、3、4… 各跑一个 Docker 容器（固定虚拟 MAC、自己的登录目录、端口只开在 `127.0.0.1`），可以加任意多个：
 
 ```bash
-WALLET_LABEL=钱包 1
-WALLET_PEERS=[{"slot":2,"label":"钱包 2","url":"http://127.0.0.1:8789","bawDir":"~/.baw-wallet2","instanceId":"tmtn-wallet2"}]
+scripts/add-wallet.sh 2 --address 0x钱包2的地址   # 建容器 tmtn-wallet2（127.0.0.1:8789），默认只报价
+docker exec -it tmtn-wallet2 baw auth signin      # 用钱包 2 的币安账号扫码，核对配对码
+scripts/add-wallet.sh --peers --write-env         # 写进 .env 的 WALLET_PEERS，然后重启钱包 1
 ```
 
-```bash
-BINANCE_BAW_DIR=~/.baw-wallet2 BINANCE_INSTANCE_ID=tmtn-wallet2 baw auth signin   # 用第二个币安账号登录钱包 2
-npm run live:wallet2                                                            # 启动钱包 2 的后端（8789，行情只用公共节点）
-```
+完整步骤（前置检查、校验、扫错账号怎么办）见 **[docs/add-wallet.md](docs/add-wallet.md)**，可以直接交给你的 AI 助手照做。
 
 页面右上角的钱包菜单里打开钱包 2 的「参与下单」后：买入时每个钱包各花输入的 BNB；卖出时每个钱包卖自己持仓的同样比例；两个钱包并行执行，结果分别提示。没登录 / 后端没启动的钱包自动跳过。持仓页可以看全部钱包合并，或者只看某一个钱包。
 
