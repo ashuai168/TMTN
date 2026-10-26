@@ -2524,7 +2524,7 @@ function renderTrkPanel() {
   $('#bbTrackN').textContent = TRK.targets.length || '';
   if (!TP.open) return;
   const rows = TRK.feed;
-  $('#trkpCount').textContent = TRK.targets.length || '';
+  $('#trkpCount').textContent = TRK.targets.length;
   $('#trkpList').innerHTML = !TRK.targets.length ? '<div class="trkp-empty">还没有追踪的地址。<br>可以在交易者盈亏抽屉里点「追踪」，或者到追踪页添加 .ai / .bnb 域名、0x 地址。<br><button data-tpgo>去添加</button></div>'
     : !rows.length ? '<div class="trkp-empty">追踪的地址在 Flap / Four / Gang V2 内盘上买卖时，会实时出现在这里。</div>'
     : rows.map((e) => `<div class="trkp-e"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) : K(e.quoteAmt)}<small class="dim"> ${e.bnb ? 'BNB' : esc(e.quote)}</small></span></div>

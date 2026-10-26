@@ -1076,3 +1076,15 @@ input.trk-ed { height: 22px; width: 160px; padding: 0 6px; border: 1px solid var
 .trk-log { max-height: 46vh; }
 @media (max-width: 1100px) { .trk-side { width: 320px; } }
 @media (max-width: 760px) { .trk-body { flex-direction: column; } .trk-side { width: 100%; } }
+
+/* 钱包追踪栏和战壕 / 「Agent 专属」栏同一套外观：.panel（圆角 10px、1px 边框、面板底色）+ .lh 标题栏 + .lctrl 按钮，四周 8px 间隙（和交易页布局的 padding / gap 一样） */
+.trk-panel.panel { left: 8px; top: calc(46px + var(--favH) - 26px + 8px); bottom: 34px; border: 1px solid var(--line); border-radius: 10px; box-shadow: none; overflow: hidden; background: var(--panel); }
+.trk-panel .trkp-h { height: auto; padding: 10px 12px 8px; background: none; border-bottom: 1px solid var(--line); gap: 6px; font-size: 13.5px; }
+.trk-panel .lctrl > * { height: 30px; }
+.trk-panel .trkp-drag { right: -6px; }
+.trk-panel .trkp-e { padding: 8px 12px; border-bottom: 1px solid var(--line); transition: background .12s; }
+.trk-panel .trkp-e:hover { background: rgba(255, 255, 255, .035); }
+body.trkp-on main.layout { margin-left: calc(var(--trkpW, 340px) + 8px); }
+body.trkp-on #pulse { margin-left: calc(var(--trkpW, 340px) + 16px); }
+body.trkp-on #hold, body.trkp-on #track { margin-left: calc(var(--trkpW, 340px) + 8px); }
+@media (max-width: 760px) { .trk-panel.panel { left: auto; top: auto; bottom: auto; margin: 8px; } body.trkp-on main.layout, body.trkp-on #pulse, body.trkp-on #hold, body.trkp-on #track { margin-left: 0; } }
