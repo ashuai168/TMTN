@@ -26,6 +26,7 @@ export function sourceOf(o) {
   if (o.side === 'transfer') return 'transfer';
   if (o.side === 'approve' || o.via === 'preapprove') return 'preapprove';
   if (o.via === 'quick') return 'quick';
+  if (/^跟单/.test(o.source || '')) return 'copy';
   if (/自动/.test(o.source || '')) return 'auto';
   return 'manual';
 }

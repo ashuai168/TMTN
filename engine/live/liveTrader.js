@@ -1,5 +1,5 @@
 // 实盘执行层：读币安 Agentic Wallet（baw）的地址和余额，用链上 Portal.quoteBuy / baw 报价和预演算出能成交多少。
-// 默认不提交真实交易（订单状态 dry_run）。LIVE_TRADE=1 时，页面上手动点击的订单才会真实上链；自动买/自动卖始终只报价。
+// 默认不提交真实交易（订单状态 dry_run）。LIVE_TRADE=1 时，页面上手动点击的订单、以及本人启动的「真实下单」跟单任务（source 形如「跟单 任务名」）才会真实上链；自动买/自动卖始终只报价。
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -16,6 +16,7 @@ import * as openFour from './openFour.js';
 import { GangTrade } from './gangTrade.js';
 import { GangV2 } from './gangV2Pads.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
+import { setQuoteLookup } from './quoteRoutes.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -25,6 +26,7 @@ export class LiveTrader extends EventEmitter {
     this.market = market;
     this.portal = new Portal(market.tradeProvider || market.provider, market.provider);   // 交易走 NodeReal 优先；领取前的模拟（定时扫描）走公共节点
     setApprovalCtx({ trader: this, market });
+    setQuoteLookup((a) => this.quoteSet().has(String(a).toLowerCase()));   // 计价币兑换前的流动性检查只针对计价币（见 quoteRoutes.js）
     this.gangTrade = new GangTrade(market.tradeProvider || market.provider, (o) => this.portal.send(o));
     this.gangV2 = new GangV2(market.tradeProvider || market.provider, (o) => this.portal.send(o));
     this.wallets = [];
@@ -469,7 +471,7 @@ export class LiveTrader extends EventEmitter {
   async execute({ walletId, token, side, amount, slippage = 20, source = '手动', via = null, clientTs = null }) {
     const t = this.market.get(token);
     const order = { id: randomBytes(5).toString('hex'), ts: Date.now(), walletId, wallet: this.wallets[0]?.label || 'baw', token, symbol: t?.symbol || '?', platform: t?.platform,
-      side, amount: Number(amount), slippage, source, via, status: 'pending', steps: [], dryRun: DRY_RUN || source !== '手动', clientTs };
+      side, amount: Number(amount), slippage, source, via, status: 'pending', steps: [], dryRun: DRY_RUN || !isRealSource(source), clientTs };
     this.orders.unshift(order); if (this.orders.length > 300) this.orders.length = 300;
     this.emit('order', order);
     // 每一步记两个时间：ms = 这一步自己的耗时（各模块原来的口径），at = 从服务器收到订单起累计的时间（统一时间线）
@@ -819,3 +821,6 @@ LiveTrader.prototype.setMaxTrade = function (v) {
 };
 
 const trim = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
+// 会真实上链的订单来源：页面手动点击（手动），以及本人在页面上关掉「模拟」并启动的跟单任务（跟单 任务名）。
+// 以前只认「手动」，跟单任务传来的「跟单 xxx」被当成自动订单，真实模式的跟单永远只报价、从不下单，也不计次数
+const isRealSource = (s) => s === '手动' || /^跟单 /.test(String(s || ''));

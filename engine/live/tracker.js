@@ -222,14 +222,15 @@ export class Tracker extends EventEmitter {
   }
 
   afterOrder(task, ev, res, side, amt) {
-    const list = [].concat(res || []), ok = list.filter((o) => o?.status === 'filled'), tk = task.tokens[ev.token];
+    // 成交的，和「已提交、结果未知」的（pending：已广播在等回执 / 在等币安 App 确认）都按已花钱计入额度和次数：宁可少跟一次，也不能超过上限
+    const list = [].concat(res || []), ok = list.filter((o) => o?.status === 'filled' || o?.status === 'pending'), tk = task.tokens[ev.token];
     for (const o of ok) {
       if (side === 'buy') { const b = Number(o.amountIn ?? o.amount) || amt; task.stats.buyBnb += b; task.stats.buys++; tk.bought += b; tk.open = true; task.days[day()] = (task.days[day()] || 0) + b; }
       else { const b = Number(o.out) || 0; task.stats.sellBnb += b; task.stats.sells++; tk.sold += b; if (amt >= 100) { tk.open = false; task.stats.realized += tk.sold - tk.bought; } }
     }
     if (ok.length) task.stats.lastAt = Date.now();
     if (side === 'buy' && ok.length) task.stats.copies = (task.stats.copies || 0) + 1;   // 一次跟买（不管几个钱包成交）算一次
-    const row = this.record(task, ev, ok.length ? 'order' : 'fail', `${side === 'buy' ? `跟买 ${amt} BNB` : `跟卖 ${amt}%`}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : '失败 ' + (o.reason || '')}`).join('；')}`, { results: list.map((o) => ({ wallet: o.wallet, status: o.status, tx: o.tx, reason: o.reason })) });
+    const row = this.record(task, ev, ok.length ? 'order' : 'fail', `${side === 'buy' ? `跟买 ${amt} BNB` : `跟卖 ${amt}%`}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : o.status === 'pending' ? '已提交待确认（已计入额度）' : '失败 ' + (o.reason || '')}`).join('；')}`, { results: list.map((o) => ({ wallet: o.wallet, status: o.status, tx: o.tx, reason: o.reason })) });
     if (side === 'buy' && ok.length) this.checkLimit(task, ev, false);
     this.saveTasks(); return row;
   }
