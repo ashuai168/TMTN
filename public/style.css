@@ -1043,3 +1043,20 @@ body { --favH: 26px; } body.fav-on { --favH: 60px; }
 .trkp-empty { padding: 24px 14px; color: var(--muted); font-size: 13px; line-height: 1.7; } .trkp-empty button { margin-top: 8px; padding: 4px 12px; background: var(--y); color: #1a1400; font-weight: 600; }
 .trkp-drag { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: ew-resize; }
 @media (max-width: 760px) { .trk-panel { width: 100vw; } .trkp-drag { display: none; } }
+
+/* 钱包追踪改成独立的一栏（参考 GMGN）：最左边一栏，主内容整体右移让出宽度，不覆盖任何东西；关掉后恢复 */
+.trk-panel { box-shadow: none; border-right: 1px solid var(--line2); background: var(--panel); }
+body.trkp-on main.layout, body.trkp-on #pulse, body.trkp-on #hold, body.trkp-on #track { margin-left: var(--trkpW, 340px); }
+body.trkp-on main.layout { width: auto; }
+.trkp-h { height: 34px; padding: 0 8px; gap: 6px; background: var(--panel2); } .trkp-h b { font-size: 13px; }
+.trkp-n { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--line2); color: var(--muted); }
+.trkp-e { padding: 5px 8px; font-size: 12px; line-height: 1.35; }
+.trkp-r1, .trkp-r2 { gap: 5px; } .trkp-r2 { margin-top: 2px; }
+.trkp-act { padding: 0 4px; font-size: 10.5px; border-width: 1px; } .trkp-act.g { background: rgba(30, 203, 129, .1); } .trkp-act.r { background: rgba(246, 70, 93, .1); }
+.trkp-who { max-width: 48%; font-size: 12px; }
+.trkp-tok .tlogo, .trkp-tok img { width: 16px; height: 16px; }
+@media (max-width: 760px) {
+  .trk-panel { position: relative; top: auto; bottom: auto; width: auto; height: 38vh; }
+  body.trkp-on main.layout, body.trkp-on #pulse, body.trkp-on #hold, body.trkp-on #track { margin-left: 0; }
+}
+body.trkp-on .pulse.trench { grid-template-columns: repeat(3, minmax(240px, 1fr)); }
