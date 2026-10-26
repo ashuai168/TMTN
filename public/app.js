@@ -47,8 +47,15 @@ const nameOf = (r) => r.name || NAMES[String(r.trader || '').toLowerCase()] || n
 setInterval(async () => { try { const j = await api(`/api/names?ver=${namesVer}`); if (j.names) { Object.assign(NAMES, j.names); namesVer = j.ver; } } catch { /* ignore */ } }, 3000);
 // 自己的钱包（登录的 baw 地址，按地址比，不按域名字符串）：绿色 + 「我」；别人的 .ai 域名黄色；普通地址灰色
 const myAddr = () => String(S.baw?.auth?.address || (LIVE() ? S.wallets[0]?.address : '') || '').toLowerCase();
-const isMe = (a) => !!a && !!myAddr() && String(a).toLowerCase() === myAddr();
-const whoHtml = (addr, name, a = 6, b = 4) => isMe(addr) ? `<b class="me">${esc(name || short(addr, a, b))}</b><i class="me-tag">我</i>` : name ? `<b class="y">${esc(name)}</b>` : `<span class="mono">${short(addr, a, b)}</span>`;
+// 自己的所有钱包（多钱包时钱包 1、2…都算「我」）：地址 → 第几个钱包
+function myWallets() {
+  const m = new Map(); const add = (a, slot) => { if (a) m.set(String(a).toLowerCase(), slot); };
+  add(myAddr(), 1); for (const w of S.walletsInfo || []) add(w.address, w.slot);
+  return m;
+}
+const isMe = (a) => !!a && myWallets().has(String(a).toLowerCase());
+const meTag = (a) => { const slot = myWallets().get(String(a || '').toLowerCase()); return `<i class="me-tag" title="${MW() ? '我的钱包 ' + slot : '我的钱包'}">我${MW() && slot ? '·' + slot : ''}</i>`; };
+const whoHtml = (addr, name, a = 6, b = 4) => isMe(addr) ? `<b class="me">${esc(name || short(addr, a, b))}</b>${meTag(addr)}` : name ? `<b class="y">${esc(name)}</b>` : `<span class="mono">${short(addr, a, b)}</span>`;
 // 地址 / 域名：点击在新标签打开 GMGN 的地址页（点行的其他地方仍打开盈亏抽屉）
 const gmgnWho = (addr, name, a = 6, b = 4) => /^0x[0-9a-fA-F]{40}$/.test(addr || '') ? `<a class="gm-addr" data-gmgn href="https://gmgn.ai/bsc/address/${esc(addr)}" target="_blank" rel="noopener noreferrer" title="在 GMGN 查看 ${esc(addr)}">${whoHtml(addr, name, a, b)}</a>` : whoHtml(addr, name, a, b);
 document.addEventListener('click', (e) => { if (e.target.closest('a[data-gmgn]')) e.stopPropagation(); }, true);   /* 只打开链接，不再触发行点击 */
@@ -2038,7 +2045,7 @@ function tcCard(t, k) {
       <div class="tc-chips">${taxChip(t, 'chip')}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
       <div class="tc-meta"><span class="g">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tc-route ${curve ? '' : 'dex'}">${route}</div>
-      <div class="tc-who">${fb ? `<span class="g">👑</span> 首买 ${isMe(t.firstBuyer) ? `<b class="me">${esc(fb)}</b><i class="me-tag">我</i>` : esc(fb)}` : ''}${hp ? `<span class="y">持有 ${K(hp.amount)}</span>` : ''}</div>
+      <div class="tc-who">${fb ? `<span class="g">👑</span> 首买 ${isMe(t.firstBuyer) ? `<b class="me">${esc(fb)}</b>${meTag(t.firstBuyer)}` : esc(fb)}` : ''}${hp ? `<span class="y">持有 ${K(hp.amount)}</span>` : ''}</div>
     </div>
     ${gangOnly ? `<div class="tc-r off" title="Gang V2 报价币盘暂不支持下单"><div class="tc-mc"><span>MC</span> <b>${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</b></div><span class="tc-buy">仅行情</span></div>`
       : `<div class="tc-r buyable ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="${esc(tcBuyTip(t, k))}"><div class="tc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算的市值' : '市值'}"><span>MC</span> <b class="${curve ? '' : 'cy'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</b></div>
