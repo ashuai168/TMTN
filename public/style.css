@@ -1088,3 +1088,8 @@ body.trkp-on main.layout { margin-left: calc(var(--trkpW, 340px) + 8px); }
 body.trkp-on #pulse { margin-left: calc(var(--trkpW, 340px) + 16px); }
 body.trkp-on #hold, body.trkp-on #track { margin-left: calc(var(--trkpW, 340px) + 8px); }
 @media (max-width: 760px) { .trk-panel.panel { left: auto; top: auto; bottom: auto; margin: 8px; } body.trkp-on main.layout, body.trkp-on #pulse, body.trkp-on #hold, body.trkp-on #track { margin-left: 0; } }
+
+/* 交易面板「买入钱包」：多钱包时每个钱包一个，勾选 = 参与下单 */
+.mw-chip { position: relative; } .mw-chip.bad { opacity: .55; filter: grayscale(.6); } .mw-chip.busy { opacity: .6; cursor: progress; }
+.mw-chip .mw-ck { font-style: normal; color: var(--g); margin-left: 4px; font-weight: 700; }
+.mw-chip:not(.on) { color: var(--muted); }

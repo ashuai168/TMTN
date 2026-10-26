@@ -744,6 +744,11 @@ function renderRight() {
   const presets = buy && S.amtMode === 'bnb' ? [0.01, 0.05, 0.1, 0.2, 0.5] : buy ? [0.5, 1, 2, 3, 5] : [10, 25, 50, 75, 100];
   const ph = presets.join();
   if ($('#presets').dataset.k !== ph) { $('#presets').dataset.k = ph; $('#presets').innerHTML = presets.map((p) => `<button data-p="${p}">${p}${unit === '%' ? '%' : ''}</button>`).join(''); }
+  // 多钱包：列出所有钱包（.ai 名、BNB、登录状态），勾选 = 参与下单（和钱包菜单同一个开关）；未登录 / 后端没启动的标灰
+  if (MW()) {
+    $('#wchips').innerHTML = S.walletsInfo.map((w) => { const ok = w.auth === 'ok', bad = !ok && w.auth !== 'checking';
+      return `<button class="wchip mw-chip ${w.on ? 'on' : ''} ${bad ? 'bad' : ''}" data-mwchip="${w.slot}" title="${esc(w.label)} ${w.address || ''}\n${ok ? '已登录' : w.auth === 'offline' ? '后端没有运行' : w.auth === 'checking' ? '检查中' : '未登录：' + (w.signin || '')}\n点击切换「参与下单」"><i class="wav" style="background:${wsColor(w.slot)}"></i>${esc(w.agentId || w.label)}<span class="mono">${w.bnb != null ? w.bnb.toFixed(3) : '—'}</span>${bad ? `<span class="r" style="font-size:10px">${w.auth === 'offline' ? '离线' : '未登录'}</span>` : ''}${w.on ? '<i class="mw-ck">✓</i>' : ''}</button>`; }).join('');
+  } else
   $('#wchips').innerHTML = S.wallets.map((w) => { const el = eligible(w, t); return `<button class="wchip ${S.selWallets.has(w.id) ? 'on' : ''}" data-w="${w.id}" title="${el.ok ? '' : el.why}"><i class="wav" style="background:${w.color}"></i>${w.label}<span class="mono">${w.bnb.toFixed(w.bnb < 10 ? 3 : 2)}</span>${el.ok ? '' : '<span class="r" style="font-size:10px">非白名单</span>'}</button>`; }).join('');
   const n = S.selWallets.size;
   $('#wHint').textContent = S.wallets.length > 1 ? `已选 ${n} 个 · ${buy ? '每个钱包各买一份' : '每个钱包各卖同比例'}` : (LIVE() ? '币安 Agentic Wallet' : '单钱包');
@@ -1029,12 +1034,17 @@ document.addEventListener('click', async (e) => {
   const v = el.dataset.ctick; (await copyText(v)) ? note(`已复制 ${v}`) : note(`复制失败，请手动选中 ${v}`, 'info');
 }, true);
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-qp],[data-qb],[data-a],[data-p],[data-s],[data-a2],[data-w],[data-copy],[data-sell],[data-qsell],[data-faucet],[data-ext],[data-close],[data-sp],[data-setw],[data-fee],[data-mode],[data-q],[data-gas],[data-exec],#fakeLaunch');
+  const el = e.target.closest('[data-qp],[data-mwchip],[data-qb],[data-a],[data-p],[data-s],[data-a2],[data-w],[data-copy],[data-sell],[data-qsell],[data-faucet],[data-ext],[data-close],[data-sp],[data-setw],[data-fee],[data-mode],[data-q],[data-gas],[data-exec],#fakeLaunch');
   if (!el) return;
   const d = el.dataset;
   if (d.qp) { e.stopPropagation(); e.preventDefault(); return pulseBuy1(d.qp); }
   if (d.qb) { e.stopPropagation(); const amt = S.config?.quickBuy || 0.1; S.fast = S.fast; return submitQuick(d.qb, amt); }
   if (el.closest('#walletMenu') && d.w) { S.activeWallet = d.w; $('#walletMenu').classList.add('hidden'); return scheduleRender(); }
+  if (el.closest('#wchips') && d.mwchip) {   // 多钱包：切换「参与下单」（服务器上的同一个开关）
+    const slot = Number(d.mwchip), w = S.walletsInfo.find((x) => x.slot === slot); el.classList.add('busy');
+    api('/api/wallets', { slot, on: !w?.on }).then((v) => { S.walletsInfo = v; note(`${w?.agentId || w?.label || '钱包'} ${!w?.on ? '参与下单' : '不参与下单'}`); renderAuth(); scheduleRender(); renderRight(); }).catch((err) => toast({ status: 'failed', symbol: '钱包', reason: err.message })).finally(() => el.classList.remove('busy'));
+    return;
+  }
   if (el.closest('#wchips') && d.w) { S.selWallets.has(d.w) ? S.selWallets.delete(d.w) : S.selWallets.add(d.w); renderRight(); return refreshQuote(); }
   if (d.a && !el.closest('#platTabs')) { e.preventDefault(); return select(d.a); }
   if (el.closest('#presets') && d.p) { $('#amount').value = d.p; return refreshQuote(); }
