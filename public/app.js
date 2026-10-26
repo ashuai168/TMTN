@@ -293,6 +293,7 @@ function select(addr) {
 /* ---------- 顶栏 ---------- */
 // 顶栏的币安钱包登录徽章 + 未登录时的锁定弹窗（只在实盘模式）
 function renderAuth() {
+  watchAuthDrop();
   const pill = $('#authPill'), modal = $('#loginModal'), a = S.baw?.auth;
   if (!LIVE() || !a) { pill.classList.add('hidden'); modal.classList.add('hidden'); return; }
   pill.classList.remove('hidden', 'bad', 'warn');
@@ -313,7 +314,7 @@ function renderAuth() {
     const k = 'mw|' + on.map((w) => w.slot + w.auth).join(','); if (modal.dataset.k === k) return; modal.dataset.k = k;
     const cmd = (c) => `<div class="ag-cmd"><code>${esc(c)}</code><button class="ui-copy" data-agcopy="${esc(c)}">复制</button></div>`;
     $('#loginLead').innerHTML = '参与下单的币安钱包<b class="r">都没有登录</b>（或登录已过期）。至少登录一个才能使用。';
-    $('#loginBody').innerHTML = `<div class="ag-ws">${(S.walletsInfo || []).map((w) => `<div class="ag-w ${w.auth === 'ok' ? 'ok' : 'bad'}"><b>${w.auth === 'ok' ? '✓' : '✗'} ${esc(w.label)}</b><span>${w.auth === 'ok' ? '已登录' + (w.address ? ' ' + short(w.address, 6, 4) : '') : w.auth === 'wrong_account' ? '登录的账号不对' : w.auth === 'offline' ? '后端没有运行' : '未登录'}${w.on ? '' : '（不参与下单）'}</span>${w.auth !== 'ok' ? cmd(w.signin) : ''}</div>`).join('')}</div>`
+    $('#loginBody').innerHTML = `<div class="ag-ws">${(S.walletsInfo || []).map((w) => `<div class="ag-w ${w.auth === 'ok' ? 'ok' : 'bad'}"><b>${w.auth === 'ok' ? '✓' : '✗'} ${esc(w.label)}</b><span>${w.auth === 'ok' ? '已登录' + (w.address ? ' ' + short(w.address, 6, 4) : '') : w.auth === 'wrong_account' ? '登录的账号不对' : w.auth === 'offline' ? '后端没有运行' : '未登录'}${w.on ? '' : '（不参与下单）'}</span>${w.auth !== 'ok' ? wLoginBtn(w) + cmd(w.signin) : ''}</div>`).join('')}</div>`
       + '<li>在终端运行对应钱包的登录命令，打开终端里给出的链接，<b>用这个钱包自己的币安账号</b>在 App 中确认（核对配对码）</li><li>回到这里点「我已登录，重新检测」（每 10 秒也会自动检测）</li>';
     $('#loginNote').textContent = '';
     return;
@@ -339,7 +340,79 @@ async function startLogin() {
   catch (e) { if (S.baw) S.baw.login = { state: 'failed', message: e.message }; }
   btn.disabled = false; btn.textContent = '登录'; $('#loginModal').dataset.k = ''; renderAuth();
 }
-$('#loginGo')?.addEventListener('click', startLogin);   // 页面上不再提供登录按钮（登录命令在终端运行）
+$('#loginGo')?.addEventListener('click', startLogin);
+// ---------- 按钱包登录（页面上点「登录」）+ 掉线提醒 ----------
+// 只有未登录 / 账号不对的钱包显示「登录」（已登录的不显示，免得把正在用的会话换掉；后端没启动的也不显示）
+const W_LOGIN_OK = (w) => w && w.reachable !== false && !['ok', 'checking', 'offline'].includes(w.auth);
+function wLoginBtn(w, tag = 'button') { return W_LOGIN_OK(w) ? `<${tag} class="wl-btn" data-wlogin="${w.slot}" title="在页面上登录这个钱包（显示登录链接和配对码）">登录</${tag}>` : ''; }
+const walletList = () => (MW() ? S.walletsInfo || [] : S.baw?.auth ? [{ slot: 1, label: '币安钱包', agentId: S.baw.auth.agentId, address: S.baw.auth.address, auth: S.baw.auth.state, login: S.baw.login }] : []);
+// 记住每个钱包上次登录时的 .ai 名和地址，掉线后也能提示「用哪个账号扫」
+function wRemember(w) { if (w.auth !== 'ok') return; try { const k = 'tmtnW' + w.slot, v = JSON.stringify({ agentId: w.agentId || null, address: w.address || null }); if (localStorage[k] !== v) localStorage[k] = v; } catch { /* ignore */ } }
+function wExpect(w) { let m = {}; try { m = JSON.parse(localStorage['tmtnW' + w.slot] || '{}'); } catch { /* ignore */ } const address = w.expect || w.address || m.address || null; return { agentId: w.agentId || m.agentId || null, address }; }
+const WL = { slot: null, id: null, poll: 0 };
+async function openWalletLogin(slot) {
+  const w = walletList().find((x) => x.slot === slot); if (!w) return;
+  WL.slot = slot; WL.id = null; showWalletLoginDlg({ state: 'starting' });
+  try { const r = await api(MW() ? '/api/wallets/login' : '/api/auth/login', MW() ? { slot } : {}); WL.id = r?.id || null; showWalletLoginDlg(r || { state: 'failed', message: '没有返回登录信息' }); }
+  catch (e) { showWalletLoginDlg({ state: 'failed', message: e.message }); }
+  clearInterval(WL.poll); WL.poll = setInterval(pollWalletLogin, 2000);
+}
+async function pollWalletLogin() {
+  if (WL.slot == null) return clearInterval(WL.poll);
+  try { if (MW()) S.walletsInfo = await api('/api/wallets'); else { const st = await api('/api/state'); S.baw = st.baw || S.baw; } } catch { return; }
+  const w = walletList().find((x) => x.slot === WL.slot); const l = w?.login;
+  if (w?.auth === 'ok' && (!l || l.state === 'done' || l.state === 'waiting')) { closeWalletLoginDlg(); note(`${w.agentId || w.label} 已登录`); renderAuth(); scheduleRender(); return; }
+  if (l && (!WL.id || l.id === WL.id)) showWalletLoginDlg(l);
+  renderAuth();
+}
+function closeWalletLoginDlg() { WL.slot = null; clearInterval(WL.poll); $('#wLoginDlg')?.remove(); }
+function showWalletLoginDlg(l) {
+  const w = walletList().find((x) => x.slot === WL.slot) || { slot: WL.slot, label: '钱包 ' + WL.slot }, ex = wExpect(w);
+  let el = $('#wLoginDlg'); if (!el) { el = document.createElement('div'); el.id = 'wLoginDlg'; el.className = 'wl-back'; document.body.appendChild(el); }
+  const left = l.expireAt ? Math.max(0, Math.round((l.expireAt - Date.now()) / 1000)) : null;
+  const body = l.state === 'starting' ? '<div class="wl-msg">正在获取登录链接…</div>'
+    : l.state === 'waiting' ? `<div class="wl-step">1. 打开登录链接（会显示二维码）：<a class="wl-link" href="${esc(l.urlForWeb || '#')}" target="_blank" rel="noopener">打开登录页面 ↗</a></div>
+      <div class="wl-step">2. 用<b class="y">下面这个账号</b>的币安 App 扫码，核对配对码：<div class="wl-code mono">${esc(l.pairingCode || '—')}</div></div>
+      <div class="wl-msg dim">等待在 App 里确认…${left != null ? `（还剩 ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}）` : ''}　登录后会自动核对地址，扫错账号会被拒绝并自动登出。</div>`
+    : l.state === 'wrong' ? `<div class="wl-msg r"><b>扫错账号，已拒绝并登出。</b><br>${esc(l.message || '')}</div>`
+    : l.state === 'done' ? '<div class="wl-msg g">登录成功，正在刷新状态…</div>'
+    : `<div class="wl-msg r">${{ expired: '已超时', cancelled: '已取消', failed: '登录失败' }[l.state] || l.state}${l.message ? '：' + esc(l.message) : ''}</div>`;
+  el.innerHTML = `<div class="wl-box"><div class="wl-h"><b>登录 ${esc(w.label || '钱包 ' + w.slot)}</b><span class="spacer"></span><button class="wl-x" data-wlclose title="关闭">✕</button></div>
+    <div class="wl-acct">请用这个账号扫码：<b class="y">${esc(ex.agentId || w.label)}</b> <span class="mono">${ex.address ? short(ex.address, 6, 4) : '（地址未知）'}</span></div>
+    ${body}
+    <div class="wl-acts">${l.state === 'waiting' ? '<button data-wlcancel>取消登录</button>' : ''}${['wrong', 'expired', 'cancelled', 'failed'].includes(l.state) ? `<button class="go" data-wlogin="${w.slot}">重新登录</button>` : ''}<button data-wlclose>关闭</button></div></div>`;
+}
+document.addEventListener('click', async (e) => {
+  const go = e.target.closest('[data-wlogin]'); if (go) { e.preventDefault(); e.stopPropagation(); $('#wDropDlg')?.remove(); return openWalletLogin(Number(go.dataset.wlogin)); }
+  if (e.target.closest('[data-wlclose]')) { e.preventDefault(); closeWalletLoginDlg(); $('#wDropDlg')?.remove(); return; }
+  if (e.target.closest('[data-wlcancel]')) { e.preventDefault(); const slot = WL.slot; try { const r = await api(MW() ? '/api/wallets/login' : '/api/auth/login-cancel', MW() ? { slot, cancel: true } : {}); if (r) showWalletLoginDlg(r); } catch (err) { toast({ status: 'failed', symbol: '登录', reason: err.message }); } }
+}, true);
+// 掉线提醒：某个钱包从「已登录」变成未登录 / 账号不对 / 后端连不上，连续 2 次检测都这样才提醒（后端也是连续 2 次失败才改状态）
+const WD = { prev: new Map(), bad: new Map(), shown: new Set() };
+function watchAuthDrop() {
+  const key = MW() ? S.walletsInfo : S.baw?.auth?.checkedAt; if (!key || key === WD.lastKey) return; WD.lastKey = key;   // 同一次状态更新只算一次（renderAuth 会被调用很多次）
+  for (const w of walletList()) {
+    wRemember(w);
+    if (w.auth === 'ok') { WD.prev.set(w.slot, 'ok'); WD.bad.set(w.slot, 0); WD.shown.delete(w.slot); continue; }
+    if (w.auth === 'checking') continue;
+    if (WD.prev.get(w.slot) !== 'ok') continue;   // 只提醒「本来登录着、后来掉了」的
+    const n = (WD.bad.get(w.slot) || 0) + 1; WD.bad.set(w.slot, n);
+    if (n >= 2 && !WD.shown.has(w.slot)) { WD.shown.add(w.slot); WD.prev.set(w.slot, w.auth); alertWalletDrop(w); }
+  }
+}
+function alertWalletDrop(w) {
+  const ex = wExpect(w), why = w.auth === 'offline' ? '后端连不上' : w.auth === 'wrong_account' ? '登录的账号不对' : '登录已掉线';
+  try { beep(880, 0.12); setTimeout(() => beep(660, 0.12), 180); setTimeout(() => beep(880, 0.12), 360); } catch { /* 没有声音 */ }
+  try { if ('Notification' in window && Notification.permission === 'granted') new Notification(`TMTN：${w.label} ${why}`, { body: `${ex.agentId || ''} ${ex.address ? short(ex.address, 6, 4) : ''}　下单会跳过这个钱包，请重新登录`, tag: 'tmtn-wallet-' + w.slot }); } catch { /* 不支持 */ }
+  let el = $('#wDropDlg'); if (!el) { el = document.createElement('div'); el.id = 'wDropDlg'; el.className = 'wl-back'; document.body.appendChild(el); }
+  el.innerHTML = `<div class="wl-box"><div class="wl-h"><b class="r">⚠ ${esc(w.label)} ${why}</b><span class="spacer"></span><button class="wl-x" data-wlclose>✕</button></div>
+    <div class="wl-acct">${esc(ex.agentId || w.label)} <span class="mono">${ex.address ? short(ex.address, 6, 4) : ''}</span>　${new Date().toLocaleTimeString('zh-CN', { hour12: false })}</div>
+    <div class="wl-msg">在重新登录前，下单会跳过这个钱包。${w.authMessage ? `<div class="dim">${esc(w.authMessage)}</div>` : ''}</div>
+    <div class="wl-acts">${W_LOGIN_OK(w) ? `<button class="go" data-wlogin="${w.slot}">登录</button>` : '<span class="dim">后端没有运行，需要先启动它</span>'}<button data-wlclose>知道了</button></div></div>`;
+}
+// 浏览器通知要用户授权：第一次在页面上点击时顺便请求
+document.addEventListener('pointerdown', function askNotify() { document.removeEventListener('pointerdown', askNotify, true); try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch { /* ignore */ } }, true);
+   // 页面上不再提供登录按钮（登录命令在终端运行）
 $('#loginModal').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; try { await navigator.clipboard.writeText(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } setTimeout(() => (b.textContent = '复制'), 1500); });
 // 「我已登录，重新检测」：点了马上有反馈（转圈 + 禁用），检测完逐个钱包显示结果；能用了就淡出遮罩并提示
 $('#loginRecheck').addEventListener('click', async () => {
@@ -416,7 +489,7 @@ function renderWalletMenu() {
       <span class="mono mw-bal">${w.bnb != null ? w.bnb.toFixed(4) : '—'}<small> BNB</small></span>
       <span class="mw-st ${w.auth === 'ok' ? 'g' : w.auth === 'checking' ? 'y' : 'r'}"><i class="dot ${w.auth === 'ok' ? 'g' : w.auth === 'checking' ? 'y' : 'r'}"></i>${w.auth === 'ok' ? '已登录' : w.auth === 'checking' ? '检查中' : w.auth === 'offline' ? '后端未启动' : w.auth === 'wrong_account' ? '账号不对' : '未登录'}</span>
       <label class="tgl mw-tg" title="参与下单"><input type="checkbox" data-mwon="${w.slot}" ${w.on ? 'checked' : ''}/><i></i></label></div>
-      ${w.auth !== 'ok' && w.auth !== 'checking' ? `<div class="note mw-cmd">登录：<code>${esc(w.signin)}</code> <button class="ui-copy" data-agcopy="${esc(w.signin)}">复制</button></div>` : ''}`).join('')
+      ${w.auth !== 'ok' && w.auth !== 'checking' ? `<div class="note mw-cmd">${wLoginBtn(w)}${w.auth === 'wrong_account' ? ' <span class="r">登录的账号不对</span>' : ''}<span class="dim"> 或终端：</span><code>${esc(w.signin)}</code> <button class="ui-copy" data-agcopy="${esc(w.signin)}">复制</button></div>` : ''}`).join('')
       + `<div class="mw-head-note">右侧开关 =「参与下单」</div>`
       + `<div class="note" style="padding:6px 8px">开了「参与下单」的钱包同时下单：买入每个钱包各花输入的 BNB；卖出每个钱包卖自己持仓的同样比例。没登录的钱包自动跳过。</div>`;
     return;
@@ -753,7 +826,7 @@ function renderRight() {
   // 多钱包：列出所有钱包（.ai 名、BNB、登录状态），勾选 = 参与下单（和钱包菜单同一个开关）；未登录 / 后端没启动的标灰
   if (MW()) {
     $('#wchips').innerHTML = S.walletsInfo.map((w) => { const ok = w.auth === 'ok', bad = !ok && w.auth !== 'checking';
-      return `<button class="wchip mw-chip ${w.on ? 'on' : ''} ${bad ? 'bad' : ''}" data-mwchip="${w.slot}" title="${esc(w.label)} ${w.address || ''}\n${ok ? '已登录' : w.auth === 'offline' ? '后端没有运行' : w.auth === 'checking' ? '检查中' : '未登录：' + (w.signin || '')}\n点击切换「参与下单」"><i class="wav" style="background:${wsColor(w.slot)}"></i>${esc(w.agentId || w.label)}<span class="mono">${w.bnb != null ? w.bnb.toFixed(3) : '—'}</span>${bad ? `<span class="r" style="font-size:10px">${w.auth === 'offline' ? '离线' : '未登录'}</span>` : ''}${w.on ? '<i class="mw-ck">✓</i>' : ''}</button>`; }).join('');
+      return `<button class="wchip mw-chip ${w.on ? 'on' : ''} ${bad ? 'bad' : ''}" data-mwchip="${w.slot}" title="${esc(w.label)} ${w.address || ''}\n${ok ? '已登录' : w.auth === 'offline' ? '后端没有运行' : w.auth === 'checking' ? '检查中' : '未登录：' + (w.signin || '')}\n点击切换「参与下单」"><i class="wav" style="background:${wsColor(w.slot)}"></i>${esc(w.agentId || w.label)}<span class="mono">${w.bnb != null ? w.bnb.toFixed(3) : '—'}</span>${bad ? `<span class="r" style="font-size:10px">${w.auth === 'offline' ? '离线' : '未登录'}</span>${wLoginBtn(w, 'i')}` : ''}${w.on ? '<i class="mw-ck">✓</i>' : ''}</button>`; }).join('');
   } else
   $('#wchips').innerHTML = S.wallets.map((w) => { const el = eligible(w, t); return `<button class="wchip ${S.selWallets.has(w.id) ? 'on' : ''}" data-w="${w.id}" title="${el.ok ? '' : el.why}"><i class="wav" style="background:${w.color}"></i>${w.label}<span class="mono">${w.bnb.toFixed(w.bnb < 10 ? 3 : 2)}</span>${el.ok ? '' : '<span class="r" style="font-size:10px">非白名单</span>'}</button>`; }).join('');
   const n = S.selWallets.size;

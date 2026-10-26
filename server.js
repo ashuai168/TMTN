@@ -132,7 +132,8 @@ const state = () => ({
 });
 
 app.post('/api/claim', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式能领取' }); res.json(await trader.claimOne(req.body.market, '手动领取')); });
-app.post('/api/auth/login', async (req, res) => { try { res.json(LIVE ? await trader.startLogin() : null); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.post('/api/auth/login', async (req, res) => { try { res.json(LIVE ? loginView(await trader.startLogin()) : null); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.post('/api/auth/login-cancel', (req, res) => { res.json(LIVE ? loginView(trader.cancelLogin()) : null); });
 app.post('/api/auth/check', async (req, res) => res.json(LIVE ? await trader.checkAuth() : null));
 setTimeout(() => { for (const o of [...trader.orders].reverse()) latency.record(o); }, 5000);   // 启动时把内存里已有订单补记一次（按 id/tx 去重）
 app.get('/api/latency-stats', (req, res) => res.json(latency.stats(Math.max(0.01, Number(req.query.days) || 1))));
@@ -149,13 +150,15 @@ const peerFetch = async (peer, p, body, ms = 2500) => {
 };
 // 其他钱包的 baw 用自己的登录目录 + 自己的设备标识（BINANCE_INSTANCE_ID），避免和钱包 1 的登录互相影响
 const signinCmd = (dir, inst) => (dir ? `BINANCE_BAW_DIR=${dir}${inst ? ` BINANCE_INSTANCE_ID=${inst}` : ''} baw auth signin` : 'baw auth signin');
-const selfInfo = () => ({ slot: WALLET_SLOT, label: WALLET_LABEL, agentId: trader.status?.auth?.agentId || null, address: trader.wallets?.[0]?.address || null, bnb: trader.wallets?.[0]?.bnb ?? null, auth: trader.status?.auth?.state || 'checking', bawDir: BAW_DIR || null, signin: signinCmd(BAW_DIR, process.env.BINANCE_INSTANCE_ID) });
+// 给页面 / 主后端看的登录进度（不含 qrCodeId 等内部字段）
+const loginView = (l) => (l ? { id: l.id, state: l.state, urlForWeb: l.urlForWeb, pairingCode: l.pairingCode, expireAt: l.expireAt, message: l.message, address: l.address || null } : null);
+const selfInfo = () => ({ slot: WALLET_SLOT, expect: process.env.WALLET_ADDRESS || null, login: loginView(trader.status?.login), authMessage: trader.status?.auth?.message || '', label: WALLET_LABEL, agentId: trader.status?.auth?.agentId || null, address: trader.wallets?.[0]?.address || null, bnb: trader.wallets?.[0]?.bnb ?? null, auth: trader.status?.auth?.state || 'checking', bawDir: BAW_DIR || null, signin: signinCmd(BAW_DIR, process.env.BINANCE_INSTANCE_ID) });
 const walletOn = (slot) => { const v = (trader.settings?.walletOn || {})[slot]; return v === undefined ? slot === WALLET_SLOT : v !== false; };   // 其他钱包默认不参与，要在钱包菜单里打开
 async function walletsView() {
   const out = [{ ...selfInfo(), self: true, reachable: true, on: walletOn(WALLET_SLOT) }];
   for (const p of WALLET_PEERS) {
     let info = null, err = null; try { info = await peerFetch(p, '/api/wallet-info'); } catch (e) { err = e.message; }
-    out.push({ slot: p.slot, label: p.label || info?.label || `钱包 ${p.slot}`, agentId: info?.agentId || null, address: info?.address || null, bnb: info?.bnb ?? null, auth: info ? info.auth : 'offline', bawDir: p.bawDir || info?.bawDir || null, signin: p.signin || signinCmd(p.bawDir || info?.bawDir, p.instanceId),   /* WALLET_PEERS 里可以直接写登录命令（比如钱包 2 跑在 Docker 里） */ reachable: !!info, error: err, on: walletOn(p.slot) });
+    out.push({ slot: p.slot, expect: info?.expect || p.address || null, login: info?.login || null, authMessage: info?.authMessage || '', label: p.label || info?.label || `钱包 ${p.slot}`, agentId: info?.agentId || null, address: info?.address || null, bnb: info?.bnb ?? null, auth: info ? info.auth : 'offline', bawDir: p.bawDir || info?.bawDir || null, signin: p.signin || signinCmd(p.bawDir || info?.bawDir, p.instanceId),   /* WALLET_PEERS 里可以直接写登录命令（比如钱包 2 跑在 Docker 里） */ reachable: !!info, error: err, on: walletOn(p.slot) });
   }
   return out;
 }
@@ -239,6 +242,16 @@ app.post('/api/copy/tasks', (req, res) => {   // 新建：一律暂停 + 模拟�
 });
 app.post('/api/copy/pause-all', (req, res) => { if (!needTracker(res)) return; tracker.setAllPaused(req.body?.paused !== false); res.json(tracker.tasksView()); });
 app.get('/api/wallet-info', (req, res) => res.json(LIVE ? selfInfo() : null));
+// 页面上按钱包点「登录」/「取消」：本钱包由自己的 baw 登录；其他钱包把请求转给它自己的后端（钱包 2 在 Docker 容器里用容器里的 baw 登录，绝不在本机为它发起）
+app.post('/api/wallets/login', async (req, res) => {
+  if (!LIVE) return res.status(400).json({ error: '只有实盘支持' });
+  const slot = Number(req.body?.slot), cancel = !!req.body?.cancel;
+  try {
+    if (slot === WALLET_SLOT) return res.json(loginView(cancel ? trader.cancelLogin() : await trader.startLogin()));
+    const p = WALLET_PEERS.find((x) => x.slot === slot); if (!p) return res.status(400).json({ error: '没有这个钱包' });
+    res.json(await peerFetch(p, cancel ? '/api/auth/login-cancel' : '/api/auth/login', {}, 40_000));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.get('/api/wallets', async (req, res) => res.json(LIVE ? await walletsView() : []));
 app.post('/api/wallets', (req, res) => {   // 某个钱包是否「参与下单」（存在主后端的设置里）
   if (!LIVE) return res.status(400).json({ error: '只有实盘可用' });

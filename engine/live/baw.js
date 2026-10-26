@@ -16,7 +16,7 @@ function formatErr(parsed, fallback) {
   return e ? `${e.name || e.code || 'baw_error'}: ${e.message || ''}`.trim() : fallback;
 }
 
-export function runBaw(args, { timeoutMs = 90_000 } = {}) {
+export function runBaw(args, { timeoutMs = 90_000, onChild } = {}) {
   return new Promise((resolve, reject) => {
     const child = execFile(BAW_BIN, ['--json', ...args], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: process.env }, (err, stdout, stderr) => {
       const text = String(stdout || '').trim();
@@ -31,6 +31,7 @@ export function runBaw(args, { timeoutMs = 90_000 } = {}) {
       resolve(parsed);
     });
     child.on('error', reject);
+    onChild?.(child);   // 调用方可以拿到子进程（比如取消登录时结束 auth verify）
   });
 }
 
@@ -41,7 +42,9 @@ export async function agentId() { return (await runBaw(['wallet', 'agent-id'], {
 
 // 登录：signin 返回 urlForWeb + pairingCode（已登录时 status=ALREADY_CONNECTED）；verify 会阻塞到 App 里确认或 5 分钟超时
 export async function authSignin() { return (await runBaw(['auth', 'signin'], { timeoutMs: 30_000 })).data || {}; }
-export async function authVerify(qrCodeId) { return (await runBaw(['auth', 'verify', '--qrCodeId', String(qrCodeId)], { timeoutMs: 330_000 })).data || {}; }
+export async function authVerify(qrCodeId, onChild) { return (await runBaw(['auth', 'verify', '--qrCodeId', String(qrCodeId)], { timeoutMs: 330_000, onChild })).data || {}; }
+// 登出当前登录目录的会话（只在登录了错误账号时用，清掉这个错的会话）
+export async function authSignout() { return (await runBaw(['auth', 'signout'], { timeoutMs: 20_000 })).data || {}; }
 
 // 钱包是否被锁：有一笔交易在等币安 App 确认时是 LOCKED，这时任何新交易都会被拒
 export async function walletLock() { return (await runBaw(['wallet', 'tx-lock', '--binanceChainId', String(BINANCE_CHAIN_ID)], { timeoutMs: 20_000 })).data?.status || 'UNKNOWN'; }

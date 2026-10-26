@@ -1147,3 +1147,14 @@ h1, h2, h3, h4, .lh b, .tch b, .trkp-h b { font-weight: var(--fw-head); }
 /* 追踪栏卡片 / 追踪动态行：整块可点，进代币详情 */
 .trk-panel .trkp-e { cursor: pointer; }
 .trk-tbl tr[data-a] { cursor: pointer; } .trk-tbl tr[data-a]:hover td { background: rgba(255, 255, 255, .035); }
+/* 按钱包登录：登录按钮、登录弹窗、掉线提醒 */
+.wl-btn { display: inline-flex; align-items: center; margin-left: 6px; padding: 1px 8px; border-radius: 5px; background: var(--y); color: #111; font-style: normal; font-size: 11px; font-weight: var(--fw-strong); cursor: pointer; border: 0; }
+.wl-btn:hover { filter: brightness(1.1); }
+.wl-back { position: fixed; inset: 0; z-index: 9000; background: rgba(0, 0, 0, .55); display: grid; place-items: center; }
+.wl-box { width: min(440px, calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line2); border-radius: 12px; padding: 14px 16px; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); font-size: 13px; }
+.wl-h { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 15px; } .wl-x { background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer; }
+.wl-acct { padding: 8px 10px; border-radius: 8px; background: var(--y-bg); margin-bottom: 10px; }
+.wl-step { margin: 8px 0; line-height: 1.6; } .wl-link { color: var(--y); font-weight: var(--fw-strong); }
+.wl-code { font-size: 26px; letter-spacing: 6px; color: var(--y); text-align: center; padding: 6px 0; }
+.wl-msg { margin: 8px 0; line-height: 1.6; }
+.wl-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; } .wl-acts button { padding: 5px 14px; border-radius: 6px; border: 1px solid var(--line2); background: var(--panel2); color: var(--text); cursor: pointer; } .wl-acts button.go { background: var(--y); color: #111; border-color: var(--y); }

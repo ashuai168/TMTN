@@ -89,19 +89,47 @@ export class LiveTrader extends EventEmitter {
     return a;
   }
 
-  // 页面上点「登录」：baw auth signin 拿登录链接和配对码，后台跑 auth verify 等用户在币安 App 里确认
+  // 页面上点「登录」：baw auth signin 拿登录链接和配对码，后台跑 auth verify 等用户在币安 App 里确认。
+  // 只允许未登录时发起（已登录再发起会换掉会话）；同一时间只跑一个；5 分钟没确认就结束；可以取消。
+  // 登录完成后核对地址：和这个后端锁定的钱包地址（WALLET_ADDRESS）不一致 → 马上登出这个错的会话、标记「扫错账号」。
   async startLogin() {
     const cur = this.status.login;
     if (cur?.state === 'waiting' && Date.now() < cur.expireAt) return cur;
+    if (this.status.auth.state === 'ok') throw new Error('这个钱包已经登录，不需要再登录');
     if (AUTH_SIMULATE_LOGGED_OUT) { this.status.login = { state: 'failed', message: '调试模拟未登录：不会真的发起登录' }; return this.status.login; }
+    if (this.status.auth.state === 'wrong_account') { try { await baw.authSignout(); } catch { /* 本来就没有会话 */ } }   // 现在登录的是错的账号：先清掉再登录
     const d = await baw.authSignin();
     if (d.status === 'ALREADY_CONNECTED') { this.status.login = null; await this.checkAuth(); return { state: 'done' }; }
-    const login = { state: 'waiting', urlForWeb: d.urlForWeb, pairingCode: d.pairingCode, qrCodeId: d.qrCodeId, expireAt: Number(d.expireAt) || Date.now() + 300_000, message: '' };
+    const login = { id: Date.now(), state: 'waiting', urlForWeb: d.urlForWeb, pairingCode: d.pairingCode, qrCodeId: d.qrCodeId, expireAt: Math.min(Number(d.expireAt) || Infinity, Date.now() + 300_000), message: '', expect: EXPECT_WALLET || null };
     this.status.login = login;
-    baw.authVerify(d.qrCodeId)
-      .then(async (r) => { login.state = r.status === 'SUCCESS' ? 'done' : 'failed'; login.message = r.status || ''; await this.checkAuth(); if (this.status.auth.state === 'ok') await this.init(); })
-      .catch((e) => { login.state = 'failed'; login.message = e.message; });
+    clearTimeout(this.loginTimer); this.loginTimer = setTimeout(() => { if (login.state === 'waiting') { login.state = 'expired'; login.message = '5 分钟内没有在币安 App 里确认，已结束'; try { this.loginChild?.kill(); } catch { /* 已结束 */ } } }, Math.max(1000, login.expireAt - Date.now()));
+    baw.authVerify(d.qrCodeId, (c) => { this.loginChild = c; })
+      .then(async (r) => {
+        if (login.state !== 'waiting') return;   // 已取消 / 已超时
+        if (r.status !== 'SUCCESS') { login.state = 'failed'; login.message = r.status || ''; return; }
+        await this.afterLogin(login);
+      })
+      .catch((e) => { if (login.state === 'waiting') { login.state = 'failed'; login.message = e.message; } })
+      .finally(() => { this.loginChild = null; clearTimeout(this.loginTimer); });
     return login;
+  }
+  // 登录成功后：读地址核对。不对就登出（不保存为可用），对了才刷新状态、重新初始化
+  async afterLogin(login) {
+    let addr = null; try { const addrs = await baw.walletAddresses(); addr = addrs.find((a) => String(a.binanceChainId) === String(BINANCE_CHAIN_ID))?.address || null; } catch (e) { login.state = 'failed'; login.message = `读取地址失败：${e.message}`; return; }
+    if (EXPECT_WALLET && (!addr || addr.toLowerCase() !== EXPECT_WALLET)) {
+      try { await baw.authSignout(); } catch (e) { console.error('signout after wrong account:', e.message); }
+      this.wallets = []; this.status.connected = false;
+      this.status.auth.state = 'wrong_account'; this.status.auth.message = `扫错账号：登录的是 ${addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '未知地址'}，这个钱包应该是 ${EXPECT_WALLET.slice(0, 6)}…${EXPECT_WALLET.slice(-4)}，已自动登出`;
+      login.state = 'wrong'; login.message = this.status.auth.message; login.address = addr; return;
+    }
+    login.state = 'done'; login.address = addr;
+    await this.checkAuth();   // 已登录且还没有钱包时，checkAuth 会自己重新初始化一次（不再重复调用 init）
+  }
+  cancelLogin() {
+    const cur = this.status.login; if (!cur || cur.state !== 'waiting') return cur || null;
+    cur.state = 'cancelled'; cur.message = '已取消'; clearTimeout(this.loginTimer);
+    try { this.loginChild?.kill(); } catch { /* 已结束 */ }
+    return cur;
   }
 
   // 钱包锁状态缓存：下单时用后台缓存（5 秒刷新一次），超过 30 秒没刷新就当场查；自己的订单进入「等 App 确认」时立刻标成已锁
