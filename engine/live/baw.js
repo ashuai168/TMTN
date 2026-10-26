@@ -34,6 +34,8 @@ export function runBaw(args, { timeoutMs = 90_000 } = {}) {
   });
 }
 
+// 域名 → 地址（.ai Agent ID、.bnb SPACE ID 等，由币安后端解析；只读）
+export async function resolveDomain(name) { return (await runBaw(['wallet', 'resolve-domain', '--name', String(name), '--binanceChainId', '56'], { timeoutMs: 20_000 })).data || {}; }
 export async function walletStatus() { return (await runBaw(['wallet', 'status'], { timeoutMs: 20_000 })).data?.status || 'UNKNOWN'; }
 export async function agentId() { return (await runBaw(['wallet', 'agent-id'], { timeoutMs: 20_000 })).data || {}; }
 
@@ -54,6 +56,8 @@ export async function walletBalance({ tokenAddress } = {}) {
 }
 
 export async function marketQuote({ fromTokenQty, fromToken, toToken, slippage }) {
+  const { assertLiquid } = await import('./quoteRoutes.js');   // 报价时就把「池子太小」的原因告诉页面，不等到下单
+  for (const tk of [fromToken, toToken]) if (!DEEP.has(String(tk).toLowerCase())) await assertLiquid(tk);
   const args = ['market-order', 'quote', '--fromTokenQty', String(fromTokenQty), '--fromToken', assertAddress(fromToken, 'fromToken'),
     '--toToken', assertAddress(toToken, 'toToken'), '--binanceChainId', String(BINANCE_CHAIN_ID)];
   if (slippage != null) args.push('--slippage', slip(slippage));
@@ -80,7 +84,11 @@ export async function contractCall({ from, to, valueWei = '0', inputData }) {
   return { ...pre, dryRun: false, orderId: ex.orderId, status: ex.status, txHash: ex.txHash || null, message: ex.message || null };
 }
 
+const DEEP = new Set(['0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', '0x55d398326f99059ff775485246999027b3197955', '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', '0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d']);   // BNB、WBNB、USDT、USDC、USD1
 export async function marketSwap({ fromTokenQty, fromToken, toToken, slippage, mev = false, gasLevel = 'HIGH' }) {
+  // 计价币兑换前检查流动性：最深的池子太小（低于 QUOTE_MIN_LIQ_USD，默认 $20,000）就拒绝，避免在小池子里吃大滑点。BNB / WBNB / 主流稳定币不查
+  const { assertLiquid } = await import('./quoteRoutes.js');
+  for (const tk of [fromToken, toToken]) if (!DEEP.has(String(tk).toLowerCase())) await assertLiquid(tk);
   const args = ['market-order', 'swap', '--fromTokenQty', String(fromTokenQty), '--fromToken', assertAddress(fromToken, 'fromToken'),
     '--toToken', assertAddress(toToken, 'toToken'), '--binanceChainId', String(BINANCE_CHAIN_ID), '--mev', mev ? 'true' : 'false', '--gasLevel', gasLevel];
   if (slippage != null) args.push('--slippage', slip(slippage));
