@@ -186,6 +186,37 @@ app.post('/api/quote-to-bnb', async (req, res) => { if (!LIVE) return res.status
 app.get('/api/trades/:token', async (req, res) => { try { const v = LIVE ? await market.tradesPage(req.params.token, Number(req.query.before) || 0, Math.min(500, Number(req.query.limit) || 100)) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/trader/:token/:addr', async (req, res) => { try { const v = LIVE ? await market.traderStats(req.params.token, req.params.addr) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/rpc-usage', (req, res) => res.json(rpcUsageLog));
+// ---------- 追踪 + 跟单（只在实盘、只在主后端）----------
+let tracker = null;
+if (LIVE && WALLET_SLOT === 1) {
+  const { Tracker } = await import('./engine/live/tracker.js');
+  tracker = new Tracker({ market, provider: market.provider, placeOrder });
+  market.on('trade', (t) => tracker.onTrade(t).catch(() => {}));
+  tracker.on('event', (e) => broadcast({ type: 'track', data: e }));
+  tracker.on('targets', (v) => broadcast({ type: 'trackTargets', data: v }));
+  tracker.on('tasks', (v) => broadcast({ type: 'copyTasks', data: v }));
+  tracker.on('log', (r) => broadcast({ type: 'copyLog', data: r }));
+}
+const needTracker = (res) => { if (!tracker) { res.status(400).json({ error: '只有实盘主后端支持追踪 / 跟单' }); return false; } return true; };
+app.get('/api/track', (req, res) => { if (!needTracker(res)) return; res.json({ ...tracker.targetsView(), feed: tracker.feed.slice(0, 300) }); });
+app.get('/api/track/resolve', async (req, res) => {   // .ai / .bnb 域名 → 地址
+  if (!LIVE) return res.status(400).json({ error: '只有实盘可用' });
+  const name = String(req.query.name || '').trim().toLowerCase();
+  if (/^0x[0-9a-f]{40}$/.test(name)) return res.json({ address: name, name: market.names?.peek?.(name) || null });
+  if (!/^[a-z0-9-_.]+\.[a-z]+$/.test(name)) return res.status(400).json({ error: '请填 .ai / .bnb 域名或 0x 地址' });
+  try { const { resolveDomain } = await import('./engine/live/baw.js'); const d = await resolveDomain(name); if (!d?.address) throw new Error('没有解析到地址'); res.json({ address: String(d.address).toLowerCase(), name }); }
+  catch (e) { res.status(400).json({ error: `解析失败：${e.message}` }); }
+});
+app.post('/api/track/targets', (req, res) => {
+  if (!needTracker(res)) return; const b = req.body || {};
+  try { if (b.remove) tracker.removeTarget(b.address); else tracker.addTarget(b); res.json(tracker.targetsView()); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.get('/api/copy', (req, res) => { if (!needTracker(res)) return; res.json({ ...tracker.tasksView(), log: tracker.log.slice(0, 300) }); });
+app.post('/api/copy/tasks', (req, res) => {   // 新建：一律暂停 + 模拟；改参数 / 启动 / 暂停 / 关闭
+  if (!needTracker(res)) return; const b = req.body || {};
+  try { res.json(b.id ? tracker.updateTask(b.id, b) : tracker.createTask(b)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/copy/pause-all', (req, res) => { if (!needTracker(res)) return; tracker.setAllPaused(req.body?.paused !== false); res.json(tracker.tasksView()); });
 app.get('/api/wallet-info', (req, res) => res.json(LIVE ? selfInfo() : null));
 app.get('/api/wallets', async (req, res) => res.json(LIVE ? await walletsView() : []));
 app.post('/api/wallets', (req, res) => {   // 某个钱包是否「参与下单」（存在主后端的设置里）
@@ -336,9 +367,9 @@ async function costForPct(q) {
 }
 app.get('/api/cost-for-pct', async (req, res) => res.json(await costForPct(req.query)));
 
-app.post('/api/order', async (req, res) => {
-  const { wallets = ['big'], token, side, amount, slippage, via, clientTs, pctSupply } = req.body;   // pctSupply：买总量的 X%（每个钱包各买 X%，各自按自己的报价算 BNB）
-  try {
+// 下单（页面、跟单都走这里）。slots：指定哪几个钱包下单（跟单任务用）；不填 = 所有开了「参与下单」的钱包
+async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, via, clientTs, pctSupply, slots = null, source = '手动' }) {
+  {
     if (LIVE && token && !market.get(token)) await market.lookup(token).catch(() => null);   // 本后端还没收录这个币（多钱包时第二个后端可能会这样）
     const local = () => Promise.all(wallets.map(async (w) => {
       let amt = amount;
@@ -347,23 +378,29 @@ app.post('/api/order', async (req, res) => {
         if (!(c.bnb > 0)) { const o = { id: `pct-${Date.now()}`, ts: Date.now(), wallet: WALLET_LABEL, token, symbol: market.get(token)?.symbol || '', side, amount: 0, status: 'failed', reason: c.capReached ? c.error : `买 ${pctSupply}% 报价失败：${c.error || '拿不到报价'}` }; broadcast({ type: 'order', data: o }); return o; }
         amt = c.bnb;
       }
-      return trader.execute({ walletId: w, token, side, amount: amt, slippage, source: '手动', via: via === 'quick' ? 'quick' : null, clientTs: Number(clientTs) || null });
+      return trader.execute({ walletId: w, token, side, amount: amt, slippage, source: String(source || '手动').slice(0, 40), via: via === 'quick' ? 'quick' : null, clientTs: Number(clientTs) || null });
     }));
-    if (!LIVE || !WALLET_PEERS.length) return res.json(await local());
+    if (!LIVE || !WALLET_PEERS.length) { if (slots && !slots.includes(WALLET_SLOT)) return []; return await local(); }
     // 多钱包：所有「参与下单」的钱包同时执行（买入 = 每个钱包各买 amount BNB；卖出 = 每个钱包卖自己持仓的 amount%）。未登录 / 连不上的跳过，其他照常
     const t = market.get(token), sym = t?.symbol || '';
     const skip = (slot, label, reason) => { const o = { id: `w${slot}-skip-${Date.now()}`, ts: Date.now(), wallet: label, walletSlot: slot, token, symbol: sym, side, amount, status: 'failed', reason: `${label}：${reason}，已跳过` }; broadcast({ type: 'order', data: o }); return [o]; };
     const jobs = [];
-    if (walletOn(WALLET_SLOT)) jobs.push(trader.status?.auth?.state === 'ok' ? local().then((r) => r.map((o) => ({ ...o, walletSlot: WALLET_SLOT }))) : Promise.resolve(skip(WALLET_SLOT, WALLET_LABEL, '币安钱包未登录')));
+    const want = (slot) => (slots ? slots.includes(slot) : walletOn(slot));
+    if (want(WALLET_SLOT)) jobs.push(trader.status?.auth?.state === 'ok' ? local().then((r) => r.map((o) => ({ ...o, walletSlot: WALLET_SLOT }))) : Promise.resolve(skip(WALLET_SLOT, WALLET_LABEL, '币安钱包未登录')));
     for (const p of WALLET_PEERS) {
-      if (!walletOn(p.slot)) continue; const label = p.label || `钱包 ${p.slot}`;
-      jobs.push(peerFetch(p, '/api/order', { wallets: ['baw'], token, side, amount, slippage, via, clientTs, pctSupply }, 200_000)
+      if (!want(p.slot)) continue; const label = p.label || `钱包 ${p.slot}`;
+      jobs.push(peerFetch(p, '/api/order', { wallets: ['baw'], token, side, amount, slippage, via, clientTs, pctSupply, source }, 200_000)
         .then((r) => (r || []).map((o) => { const x = { ...o, id: `w${p.slot}-${o.id}`, wallet: label, walletSlot: p.slot }; broadcast({ type: 'order', data: x }); return x; }))
         .catch((e) => skip(p.slot, label, e.status === 401 ? '币安钱包未登录' : `后端连不上（${e.message}）`)));
     }
-    if (!jobs.length) return res.status(400).json({ error: '没有开启「参与下单」的钱包' });
-    res.json((await Promise.all(jobs)).flat());
-  } catch (e) { res.status(400).json({ error: e.message }); }
+    if (!jobs.length) throw new Error(slots ? '跟单任务选的钱包都不可用' : '没有开启「参与下单」的钱包');
+    return (await Promise.all(jobs)).flat();
+  }
+}
+app.post('/api/order', async (req, res) => {
+  const b = req.body || {};
+  try { res.json(await placeOrder({ wallets: b.wallets?.length ? b.wallets : ['big'], token: b.token, side: b.side, amount: b.amount, slippage: b.slippage, via: b.via, clientTs: b.clientTs, pctSupply: b.pctSupply, source: b.source || '手动' })); }
+  catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // 单币规则（发射后领取 / 转出）。转账要本人在页面上点「确认」才会变成 armed

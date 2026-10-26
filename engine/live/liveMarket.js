@@ -9,6 +9,7 @@ import { MetaFetcher, ipfsUrl } from './meta.js';
 import { GangFun } from './gangFun.js';
 import { GangChain } from './gangChain.js';
 import { FlapChain } from './flapChain.js';
+import { GangPadChain } from './gangPadChain.js';
 import { GangV2 } from './gangV2Pads.js';
 import { NameCache } from './names.js';
 import { ShrineFeeds, tokenInfo } from './shrine.js';
@@ -37,6 +38,8 @@ export class LiveMarket extends EventEmitter {
     this.gangChain.on('token', (it) => this.onGangChainToken(it));
     this.flapChain = new FlapChain(this.provider);   // Flap 成交 / 新市场：链上订阅（代替 shrine 推送）
     this.flapChain.on('trade', (tr) => this.onFlapChainTrade(tr));
+    this.gangPads = new GangPadChain(this.provider);   // Gang V2 全部成交（链上），以前只有最活跃的几个盘有成交（接口轮询）
+    this.gangPads.on('trade', (tr) => this.onGangTrade(tr, true));
     this.flapChain.on('created', () => { try { this.curve.tick?.(); } catch { /* 下一轮 Reader 轮询也会扫到 */ } });
     this.meta = new MetaFetcher();
     this.names = new NameCache();
@@ -59,7 +62,7 @@ export class LiveMarket extends EventEmitter {
     this.four.start();
     this.fourRestore();
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
-    this.gang.start(); this.gangChain.start(); this.flapChain.start();
+    this.gang.start(); this.gangChain.start(); this.flapChain.start(); this.gangPads.start();
     this.feeds.start();
     const blk = async () => { const t0 = Date.now(); try { this.block = await this.provider.getBlockNumber(); this.rpcMs = Date.now() - t0; this.rpcError = null; } catch (e) { this.rpcError = e.shortMessage || e.message; } };
     const px = async () => { try { const j = await (await fetch(BNB_PRICE_URL)).json(); if (+j.price) this.bnbUsd = +j.price; } catch { /* 保留上次 */ } };

@@ -5,6 +5,8 @@ const SUBS = '₀₁₂₃₄₅₆₇₈₉';
 
 /* 持仓快照：放最前面，启动过程中（还没执行到持仓页代码）也能读 */
 const HOLD = { data: null, open: new Set(), plats: new Set(['flap', 'four', 'gang']) };
+/* 追踪 / 跟单页的状态（放最前面，启动过程中收到推送也能用） */
+const TRK = { tab: 'feed', cptab: 'active', targets: [], groups: ['默认'], feed: [], tasks: [], paused: false, log: [], loaded: false, fGroup: '', fMin: 0, sound: false };
 const S = {
   tokens: new Map(), selected: null, detail: null, platform: 'four', listTab: 'curve', chips: new Set(),
   side: 'buy', amtMode: 'bnb', slippage: 35, selWallets: new Set(['big']), activeWallet: 'big',
@@ -147,6 +149,10 @@ function onMsg({ type, data, full }) {
       S.flow.unshift(data); if (S.flow.length > 150) S.flow.length = 150;
       if (S.bottomTab === 'flow') scheduleBottom();
       break;
+    case 'track': { if (!TRK.feed.some((x) => x.id === data.id)) { TRK.feed.unshift(data); if (TRK.feed.length > 500) TRK.feed.length = 500; if (TRK.sound && trkPass(data)) beep(data.side === 'buy' ? 1000 : 520, 0.06); if (S.view === 'track') renderTrack(); } break; }
+    case 'trackTargets': { TRK.targets = data.targets || []; TRK.groups = data.groups || TRK.groups; if (S.view === 'track') renderTrack(); break; }
+    case 'copyTasks': { TRK.tasks = data.tasks || []; TRK.paused = !!data.paused; renderTrkKill(); if (S.view === 'track') renderTrack(); break; }
+    case 'copyLog': { TRK.log.unshift(data); if (TRK.log.length > 300) TRK.log.length = 300; if (S.view === 'track' && TRK.tab === 'copy') renderTrack(); break; }
     case 'wallets': { S.walletsInfo = data; renderAuth(); scheduleRender(); break; }
     case 'order': {
       if (['filled', 'failed', 'unknown'].includes(data.status)) window.dispatchEvent(new Event('order-done'));
@@ -216,6 +222,7 @@ function renderAll() {
 function parseRoute() {
   if (/^#\/?pulse/.test(location.hash)) return { pulse: true, p: null, t: null, ca: null };
   if (/^#\/?hold/.test(location.hash)) return { hold: true, p: null, t: null, ca: null };
+  if (/^#\/?track/.test(location.hash)) return { track: true, p: null, t: null, ca: null };
   const [p, t, ca] = location.hash.replace(/^#\/?/, '').split('/');
   return { p: ['four', 'flap', 'gang'].includes(p) ? p : null, t: ['curve', 'soon', 'dex', 'mine'].includes(t) ? t : null, ca: /^0x[0-9a-fA-F]{40}$/.test(ca || '') ? ca.toLowerCase() : null };
 }
@@ -240,12 +247,13 @@ function syncUrl() {
   savePrefs();
   if (S.view === 'pulse') { if (location.hash !== '#/pulse') history.replaceState(null, '', '#/pulse'); return; }
   if (S.view === 'hold') { if (location.hash !== '#/hold') history.replaceState(null, '', '#/hold'); return; }
+  if (S.view === 'track') { if (location.hash !== '#/track') history.replaceState(null, '', '#/track'); return; }
   const h = `#/${S.platform}/${S.listTab}${S.selected ? '/' + S.selected : ''}`;
   if (location.hash !== h) history.replaceState(null, '', h);
 }
 function applyRoute() {
   const r = parseRoute();
-  setView(r.pulse ? 'pulse' : r.hold ? 'hold' : 'trade', true);
+  setView(r.pulse ? 'pulse' : r.hold ? 'hold' : r.track ? 'track' : 'trade', true);
   if (r.p) { S.platform = r.p; $$('#platTabs button').forEach((b) => b.classList.toggle('active', b.dataset.p === r.p)); }
   if (r.t) { S.listTab = r.t; $$('#listTabs button').forEach((b) => b.classList.toggle('active', b.dataset.t === r.t)); }
   return r;
@@ -1954,11 +1962,13 @@ function setView(v, fromRoute) {
   S.view = v;
   $('#pulse')?.classList.toggle('hidden', v !== 'pulse');
   $('#hold')?.classList.toggle('hidden', v !== 'hold');
-  document.querySelector('main.layout')?.classList.toggle('hidden', v === 'pulse' || v === 'hold');
+  $('#track')?.classList.toggle('hidden', v !== 'track');
+  document.querySelector('main.layout')?.classList.toggle('hidden', v === 'pulse' || v === 'hold' || v === 'track');
   $$('#viewSw button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
   if (!fromRoute) syncUrl();
   renderQB?.();
   if (v === 'hold') loadHold();
+  if (v === 'track') loadTrack();
   if (v === 'pulse') { lastPulse = 0; renderPulse(); requestAnimationFrame(() => $$('.tcb').forEach((b) => { if (pulseScroll[b.id] != null) b.scrollTop = pulseScroll[b.id]; })); }
   else if (v === 'hold' && pulseScroll.hold != null) { requestAnimationFrame(() => { const h = $('#hold'); if (h) h.scrollTop = pulseScroll.hold; }); }
   if (v === 'pulse') {} else { window.dispatchEvent(new Event('resize')); lastList = 0; scheduleRender(); }
@@ -2316,3 +2326,139 @@ function openDonate() {
   });
 }
 $('#donateBtn')?.addEventListener('click', openDonate);
+
+/* ---------- 追踪 + 跟单 ---------- */
+// 追踪：关注的地址在内盘上的买卖（链上订阅筛出来，服务器推送）。跟单：每个任务跟一个目标，新建一律「暂停 + 模拟」，要本人打开
+const ACT_CLS = { 建仓: 'g', 加仓: 'g', 减仓: 'r', 清仓: 'r' };
+const trkAgo = (ts) => { const s = Math.max(0, (Date.now() - ts) / 1000); return s < 60 ? Math.floor(s) + '秒' : s < 3600 ? Math.floor(s / 60) + '分' : s < 86400 ? Math.floor(s / 3600) + '时' : Math.floor(s / 86400) + '天'; };
+function trkPass(e) { const tg = TRK.targets.find((x) => x.address === e.target); return (!TRK.fGroup || (tg?.group || '默认') === TRK.fGroup) && (!(TRK.fMin > 0) || (e.bnb || 0) >= TRK.fMin); }
+function trkName(addr) { const t = TRK.targets.find((x) => x.address === addr); return t?.name || t?.domain || NAMES[addr] || short(addr, 6, 4); }
+async function loadTrack() {
+  try { const [a, b] = await Promise.all([api('/api/track'), api('/api/copy')]); Object.assign(TRK, { targets: a.targets || [], groups: a.groups || ['默认'], feed: a.feed || [], tasks: b.tasks || [], paused: !!b.paused, log: b.log || [], loaded: true }); }
+  catch (e) { TRK.err = e.message; }
+  try { TRK.sound = localStorage.trkSound === '1'; } catch { /* ignore */ }
+  renderTrkKill(); renderTrack();
+}
+function renderTrkKill() {
+  const b = $('#trkKill'); if (b) { b.classList.toggle('on', TRK.paused); b.textContent = TRK.paused ? '已全部暂停（点击恢复）' : '全部暂停'; }
+  // 顶栏：有跟单任务在跑（或已全部暂停）时显示一个小胶囊，点了跳到跟单页
+  const running = TRK.tasks.filter((t) => t.status === 'running'), real = running.filter((t) => !t.params?.dryRun);
+  let pill = $('#copyPill');
+  if (!running.length && !TRK.paused) { pill?.remove(); return; }
+  if (!pill) { pill = document.createElement('button'); pill.id = 'copyPill'; pill.className = 'pill copy-pill'; pill.addEventListener('click', () => { TRK.tab = 'copy'; setView('track'); }); $('#favToggle')?.before(pill); }
+  pill.classList.toggle('paused', TRK.paused); pill.classList.toggle('real', !TRK.paused && real.length > 0);
+  pill.textContent = TRK.paused ? '跟单：全部暂停' : `跟单 ${running.length} 个运行中${real.length ? `（${real.length} 个真实下单）` : '（模拟）'}`;
+}
+function renderTrack() {
+  if (S.view !== 'track') return;
+  $$('#track [data-trtab]').forEach((b) => b.classList.toggle('on', b.dataset.trtab === TRK.tab));
+  $('#trkFeedView').classList.toggle('hidden', TRK.tab !== 'feed'); $('#trkCopyView').classList.toggle('hidden', TRK.tab !== 'copy');
+  $('#trkSound').checked = TRK.sound;
+  if (TRK.err && !TRK.loaded) { $('#trkFeed').innerHTML = `<div class="empty">${esc(TRK.err)}</div>`; return; }
+  if (TRK.tab === 'feed') renderTrkFeed(); else renderTrkCopy();
+}
+function renderTrkFeed() {
+  $('#trkGroups').innerHTML = TRK.groups.map((g) => `<option value="${esc(g)}">`).join('');
+  const fg = $('#trkFGroup'); const cur = TRK.fGroup; fg.innerHTML = '<option value="">全部分组</option>' + TRK.groups.map((g) => `<option ${g === cur ? 'selected' : ''}>${esc(g)}</option>`).join('');
+  $('#trkList').innerHTML = TRK.targets.length ? TRK.targets.map((t) => `<div class="trk-t"><i class="ws-av" style="background:${wsColor((parseInt(t.address.slice(-2), 16) % 4) + 1)}"></i>
+    <div class="trk-t-id"><b>${esc(t.name || t.domain || short(t.address, 6, 4))}</b><span class="mono muted">${short(t.address, 6, 4)} · ${esc(t.group || '默认')}${t.remark ? ' · ' + esc(t.remark) : ''}</span></div>
+    <button class="trk-mini" data-trknew="${t.address}" title="给这个目标新建跟单任务（新建是暂停 + 模拟）">跟单</button><button class="trk-x" data-trkdel="${t.address}" title="不再追踪">×</button></div>`).join('')
+    : '<div class="empty">还没有追踪的地址。上面填 .ai / .bnb 域名或 0x 地址添加</div>';
+  const rows = TRK.feed.filter(trkPass);
+  $('#trkCount').textContent = `${rows.length} 条`;
+  $('#trkFeed').innerHTML = rows.length ? `<table class="trk-tbl"><tr><th class="l">时间</th><th class="l">目标</th><th class="l">动作</th><th>金额</th><th class="l">代币</th><th>币龄</th><th>市值</th></tr>
+    ${rows.slice(0, 300).map((e) => `<tr><td class="l dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}前</td>
+      <td class="l"><a href="#" data-trkwho="${e.target}:${e.token}">${esc(e.targetName || trkName(e.target))}</a></td>
+      <td class="l"><b class="${ACT_CLS[e.action] || ''}">${e.action}</b>${e.pct != null && e.side === 'sell' ? ` <span class="dim">${e.pct.toFixed(0)}%</span>` : ''}</td>
+      <td><b>${e.bnb ? bnb(e.bnb, 4) + ' BNB' : '—'}</b>${e.quote !== 'BNB' ? `<div class="hsub">${K(e.quoteAmt)} ${esc(e.quote)}</div>` : ''}</td>
+      <td class="l"><span class="side" data-a="${e.token}" style="cursor:pointer">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b>${e.quote !== 'BNB' ? ` <i class="tag">${esc(e.quote)}</i>` : ''}</span></td>
+      <td class="dim">${e.createdAt ? trkAgo(e.createdAt) : '—'}</td><td>${usd(e.mcapUsd)}</td></tr>`).join('')}</table>`
+    : '<div class="empty">还没有动态。追踪的地址在 Flap / Four / Gang V2 内盘上买卖时会出现在这里</div>';
+}
+const tkFmt = (v) => (v ? bnb(v, 4) : '0');
+function renderTrkCopy() {
+  $$('#track [data-cptab]').forEach((b) => b.classList.toggle('on', b.dataset.cptab === TRK.cptab));
+  const list = TRK.tasks.filter((t) => (TRK.cptab === 'active' ? t.status !== 'closed' : t.status === 'closed'));
+  const wl = (slots) => (slots || []).map((n) => esc(S.walletsInfo?.find((w) => w.slot === n)?.agentId || `钱包 ${n}`)).join(' + ');
+  $('#trkTasks').innerHTML = list.length ? `<table class="trk-tbl"><tr><th class="l">钱包</th><th class="l">任务</th><th>总买入</th><th>总卖出</th><th>买 / 卖</th><th>已实现利润</th><th>最近交易</th><th class="l">状态</th><th class="l">操作</th></tr>
+    ${list.map((t) => { const p = t.params || {}, st = t.status === 'running' ? (TRK.paused ? '<b class="y">运行中（被全部暂停）</b>' : `<b class="g">运行中</b>`) : t.status === 'paused' ? '<b class="muted">已暂停</b>' : '<span class="muted">已关闭</span>';
+      return `<tr><td class="l">${wl(p.wallets)}</td><td class="l"><b>${esc(t.name)}</b><div class="hsub">${short(t.target, 6, 4)} · ${p.mode === 'ratio' ? `跟 ${p.ratioPct}%` : `每次 ${p.amountBnb} BNB`}${p.onlyFirst ? ' · 只跟建仓' : ''}${p.followSell ? ' · 跟卖' : ''}</div></td>
+        <td>${tkFmt(t.stats?.buyBnb)}</td><td>${tkFmt(t.stats?.sellBnb)}</td><td>${t.stats?.buys || 0} / ${t.stats?.sells || 0}${t.stats?.sims ? `<div class="hsub">模拟 ${t.stats.sims} 次</div>` : ''}</td>
+        <td class="${(t.stats?.realized || 0) >= 0 ? 'g' : 'r'}">${t.stats?.realized ? (t.stats.realized > 0 ? '+' : '') + bnb(t.stats.realized, 4) : '0'}</td><td class="dim">${t.stats?.lastAt ? trkAgo(t.stats.lastAt) + '前' : '—'}</td>
+        <td class="l">${st}<div class="hsub">${p.dryRun ? '<b class="y">模拟</b>（不下单）' : '<b class="r">真实下单</b>'}</div></td>
+        <td class="l trk-acts">${t.status === 'closed' ? '' : `${t.status === 'running' ? `<button data-cpact="pause:${t.id}">暂停</button>` : `<button class="go" data-cpact="start:${t.id}">启动</button>`}<button data-cpact="edit:${t.id}">参数</button><button data-cpact="close:${t.id}">关闭</button>`}</td></tr>`; }).join('')}</table>`
+    : `<div class="empty">${TRK.cptab === 'active' ? '还没有跟单任务。点「新建跟单」，或在追踪动态里点目标旁的「跟单」' : '没有已关闭的任务'}</div>`;
+  $('#trkLog').innerHTML = TRK.log.length ? TRK.log.slice(0, 200).map((r) => `<div class="trk-lr ${r.kind}"><span class="dim">${new Date(r.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span><b>${esc(r.taskName || '')}</b><span>${esc(r.symbol || '')} ${esc(r.action || '')}</span><span class="trk-k">${{ order: '下单', sim: '模拟', skip: '跳过', fail: '失败', error: '出错' }[r.kind] || r.kind}</span><span class="trk-r">${esc(r.reason || '')}</span></div>`).join('') : '<div class="empty">还没有记录</div>';
+}
+// 新建 / 修改跟单参数的对话框
+function copyDialog(task, presetTarget) {
+  const p = { mode: 'fixed', amountBnb: 0.01, ratioPct: 10, maxPerTrade: 0.05, maxPerToken: 0.05, dailyCap: 0.2, maxOpen: 5, onlyFirst: true, minTargetBnb: 0, maxTargetBnb: 0, maxMcUsd: 0, platforms: ['flap', 'four', 'gang'], maxDelaySec: 15, slippage: 20, wallets: [1], followSell: false, dryRun: true, ...(task?.params || {}) };
+  const ws = (S.walletsInfo?.length ? S.walletsInfo : [{ slot: 1, label: '钱包 1' }]);
+  const num = (k, label, step = '0.01', hint = '') => `<label class="cp-f"><span>${label}</span><input type="number" step="${step}" min="0" data-cp="${k}" value="${p[k]}"/>${hint ? `<i>${hint}</i>` : ''}</label>`;
+  const chk = (k, label, hint = '') => `<label class="cp-c"><input type="checkbox" data-cp="${k}" ${p[k] ? 'checked' : ''}/> ${label}${hint ? `<i>${hint}</i>` : ''}</label>`;
+  const wrap = document.createElement('div'); wrap.className = 'ui-dlg-back';
+  wrap.innerHTML = `<div class="ui-dlg cp-dlg" role="dialog" aria-modal="true"><div class="ui-h">${task ? '修改跟单参数' : '新建跟单'}</div><div class="ui-b">
+    ${task ? `<div class="cp-tgt"><b>${esc(task.name)}</b> <span class="mono muted">${short(task.target, 6, 4)}</span></div>` : `<label class="cp-f wide"><span>跟谁</span><select data-cp="target">${TRK.targets.map((t) => `<option value="${t.address}" ${t.address === presetTarget ? 'selected' : ''}>${esc(t.name || t.domain || short(t.address, 6, 4))} · ${short(t.address, 6, 4)}</option>`).join('')}</select><i>先在追踪动态里添加目标</i></label>`}
+    <div class="cp-grp"><b>金额</b>
+      <label class="cp-f"><span>方式</span><select data-cp="mode"><option value="fixed" ${p.mode === 'fixed' ? 'selected' : ''}>固定金额</option><option value="ratio" ${p.mode === 'ratio' ? 'selected' : ''}>按对方买入的比例</option></select></label>
+      ${num('amountBnb', '每次买入（BNB）', '0.001', '固定金额时用；每个钱包各买这么多')}${num('ratioPct', '跟对方的 %', '1', '比例方式：对方买 1 BNB、填 10 = 买 0.1')}
+      ${num('maxPerTrade', '单笔上限（BNB）', '0.001', '最高 0.5，另外还受交易设置的单笔上限')}${num('maxPerToken', '每个币最多（BNB）')}${num('dailyCap', '每天合计最多（BNB）')}${num('maxOpen', '最多同时持有几个币', '1')}</div>
+    <div class="cp-grp"><b>条件</b>${chk('onlyFirst', '只跟建仓（对方第一次买这个币）', '关掉则加仓也跟')}
+      ${num('minTargetBnb', '对方买入至少（BNB）', '0.01', '0 = 不限')}${num('maxTargetBnb', '对方买入最多（BNB）', '0.01', '0 = 不限')}${num('maxMcUsd', '市值最高（美元）', '1000', '0 = 不限')}${num('maxDelaySec', '最多晚几秒', '1', '发现得比这晚就不跟')}${num('slippage', '滑点 %', '1')}
+      <div class="cp-row">平台：${['flap', 'four', 'gang'].map((x) => `<label class="cp-c"><input type="checkbox" data-cpplat="${x}" ${p.platforms.includes(x) ? 'checked' : ''}/> ${x === 'flap' ? 'Flap' : x === 'four' ? 'Four' : 'Gang'}</label>`).join('')}</div>
+      <div class="cp-row">用哪些钱包下单：${ws.map((w) => `<label class="cp-c"><input type="checkbox" data-cpw="${w.slot}" ${p.wallets.includes(w.slot) ? 'checked' : ''}/> ${esc(w.agentId || w.label)}</label>`).join('')}</div>
+      ${chk('followSell', '跟卖：对方卖出时，我们卖出同样比例（默认关）')}</div>
+    <div class="cp-grp"><b>运行方式</b>${chk('dryRun', '模拟（只记录会买多少，不真的下单）', '建议先模拟一段时间再关掉')}<div class="ui-note">${task ? '' : '新建的任务是「已暂停」状态，要在列表里点「启动」才会开始。'}</div></div>
+    <div class="cp-err r" id="cpErr"></div></div>
+    <div class="ui-f"><button class="ui-btn" data-cpx>取消</button><button class="ui-btn ok" data-cpok>${task ? '保存' : '新建（暂停状态）'}</button></div></div>`;
+  document.body.appendChild(wrap); requestAnimationFrame(() => wrap.classList.add('in'));
+  const close = () => { wrap.classList.remove('in'); setTimeout(() => wrap.remove(), 150); };
+  wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
+  wrap.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-cpx]')) return close();
+    if (!e.target.closest('[data-cpok]')) return;
+    const q = {}; wrap.querySelectorAll('[data-cp]').forEach((i) => { q[i.dataset.cp] = i.type === 'checkbox' ? i.checked : i.tagName === 'SELECT' ? i.value : Number(i.value); });
+    q.platforms = [...wrap.querySelectorAll('[data-cpplat]:checked')].map((i) => i.dataset.cpplat); q.wallets = [...wrap.querySelectorAll('[data-cpw]:checked')].map((i) => Number(i.dataset.cpw));
+    if (!q.wallets.length) return ($('#cpErr').textContent = '至少选一个钱包');
+    if (!q.platforms.length) return ($('#cpErr').textContent = '至少选一个平台');
+    const target = q.target; delete q.target;
+    try { if (task) await api('/api/copy/tasks', { id: task.id, params: q }); else { if (!target) return ($('#cpErr').textContent = '先在追踪动态里添加要跟的目标'); await api('/api/copy/tasks', { target, params: q }); } close(); note(task ? '参数已保存' : '跟单任务已新建（已暂停，点「启动」开始）'); TRK.tab = 'copy'; loadTrack(); }
+    catch (err) { $('#cpErr').textContent = err.message; }
+  });
+}
+$('#track').addEventListener('click', async (e) => {
+  const d = e.target.closest('[data-trtab],[data-cptab],[data-trkdel],[data-trknew],[data-cpact],[data-trkwho],#trkAddBtn,#trkNewTask,#trkKill')?.dataset; if (!d) return;
+  const el = e.target.closest('[data-trtab],[data-cptab],[data-trkdel],[data-trknew],[data-cpact],[data-trkwho],#trkAddBtn,#trkNewTask,#trkKill');
+  if (d.trtab) { TRK.tab = d.trtab; return renderTrack(); }
+  if (d.cptab) { TRK.cptab = d.cptab; return renderTrack(); }
+  if (d.trkdel) { if (!await ui.confirm({ title: '不再追踪这个地址？', body: '它的跟单任务不会自动删除，可以在跟单里关闭。', confirmText: '不再追踪' })) return; await api('/api/track/targets', { address: d.trkdel, remove: true }).catch((err) => toast({ status: 'failed', symbol: '追踪', reason: err.message })); return loadTrack(); }
+  if (d.trknew) return copyDialog(null, d.trknew);
+  if (d.trkwho) { e.preventDefault(); const [who, tok] = d.trkwho.split(':'); if (S.tokens.has(tok)) { setView('trade'); select(tok); setTimeout(() => openTrader(who), 400); } else window.open(`https://gmgn.ai/bsc/address/${who}`, '_blank', 'noopener'); return; }
+  if (el.id === 'trkNewTask') return TRK.targets.length ? copyDialog(null) : note('先在「追踪动态」里添加要跟的地址', 'info');
+  if (el.id === 'trkKill') { try { const v = await api('/api/copy/pause-all', { paused: !TRK.paused }); TRK.paused = !!v.paused; TRK.tasks = v.tasks || TRK.tasks; renderTrkKill(); renderTrack(); note(TRK.paused ? '所有跟单已暂停' : '已恢复：运行中的任务继续'); } catch (err) { toast({ status: 'failed', symbol: '跟单', reason: err.message }); } return; }
+  if (el.id === 'trkAddBtn') {
+    const raw = $('#trkAddr').value.trim(), msg = $('#trkMsg'); if (!raw) return;
+    msg.className = 'trk-msg'; msg.textContent = '正在解析…';
+    try {
+      const r = await api(`/api/track/resolve?name=${encodeURIComponent(raw)}`);
+      await api('/api/track/targets', { address: r.address, domain: /\.[a-z]+$/i.test(raw) && !raw.startsWith('0x') ? raw.toLowerCase() : null, name: $('#trkName').value.trim() || (raw.startsWith('0x') ? '' : raw.toLowerCase()), group: $('#trkGroup').value.trim() || '默认' });
+      msg.className = 'trk-msg g'; msg.textContent = `已添加 ${raw} → ${short(r.address, 6, 4)}`; $('#trkAddr').value = ''; $('#trkName').value = ''; loadTrack();
+    } catch (err) { msg.className = 'trk-msg r'; msg.textContent = err.message; }
+    return;
+  }
+  if (d.cpact) {
+    const [act, id] = d.cpact.split(':'), t = TRK.tasks.find((x) => x.id === id); if (!t) return;
+    if (act === 'edit') return copyDialog(t);
+    if (act === 'start' && !(await ui.confirm({ title: `启动跟单「${t.name}」？`, body: t.params?.dryRun ? '<p>这是<b class="y">模拟</b>任务：只记录会买多少，不会下单。</p>' : `<p class="r"><b>真实下单：</b>对方买入时会用 ${(t.params.wallets || []).length} 个钱包自动买入，每次每个钱包最多 ${t.params.maxPerTrade} BNB，每天合计最多 ${t.params.dailyCap} BNB。会花真实的 BNB，可能亏损。</p>`, confirmText: '启动', danger: !t.params?.dryRun }))) return;
+    if (act === 'close' && !(await ui.confirm({ title: `关闭跟单「${t.name}」？`, body: '关闭后不再跟单（已买的币不会自动卖出），会移到「历史」。', confirmText: '关闭' }))) return;
+    try { await api('/api/copy/tasks', { id, status: act === 'start' ? 'running' : act === 'pause' ? 'paused' : 'closed' }); loadTrack(); } catch (err) { toast({ status: 'failed', symbol: '跟单', reason: err.message }); }
+  }
+});
+$('#track').addEventListener('change', (e) => {
+  if (e.target.id === 'trkFGroup') { TRK.fGroup = e.target.value; renderTrack(); }
+  if (e.target.id === 'trkFMin') { TRK.fMin = Number(e.target.value) || 0; renderTrack(); }
+  if (e.target.id === 'trkSound') { TRK.sound = e.target.checked; try { localStorage.trkSound = TRK.sound ? '1' : '0'; } catch { /* ignore */ } }
+});
+$('#trkAddr')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#trkAddBtn').click(); });
+setInterval(() => { if (S.view === 'track' && TRK.tab === 'feed') renderTrkFeed(); }, 15_000);   // 「多久前」刷新
+setTimeout(() => { if (LIVE()) api('/api/copy').then((b) => { TRK.tasks = b.tasks || []; TRK.paused = !!b.paused; renderTrkKill(); }).catch(() => {}); }, 4000);   // 顶栏跟单状态
