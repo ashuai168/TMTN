@@ -1,6 +1,7 @@
 // 下单耗时记录：每笔订单结束（成交/失败）追加一行 JSON 到 data/latency.jsonl，并提供统计
 import { appendFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dataFile } from './config.js';
+import { redactSecrets } from './rpc.js';
 export const LAT_FILE = dataFile('latency.jsonl');
 const seen = new Set();
 let loaded = false;
@@ -37,7 +38,7 @@ export function record(o, extra = {}) {
     latencyMs: o.latencyMs ?? null, clickToServerMs: o.clientTs ? Math.max(0, o.ts - o.clientTs) : null, preMs: o.preMs ?? null, route: o.route || null, venue: o.venue || null,
     steps: (o.steps || []).map((s) => ({ name: normStep(s.name), ms: s.ms, at: s.at ?? null, raw: s.name })),
     rpc: extra.rpc || null, gasLevel: extra.gasLevel || null, amountIn: o.amountIn ?? o.amount ?? null, out: o.out ?? null, tx: o.tx || null, error: o.status === 'failed' ? (o.reason || null) : null };
-  try { mkdirSync(dataFile(''), { recursive: true }); appendFileSync(LAT_FILE, JSON.stringify(row) + '\n'); } catch {}
+  try { mkdirSync(dataFile(''), { recursive: true }); appendFileSync(LAT_FILE, redactSecrets(JSON.stringify(row)) + '\n'); } catch {}   // RPC 地址含 key：写盘前打码
   return true;
 }
 const pct = (a, p) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.ceil(p / 100 * s.length) - 1)]; };

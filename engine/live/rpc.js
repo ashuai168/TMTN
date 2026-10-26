@@ -2,7 +2,9 @@
 // 地址里含 key，显示到页面 / 日志时一律用 maskRpc() 隐藏
 import { ethers } from 'ethers';
 
-export const maskRpc = (u) => String(u || '').replace(/(nodereal\.io\/v1\/)[A-Za-z0-9]+/i, '$1***').replace(/([?&](api[-_]?key|key|token)=)[^&]+/ig, '$1***');
+export const maskRpc = (u) => String(u || '').replace(/(nodereal\.io\/(?:ws\/)?v1\/)[A-Za-z0-9]+/ig, '$1***').replace(/([?&](api[-_]?key|key|token)=)[^&\s"']+/ig, '$1***');
+// 任意文本（日志、错误信息、记录文件）里的 RPC key 一律打码：NodeReal 地址 + .env 里 NODEREAL_KEYS 的 key 原文（用到时再读，.env 在 config.js 里才加载）
+export const redactSecrets = (s) => { let t = maskRpc(s); for (const k of (process.env.NODEREAL_KEYS || '').split(',').map((x) => x.trim()).filter((x) => x.length >= 16)) t = t.split(k).join('***'); return t; };
 
 // 页面上显示的节点名（不含 key）
 // 多个 NodeReal key：页面上只显示「NodeReal #1 / #2」，不显示 key

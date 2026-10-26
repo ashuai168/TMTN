@@ -153,7 +153,7 @@ export class LiveTrader extends EventEmitter {
   setRule(token, patch) {
     const k = String(token || '').toLowerCase(); if (!/^0x[0-9a-f]{40}$/.test(k)) throw new Error('代币地址无效');
     if (patch === null) { delete this.rules()[k]; this.rulesSave(); return this.rulesView(); }
-    if (patch.to && !/^0x[0-9a-fA-F]{40}$/.test(patch.to)) throw new Error('目标地址无效');
+    if (patch.to && String(patch.to).toLowerCase() !== AUTO_TRANSFER_TO.toLowerCase()) throw new Error('转出地址只能是服务器配置的 AUTO_TRANSFER_TO');
     const t = this.market.get(k); const r = this.rules()[k] || { token: k, createdAt: Date.now(), claim: true, transfer: 'confirm', state: {} };
     Object.assign(r, { symbol: t?.symbol || r.symbol, market: t?.market || r.market, platform: t?.platform || r.platform }, patch);
     if (patch.transfer === 'armed') r.armedAt = Date.now();
@@ -278,6 +278,9 @@ export class LiveTrader extends EventEmitter {
         if (!ready || r.transfer !== 'armed' || !r.to || st.transferTx) continue;
         if (Date.now() < (st.sendNext || 0)) continue;
         if (t?.source !== 'agent-curve' && t?.stage !== 'dex') continue;   // 非 Flap 的币：等发射（迁移）后再转
+        // 只报价模式（LIVE_TRADE=0）不转；地址被改过（不是 AUTO_TRANSFER_TO）也不转
+        if (DRY_RUN) { st.sendNext = Date.now() + 60_000; if (!st.dryRunNoted) { st.dryRunNoted = true; this.ruleLog(r, '可以转出，但当前是只报价模式（LIVE_TRADE=0），不会转'); this.rulesSave(); } continue; }
+        if (r.to.toLowerCase() !== AUTO_TRANSFER_TO.toLowerCase()) { st.sendNext = Date.now() + 300_000; this.ruleLog(r, `转出地址 ${r.to} 不是服务器配置的 AUTO_TRANSFER_TO，已拒绝`); this.rulesSave(); continue; }
         const bal = Number((await baw.walletBalance({ tokenAddress: r.token }).catch(() => [])).find((x) => String(x.address || '').toLowerCase() === r.token)?.balance || 0);
         if (!(bal > 0)) { st.sendNext = Date.now() + 5_000; continue; }   // 领取刚上链，余额可能还没更新
         if ((await baw.walletLock().catch(() => 'UNKNOWN')) === 'LOCKED') { st.sendNext = Date.now() + 10_000; this.ruleLog(r, '钱包在等币安 App 确认，稍后再转'); this.rulesSave(); continue; }

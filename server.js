@@ -12,6 +12,11 @@ import { Blocklist } from './engine/blocklist.js';
 import { Favorites } from './engine/favorites.js';
 import { MODE, LIVE_TRADE, WALLET_SLOT, WALLET_PEERS, BAW_DIR, WALLET_LABEL } from './engine/live/config.js';
 import * as latency from './engine/live/latency.js';
+import { redactSecrets } from './engine/live/rpc.js';
+import { dataFile } from './engine/live/config.js';
+
+// 日志脱敏：控制台 / live.log 里出现的 RPC 地址（含 NodeReal key）一律打码
+for (const k of ['log', 'info', 'warn', 'error']) { const f = console[k].bind(console); console[k] = (...a) => f(...a.map((x) => (typeof x === 'string' ? redactSecrets(x) : x instanceof Error ? redactSecrets(x.stack || x.message) : x))); }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8787);
@@ -73,6 +78,35 @@ agent.on('detect', (ms) => { net.detect = ms; net.detectAt = Date.now(); });
 const modeInfo = () => ({ mode: LIVE ? 'live' : 'sim', baw: LIVE ? trader.status : null });
 
 const app = express();
+// ---------- 本地 API 防护 ----------
+// 1) Host 只认本机名（防 DNS rebinding：别的网站把域名解析到 127.0.0.1 再来调接口）
+// 2) 改动类请求（POST 等）和 WebSocket：浏览器发来的必须是本页面同源（Origin = http://localhost:端口），别的网页（含本机其他端口）一律拒绝
+// 3) 没有 Origin 的请求（其他钱包后端、脚本）必须带访问令牌 x-tmtn-token：TMTN_API_TOKEN，没配就用 data/api-token（首次启动随机生成）
+// 额外允许的主机名 / 来源用 ALLOWED_HOSTS / ALLOWED_ORIGINS（逗号分隔）
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', ...String(process.env.ALLOWED_HOSTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)]);
+const EXTRA_ORIGINS = new Set(String(process.env.ALLOWED_ORIGINS || '').split(',').map((x) => x.trim().replace(/\/$/, '').toLowerCase()).filter(Boolean));
+const API_TOKEN = (() => {
+  if (process.env.TMTN_API_TOKEN) return process.env.TMTN_API_TOKEN;
+  const f = dataFile('api-token');
+  try { const t = fs.readFileSync(f, 'utf8').trim(); if (t.length >= 32) return t; } catch { /* 第一次启动 */ }
+  const t = crypto.randomBytes(32).toString('hex'); fs.mkdirSync(new URL('.', f), { recursive: true }); fs.writeFileSync(f, t + '\n', { mode: 0o600 }); return t;
+})();
+const hostOk = (h) => LOCAL_HOSTS.has(String(h || '').toLowerCase().replace(/:\d+$/, ''));
+const originOk = (o) => { try { const u = new URL(o); return EXTRA_ORIGINS.has(u.origin.toLowerCase()) || (u.protocol === 'http:' && LOCAL_HOSTS.has(u.hostname.toLowerCase()) && Number(u.port || 80) === PORT); } catch { return false; } };
+const tokenOk = (t) => { const a = Buffer.from(String(t || '')), b = Buffer.from(API_TOKEN); return a.length === b.length && crypto.timingSafeEqual(a, b); };
+const guard = (req, write) => {
+  if (!hostOk(req.headers.host)) return 'Host 不是本机，已拒绝';
+  if (!write) return null;
+  const o = req.headers.origin;
+  if (o) return originOk(o) ? null : `来源 ${String(o).slice(0, 80)} 不是本页面，已拒绝`;
+  return tokenOk(req.headers['x-tmtn-token']) ? null : '缺少访问令牌（x-tmtn-token），已拒绝';
+};
+app.use((req, res, next) => {
+  const e = guard(req, !['GET', 'HEAD', 'OPTIONS'].includes(req.method));
+  if (e) { console.warn(`[security] ${req.method} ${req.path}：${e}`); return res.status(403).json({ error: e }); }
+  res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" });   // 页面不许被别的网站嵌进 iframe（防点击劫持）
+  next();
+});
 app.use(express.json());
 // 强制登录：实盘模式下币安钱包未登录时，所有动用资金的接口一律拒绝（买卖、兑换、换回 BNB、领取、撤销授权、单币转出规则）
 const AUTH_GATED = new Set(['/api/order', '/api/swap', '/api/quote-to-bnb', '/api/claim', '/api/approvals/revoke', '/api/token-rules']);
@@ -101,7 +135,7 @@ let holdSnap = null, holdView = null, holdBusy = false, holdAgain = false;   // 
 // 每个钱包是一个独立的后端（各自的 baw 登录目录 BINANCE_BAW_DIR、数据目录 DATA_DIR、设置 / 授权 / 自动转出）。
 // 主后端（钱包 1）在 WALLET_PEERS 里登记其他钱包的后端地址；页面上的一笔订单由主后端同时发给所有「参与下单」的钱包。
 const peerFetch = async (peer, p, body, ms = 2500) => {
-  const r = await fetch(peer.url.replace(/\/$/, '') + p, { method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(ms) });
+  const r = await fetch(peer.url.replace(/\/$/, '') + p, { method: body ? 'POST' : 'GET', headers: { 'x-tmtn-token': peer.token || API_TOKEN, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(ms) });   // 其他钱包后端要用同一个 TMTN_API_TOKEN（或在 WALLET_PEERS 里写 token）
   const j = await r.json().catch(() => null); if (!r.ok) throw Object.assign(new Error(j?.error || `HTTP ${r.status}`), { status: r.status }); return j;
 };
 // 其他钱包的 baw 用自己的登录目录 + 自己的设备标识（BINANCE_INSTANCE_ID），避免和钱包 1 的登录互相影响
@@ -176,16 +210,35 @@ const IMG_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 
 fs.mkdirSync(IMG_DIR, { recursive: true });
 const imgInflight = new Map(), imgFail = new Map();
 const IPFS_GW = ['https://flap.mypinata.cloud/ipfs/', 'https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
-const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg', 'image/avif': 'avif' };
+// 只代理这些图床（含子域名），只走 https；别的地址一律拒绝（防止被当成访问内网 / 任意网站的跳板）。IMG_HOSTS 可追加（逗号分隔）
+const IMG_HOSTS = ['four.meme', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com', ...String(process.env.IMG_HOSTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)];
+const imgHostOk = (u) => { try { const x = new URL(u); return x.protocol === 'https:' && !x.username && !x.password && (!x.port || x.port === '443') && IMG_HOSTS.some((h) => x.hostname === h || x.hostname.endsWith('.' + h)); } catch { return false; } };
+// 只收位图：按文件头判断真实格式（不信对方的 Content-Type），SVG（可以带脚本）一律不收
+const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' };
+const sniffImg = (b) => {
+  const s = (i, j) => b.subarray(i, j).toString('latin1');
+  if (b[0] === 0x89 && s(1, 4) === 'PNG') return 'image/png';
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (s(0, 4) === 'GIF8') return 'image/gif';
+  if (s(0, 4) === 'RIFF' && s(8, 12) === 'WEBP') return 'image/webp';
+  if (s(4, 8) === 'ftyp' && /^avi[fs]$/.test(s(8, 12))) return 'image/avif';
+  return null;
+};
 async function imgFetchOne(u) {
   const ac = new AbortController(); const tm = setTimeout(() => ac.abort(), 8000);
   try {
-    const r = await fetch(u, { signal: ac.signal, redirect: 'follow', headers: { accept: 'image/*' } });
+    let r;
+    for (let hop = 0; ; hop++) {   // 跳转自己跟，每一跳都要在白名单里
+      if (!imgHostOk(u)) throw new Error('host not allowed');
+      r = await fetch(u, { signal: ac.signal, redirect: 'manual', headers: { accept: 'image/*' } });
+      if (r.status < 300 || r.status >= 400) break;
+      if (hop >= 3 || !r.headers.get('location')) throw new Error('redirect');
+      u = new URL(r.headers.get('location'), u).href;
+    }
     if (!r.ok) throw new Error('http ' + r.status);
-    const ct = String(r.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!ct.startsWith('image/')) throw new Error('not image');
     if (Number(r.headers.get('content-length') || 0) > 2e6) throw new Error('too big');
     const buf = Buffer.from(await r.arrayBuffer()); if (buf.length > 2e6 || !buf.length) throw new Error('size');
+    const ct = sniffImg(buf); if (!ct) throw new Error('not raster image');
     return { ct, buf };
   } finally { clearTimeout(tm); }
 }
@@ -195,10 +248,11 @@ async function imgFetch(u) {
 }
 app.get('/api/img', async (req, res) => {
   const u = String(req.query.u || '');
-  if (!/^https?:\/\//i.test(u) || u.length > 2000) return res.status(400).end();
+  if (u.length > 2000 || !imgHostOk(u)) return res.status(403).set('Cache-Control', 'public, max-age=600').end();
   const key = crypto.createHash('sha1').update(u).digest('hex'); const meta = path.join(IMG_DIR, key + '.json');
-  const send = (m) => { res.set({ 'Content-Type': m.ct, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Img-Cache': m.hit ? 'HIT' : 'MISS' }); res.sendFile(path.join(IMG_DIR, m.file)); };
-  try { const m = JSON.parse(fs.readFileSync(meta, 'utf8')); if (fs.existsSync(path.join(IMG_DIR, m.file))) return send({ ...m, hit: true }); } catch { /* 未缓存 */ }
+  // nosniff + 沙箱 CSP：就算文件内容有问题，浏览器也不会把它当网页 / 脚本执行
+  const send = (m) => { res.set({ 'Content-Type': m.ct, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Img-Cache': m.hit ? 'HIT' : 'MISS', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Content-Disposition': `inline; filename="${m.file}"` }); res.sendFile(path.join(IMG_DIR, m.file)); };
+  try { const m = JSON.parse(fs.readFileSync(meta, 'utf8')); if (EXT[m.ct] && /^[0-9a-f]{40}\.[a-z]+$/.test(m.file) && fs.existsSync(path.join(IMG_DIR, m.file))) return send({ ...m, hit: true }); } catch { /* 未缓存 */ }   // 旧缓存里的 SVG 等非位图不再返回
   if ((imgFail.get(key) || 0) > Date.now()) return res.status(404).set('Cache-Control', 'public, max-age=600').end();
   try {
     let p = imgInflight.get(key);
@@ -314,7 +368,18 @@ app.post('/api/order', async (req, res) => {
 
 // 单币规则（发射后领取 / 转出）。转账要本人在页面上点「确认」才会变成 armed
 app.get('/api/token-rules', (req, res) => res.json(LIVE ? trader.rulesView() : {}));
-app.post('/api/token-rules', (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘可用' }); try { res.json(trader.setRule(req.body.token, req.body.remove ? null : req.body.patch || {})); } catch (e) { res.status(400).json({ error: e.message }); } });
+// 页面只能改「是否领取」和「转出确认状态」；转出地址、自动标记、执行状态都只由服务器写（地址固定为 AUTO_TRANSFER_TO）
+app.post('/api/token-rules', (req, res) => {
+  if (!LIVE) return res.status(400).json({ error: '只有实盘可用' });
+  try {
+    if (req.body.remove) return res.json(trader.setRule(req.body.token, null));
+    const p = req.body.patch || {}, patch = {};
+    if (p.transfer !== undefined) { if (!['armed', 'confirm', 'off'].includes(p.transfer)) throw new Error('transfer 只能是 armed / confirm / off'); patch.transfer = p.transfer; }
+    if (p.claim !== undefined) patch.claim = p.claim === true;
+    if (patch.transfer === 'armed') { const r = trader.rules()[String(req.body.token || '').toLowerCase()]; if (!r?.to) throw new Error('这个币没有服务器生成的转出规则，不能确认转出'); console.log(`[tokenRule] 页面确认转出 ${r.symbol} → ${r.to}`); }
+    res.json(trader.setRule(req.body.token, patch));
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
 app.get('/api/favorites', (req, res) => res.json(favorites.view()));
 app.post('/api/favorites', (req, res) => { try { const v = favorites.op(req.body || {}); broadcast({ type: 'favorites', data: v }); res.json(v); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.get('/api/approvals', async (req, res) => { if (!LIVE) return res.json([]); try { res.json(await trader.allowancesView()); } catch (e) { res.status(500).json({ error: e.message }); } });
@@ -350,7 +415,7 @@ app.post('/api/wallet/:id', (req, res) => {
 app.post('/api/launch', (req, res) => LIVE ? res.status(400).json({ error: '实盘行情模式不能模拟发射' }) : res.json(market.summary(market.launch(req.body || {}))));
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ server, path: '/ws', verifyClient: ({ req }) => { const e = guard(req, true); if (e) console.warn(`[security] WebSocket：${e}`); return !e; } });   // WebSocket 同样要同源 / 令牌
 // 序列化失败只跳过这一帧，不让整个服务崩溃
 let badFrameLogged = false;
 const broadcast = (msg) => {
