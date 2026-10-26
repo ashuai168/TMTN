@@ -19,7 +19,7 @@ export class ShrineFeeds extends EventEmitter {
     const st = this.status[kind];
     const ws = new WebSocket(url);
     ws.on('open', () => {
-      st.connected = true; st.openedAt = Date.now();
+      st.connected = true; st.openedAt = Date.now(); st.fails = 0; st.downSince = 0; st.retryAt = 0; st.lastError = null;
       // 用 ping/pong 测 WS 往返延迟，顶栏显示
       clearInterval(this.pingers[kind]);
       this.pingers[kind] = setInterval(() => { st.pingAt = Date.now(); try { ws.ping(); } catch { /* */ } }, 5000);
@@ -33,7 +33,12 @@ export class ShrineFeeds extends EventEmitter {
       else if (kind === 'stream' && (m.type === 'buy' || m.type === 'sell')) this.emit('trade', m);
       else if (kind === 'stream' && m.type === 'create' && m.token) this.emit('launch', { ...m, type: 'new_launch' }); // 修复参考版：create 也触发自动买
     });
-    ws.on('close', () => { clearInterval(this.pingers[kind]); st.connected = false; st.reconnects++; setTimeout(() => this.connect(kind, url, retryMs), retryMs); });
+    // 断线重连：连续失败时间隔加倍（最长 5 分钟）。被 shrine 限流（429）时至少等 60 秒，以前每 3 秒重连一次，越连越被限流
+    ws.on('close', () => {
+      clearInterval(this.pingers[kind]); st.connected = false; st.reconnects++; st.fails = (st.fails || 0) + 1; st.downSince ||= Date.now();
+      const wait = Math.min(300_000, Math.max(/429/.test(st.lastError || '') ? 60_000 : 0, retryMs * 2 ** Math.min(st.fails - 1, 7)));
+      st.retryAt = Date.now() + wait; setTimeout(() => this.connect(kind, url, retryMs), wait);
+    });
     ws.on('error', (e) => { st.lastError = e.message; });
   }
 }

@@ -522,6 +522,9 @@ export class LiveMarket extends EventEmitter {
 
   netStatus() {
     const l = this.feeds.status.launch;
-    return { wss: l.connected ? l.rttMs ?? 0 : null, rpc: this.rpcError ? null : this.rpcMs, rpcError: this.rpcError, rpcNode: { ...this.tradeProvider.info, read: nodeName(this.provider.lastUrl || this.provider.urls[0]), gangWs: this.gangChain.status.wss || null, fourWs: this.four.ws?.wss || null, four: nodeName(this.four.status?.rpcActive || this.four.status?.rpc), curve: nodeName(this.curve.status?.rpc) }, shrine: this.feeds.status, curve: this.curve.status, four: this.four.status, gang: this.gang.status, gangChain: { ...this.gangChain.status, recent: (this.gangLat || []).slice(0, 8) } };
+    const sm = this.feeds.status.stream, up = l.connected || sm.connected;
+    // 顶栏 WSS：shrine 的新盘频道（launch）+ 成交频道（stream）。都通 = ok；只通一个 = partial；都不通且断了不到 30 秒 = retry；更久 = down
+    const wssState = l.connected && sm.connected ? 'ok' : up ? 'partial' : Date.now() - Math.min(l.downSince || Date.now(), sm.downSince || Date.now()) < 30_000 ? 'retry' : 'down';
+    return { wss: l.connected ? l.rttMs ?? 0 : sm.connected ? sm.rttMs ?? 0 : null, wssState, rpc: this.rpcError ? null : this.rpcMs, rpcError: this.rpcError, rpcNode: { ...this.tradeProvider.info, read: nodeName(this.provider.lastUrl || this.provider.urls[0]), gangWs: this.gangChain.status.wss || null, fourWs: this.four.ws?.wss || null, four: nodeName(this.four.status?.rpcActive || this.four.status?.rpc), curve: nodeName(this.curve.status?.rpc) }, shrine: this.feeds.status, curve: this.curve.status, four: this.four.status, gang: this.gang.status, gangChain: { ...this.gangChain.status, recent: (this.gangLat || []).slice(0, 8) } };
   }
 }

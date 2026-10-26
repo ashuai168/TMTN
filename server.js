@@ -80,7 +80,7 @@ app.use((req, res, next) => {
   if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });
   next();
 });
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));   // 每次都向服务器确认有没有更新（没变就 304），避免浏览器一直用旧的 app.js / style.css
 
 const state = () => ({
   ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, net,

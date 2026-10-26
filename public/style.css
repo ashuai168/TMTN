@@ -931,3 +931,6 @@ body.fav-on .favbar { display: flex; }
 .ag-cmd { display: flex; align-items: center; gap: 8px; margin-top: 4px; padding: 6px 8px; border: 1px solid var(--line2); background: var(--panel2); }
 .ag-cmd code { flex: 1; font-size: 13px; color: var(--y); }
 .ag-note { font-size: 11px; margin-top: 8px; word-break: break-all; }
+
+/* 顶栏状态：红点（断开） */
+.dot.r { background: var(--r); box-shadow: 0 0 6px var(--r); }

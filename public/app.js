@@ -296,10 +296,24 @@ $('#loginGo')?.addEventListener('click', startLogin);   // 页面上不再提供
 $('#loginModal').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; try { await navigator.clipboard.writeText(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } setTimeout(() => (b.textContent = '复制'), 1500); });
 $('#loginRecheck').addEventListener('click', async () => { const r = await api('/api/auth/check', {}); if (r && S.baw) S.baw.auth = r; $('#loginModal').dataset.k = ''; renderAuth(); });
 
+// 顶栏状态胶囊：圆点和文字同色。ok 绿（显示毫秒）/ partial 黄（部分可用）/ retry 黄「重连中」/ down 红「断开」
+function pillState(el, st, ms, tip) {
+  const pill = el.closest('.pill'), dot = pill.querySelector('.dot'), cls = st === 'ok' ? 'g' : st === 'down' ? 'r' : 'y';
+  el.className = `mono ${cls}`; dot.className = `dot ${cls}`;
+  el.textContent = st === 'down' ? '断开' : st === 'retry' ? '重连中' : (ms != null ? ms + 'ms' : '') + (st === 'partial' ? ' · 部分' : '');
+  if (tip != null) pill.title = tip;
+}
+function ago2(ts) { return !ts ? '—' : Math.round((Date.now() - ts) / 1000) + ' 秒前'; }   // 用函数声明：启动时可能在这行执行前就被调用
+function wssTip() {
+  const sh = S.net.shrine; if (!LIVE() || !sh) return '';
+  const one = (k, n) => { const x = sh[k] || {}; return `${n}：${x.connected ? '已连接' : '断开'}${x.connected ? '' : x.retryAt ? `（${Math.max(0, Math.round((x.retryAt - Date.now()) / 1000))} 秒后重连）` : ''}，最后消息 ${ago2(x.lastEventAt)}${x.lastError && !x.connected ? `，错误：${x.lastError}` : ''}`; };
+  return `shrine.trade 第三方实时推送（补充 Flap 新盘信息和成交；代币列表本身来自链上，不受影响）\n${one('launch', '新盘频道')}\n${one('stream', '成交频道')}`;
+}
 function renderTop() {
   renderAuth();
-  $('#wssMs').textContent = S.net.wss == null ? '断开' : (S.net.wss || 0) + 'ms';
-  $('#rpcMs').textContent = S.net.rpc == null ? '断开' : (S.net.rpc || 0) + 'ms';
+  pillState($('#wssMs'), LIVE() ? S.net.wssState || (S.net.wss == null ? 'down' : 'ok') : (S.net.wss == null ? 'down' : 'ok'), S.net.wss, wssTip());
+  pillState($('#rpcMs'), S.net.rpc == null ? 'down' : LIVE() && S.net.rpcNode?.fallback ? 'partial' : 'ok', S.net.rpc);
+
   $('#wssName').textContent = LIVE() ? 'shrine' : 'GetBlock';
   const rn = S.net.rpcNode;
   if (LIVE() && rn) {
