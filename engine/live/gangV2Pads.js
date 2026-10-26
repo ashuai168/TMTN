@@ -81,10 +81,25 @@ export class GangV2 {
     const sw = await baw.marketSwap({ fromTokenQty: String(qty), fromToken: from, toToken: to, slippage });
     if (!sw.orderId) throw new Error(`${label} 没有返回 orderId`);
     step(`${label} 已提交 ${sw.orderId}`, Date.now() - t0);
-    const o = await baw.pollOrder(sw.orderId);
-    if (o?.status !== 'FINISHED') throw new Error(`${label}${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${sw.orderId}），后续步骤没有执行`);
-    if (before == null) return { o, got: null };
-    let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(to, wallet)) - before; if (got > 0n) break; await sleep(300); }   // 到账一般 1 秒内，300ms 查一次（最多约 10 秒）
+    if (before == null) { const o = await baw.pollOrder(sw.orderId); if (o?.status !== 'FINISHED') throw new Error(`${label}${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${sw.orderId}），后续步骤没有执行`); return { o, got: null }; }
+    const r = await this.waitArrival({ orderId: sw.orderId, token: to, wallet, before, label });
+    return { o: r.o, got: r.got };
+  }
+
+  // 等兑换到账：链上余额和 baw 订单状态同时看，余额先到就直接往下走。baw 每查一次订单要起一个进程（约 0.5 秒），
+  // 订单状态常常比链上余额晚 1～3 秒；余额没动时照旧以订单 FAILED / 超时为准，后续步骤不执行
+  async waitArrival({ orderId, token, wallet, before, label }) {
+    let o = null, done = false;
+    const ord = baw.pollOrder(orderId).then((r) => { o = r; done = true; return r; }, () => { done = true; return null; });
+    for (const t0 = Date.now(); Date.now() - t0 < 60_000;) {
+      const got = (await this.balanceOf(token, wallet).catch(() => before)) - before;
+      if (got > 0n) return { o: o || { status: 'FINISHED', orderId, txHash: null }, got };
+      if (done) break;
+      await sleep(300);
+    }
+    await ord;
+    if (o?.status !== 'FINISHED') throw new Error(`${label}${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${orderId}），后续步骤没有执行`);
+    let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(token, wallet)) - before; if (got > 0n) break; await sleep(300); }   // 到账一般 1 秒内，300ms 查一次（最多约 10 秒）
     if (got <= 0n) throw new Error(`${label} 没有到账，停止后续步骤`);
     return { o, got };
   }
@@ -104,18 +119,32 @@ export class GangV2 {
 
   // 报价用：1 BNB 能换多少报价币，按币缓存 8 秒。「买总量 X%」要反复试算好几次，以前每次都调 baw 报价（USDT 中转还要两次），下单前就要等 4～8 秒；
   // 真实下单时的兑换照样按实时数量走，不用这个缓存
-  async quoteRate(q) {
-    this.rateCache ||= new Map(); const k = String(q).toLowerCase(), hit = this.rateCache.get(k);
-    if (hit && Date.now() - hit.at < 8_000) return hit.rate;
-    const dec = await this.decimals(q), one = await this.bnbToQuote(q, 0.1);
-    const rate = Number(ethers.formatUnits(one, dec)) / 0.1; this.rateCache.set(k, { rate, at: Date.now(), dec }); return rate;
+  // 超过 8 秒但不到 stale 的旧汇率先拿来用，同时后台刷新：隔一会儿再点「买 1%」时不用再冷等 baw 报价（以前约 4 秒）。
+  // 汇率只用来估算该花多少 BNB，成交数量仍由链上报价 + 滑点保护决定
+  async quoteRate(q, { stale = 60_000 } = {}) {
+    this.rateCache ||= new Map(); this.rateJobs ||= new Map();
+    const k = String(q).toLowerCase(), hit = this.rateCache.get(k), age = hit ? Date.now() - hit.at : Infinity;
+    if (age < 8_000) return hit.rate;
+    const refresh = () => this.rateJobs.get(k) || (() => {
+      const job = (async () => { const dec = await this.decimals(q), one = await this.bnbToQuote(q, 0.1); const rate = Number(ethers.formatUnits(one, dec)) / 0.1; this.rateCache.set(k, { rate, at: Date.now(), dec }); return rate; })()
+        .finally(() => this.rateJobs.delete(k));
+      this.rateJobs.set(k, job); return job;
+    })();
+    if (age < stale) { refresh().catch(() => {}); return hit.rate; }
+    return refresh();
   }
 
   async preview({ token, wallet, amountBnb }) {
-    const { c } = await this.curve(token); const q = this.quoteToken(c);
-    const dec = await this.decimals(q);
+    // 「买总量 X%」要连着试算好几次：曲线状态 / 剩余额度 / 小数位 2 秒内复用，不再每次重新读链（每次约 0.5 秒，6 次就是 3 秒）。真实下单不走这里
+    this.pvCache ||= new Map(); const key = `${token}|${wallet}`.toLowerCase(); let s = this.pvCache.get(key);
+    if (!s || Date.now() - s.at > 2_000) {
+      const { c } = await this.curve(token); const q = this.quoteToken(c);
+      const [dec, room] = await Promise.all([this.decimals(q), this.room(token, wallet).catch(() => null)]);
+      s = { c, q, dec, room, at: Date.now() }; this.pvCache.set(key, s);
+    }
+    const { c, q, dec } = s;
     const quoteIn = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * await this.quoteRate(q)).toFixed(Math.min(12, dec)), dec);
-    const r = this.buyQuote(c, quoteIn, await this.room(token, wallet).catch(() => null));
+    const r = this.buyQuote(c, quoteIn, s.room);
     return { quote: q, quoteIn, ...r, out: Number(ethers.formatEther(r.tokens)), feePct: 1 };
   }
 
@@ -159,7 +188,8 @@ export class GangV2 {
   async buy({ wallet, token, amountBnb, slippage, step }) {
     const { pad: p, c } = await this.curve(token); const q = this.quoteToken(c); const hashes = [];
     const dec = await this.decimals(q); const qSym = isWbnb(q) ? 'WBNB' : '报价币';
-    let need = await this.bnbToQuote(q, amountBnb);
+    // 只用来判断钱包里现有报价币够不够（够就直接用这么多）；不够时下面按实际到账数量买。用 30 秒内的汇率，省掉 1～2 次 baw 报价
+    let need = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * await this.quoteRate(q, { stale: 30_000 })).toFixed(Math.min(12, dec)), dec);
     const have = await this.balanceOf(q, wallet);
     if (have < need) {
       const before = have; const t0 = Date.now();
@@ -171,8 +201,7 @@ export class GangV2 {
         const sw = await baw.marketSwap({ fromTokenQty: String(amountBnb), fromToken: BNB_NATIVE, toToken: q, slippage });
         if (!sw.orderId) throw new Error('BNB→报价币兑换没有返回 orderId');
         step(`BNB→报价币 已提交 ${sw.orderId}`, Date.now() - t0);
-        const o = await baw.pollOrder(sw.orderId);
-        if (o?.status !== 'FINISHED') throw new Error(`BNB→报价币兑换${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${sw.orderId}），后续步骤没有执行`);
+        const { o } = await this.waitArrival({ orderId: sw.orderId, token: q, wallet, before, label: 'BNB→报价币兑换' });
         if (o.txHash) hashes.push(o.txHash);
       }
       let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(300); }

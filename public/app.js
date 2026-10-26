@@ -1741,7 +1741,7 @@ function traderHtmlFull(d, t) {
     <div class="trd-t"><b>${esc(t.symbol)} 成交（${d.trades.length}）</b></div>
     <table class="ttable"><tr><th>时间</th><th class="l">方向</th><th>数量</th><th>价格</th><th title="买入按实际付出（含 1% 平台费），卖出按到手金额；美元按报价币现价换算">金额</th><th class="l">交易</th></tr>
       ${d.trades.map((x) => `<tr><td class="dim">${new Date(x.ts).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</td><td class="l ${x.side === 'buy' ? 'g' : 'r'}">${x.side === 'buy' ? '买入' : '卖出'}</td><td>${K(x.tokens)}</td><td>${x.tokens ? px(x.bnb / x.tokens) : '—'}</td><td>$${U(x.bnb).toFixed(2)}<div class="hsub">${K(x.bnb)} ${q}</div></td><td class="l">${x.tx ? `<a href="https://bscscan.com/tx/${x.tx}" target="_blank" rel="noopener">${x.tx.slice(0, 6)}↗</a>` : '—'}</td></tr>`).join('') || '<tr><td colspan="6" class="empty">没有成交</td></tr>'}
-    </table>`;
+    </table>${trdActs(d.trader)}`;
 }
 document.addEventListener('click', (e) => {
   const row = e.target.closest('#bottomBody tr.trow[data-trader]'); if (!row || e.target.closest('a')) return;
@@ -2382,17 +2382,17 @@ function renderTrkCopy() {
   const wl = (slots) => (slots || []).map((n) => esc(S.walletsInfo?.find((w) => w.slot === n)?.agentId || `钱包 ${n}`)).join(' + ');
   $('#trkTasks').innerHTML = list.length ? `<table class="trk-tbl"><tr><th class="l">钱包</th><th class="l">任务</th><th>总买入</th><th>总卖出</th><th>买 / 卖</th><th>已实现利润</th><th>最近交易</th><th class="l">状态</th><th class="l">操作</th></tr>
     ${list.map((t) => { const p = t.params || {}, st = t.status === 'running' ? (TRK.paused ? '<b class="y">运行中（被全部暂停）</b>' : `<b class="g">运行中</b>`) : t.status === 'paused' ? '<b class="muted">已暂停</b>' : '<span class="muted">已关闭</span>';
-      return `<tr><td class="l">${wl(p.wallets)}</td><td class="l"><b>${esc(t.name)}</b><div class="hsub">${short(t.target, 6, 4)} · ${p.mode === 'ratio' ? `跟 ${p.ratioPct}%` : `每次 ${p.amountBnb} BNB`}${p.onlyFirst ? ' · 只跟建仓' : ''}${p.followSell ? ' · 跟卖' : ''}</div></td>
+      return `<tr><td class="l">${wl(p.wallets)}</td><td class="l"><b>${esc(t.name)}</b><div class="hsub">${short(t.target, 6, 4)} · ${p.mode === 'ratio' ? `跟 ${p.ratioPct}%` : `每次 ${p.amountBnb} BNB`}${p.onlyFirst ? ' · 只跟建仓' : ''}${p.followSell ? ' · 跟卖' : ''} · ${p.maxCopies > 0 ? `已跟 ${p.dryRun ? (t.stats?.simCopies || 0) : (t.stats?.copies || 0)}/${p.maxCopies} 次${p.dryRun ? '（模拟）' : ''}` : '次数不限'}</div>${t.closeReason ? `<div class="hsub y">${esc(t.closeReason)}</div>` : ''}</td>
         <td>${tkFmt(t.stats?.buyBnb)}</td><td>${tkFmt(t.stats?.sellBnb)}</td><td>${t.stats?.buys || 0} / ${t.stats?.sells || 0}${t.stats?.sims ? `<div class="hsub">模拟 ${t.stats.sims} 次</div>` : ''}</td>
         <td class="${(t.stats?.realized || 0) >= 0 ? 'g' : 'r'}">${t.stats?.realized ? (t.stats.realized > 0 ? '+' : '') + bnb(t.stats.realized, 4) : '0'}</td><td class="dim">${t.stats?.lastAt ? trkAgo(t.stats.lastAt) + '前' : '—'}</td>
         <td class="l">${st}<div class="hsub">${p.dryRun ? '<b class="y">模拟</b>（不下单）' : '<b class="r">真实下单</b>'}</div></td>
         <td class="l trk-acts">${t.status === 'closed' ? '' : `${t.status === 'running' ? `<button data-cpact="pause:${t.id}">暂停</button>` : `<button class="go" data-cpact="start:${t.id}">启动</button>`}<button data-cpact="edit:${t.id}">参数</button><button data-cpact="close:${t.id}">关闭</button>`}</td></tr>`; }).join('')}</table>`
     : `<div class="empty">${TRK.cptab === 'active' ? '还没有跟单任务。点「新建跟单」，或在追踪动态里点目标旁的「跟单」' : '没有已关闭的任务'}</div>`;
-  $('#trkLog').innerHTML = TRK.log.length ? TRK.log.slice(0, 200).map((r) => `<div class="trk-lr ${r.kind}"><span class="dim">${new Date(r.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span><b>${esc(r.taskName || '')}</b><span>${esc(r.symbol || '')} ${esc(r.action || '')}</span><span class="trk-k">${{ order: '下单', sim: '模拟', skip: '跳过', fail: '失败', error: '出错' }[r.kind] || r.kind}</span><span class="trk-r">${esc(r.reason || '')}</span></div>`).join('') : '<div class="empty">还没有记录</div>';
+  $('#trkLog').innerHTML = TRK.log.length ? TRK.log.slice(0, 200).map((r) => `<div class="trk-lr ${r.kind}"><span class="dim">${new Date(r.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span><b>${esc(r.taskName || '')}</b><span>${esc(r.symbol || '')} ${esc(r.action || '')}</span><span class="trk-k">${{ order: '下单', sim: '模拟', skip: '跳过', fail: '失败', error: '出错', stop: '停止' }[r.kind] || r.kind}</span><span class="trk-r">${esc(r.reason || '')}</span></div>`).join('') : '<div class="empty">还没有记录</div>';
 }
 // 新建 / 修改跟单参数的对话框
 function copyDialog(task, presetTarget) {
-  const p = { mode: 'fixed', amountBnb: 0.01, ratioPct: 10, maxPerTrade: 0.05, maxPerToken: 0.05, dailyCap: 0.2, maxOpen: 5, onlyFirst: true, minTargetBnb: 0, maxTargetBnb: 0, maxMcUsd: 0, platforms: ['flap', 'four', 'gang'], maxDelaySec: 15, slippage: 20, wallets: [1], followSell: false, dryRun: true, ...(task?.params || {}) };
+  const p = { maxCopies: 1, mode: 'fixed', amountBnb: 0.01, ratioPct: 10, maxPerTrade: 0.05, maxPerToken: 0.05, dailyCap: 0.2, maxOpen: 5, onlyFirst: true, minTargetBnb: 0, maxTargetBnb: 0, maxMcUsd: 0, platforms: ['flap', 'four', 'gang'], maxDelaySec: 15, slippage: 20, wallets: [1], followSell: false, dryRun: true, ...(task?.params || {}) };
   const ws = (S.walletsInfo?.length ? S.walletsInfo : [{ slot: 1, label: '钱包 1' }]);
   const num = (k, label, step = '0.01', hint = '') => `<label class="cp-f"><span>${label}</span><input type="number" step="${step}" min="0" data-cp="${k}" value="${p[k]}"/>${hint ? `<i>${hint}</i>` : ''}</label>`;
   const chk = (k, label, hint = '') => `<label class="cp-c"><input type="checkbox" data-cp="${k}" ${p[k] ? 'checked' : ''}/> ${label}${hint ? `<i>${hint}</i>` : ''}</label>`;
@@ -2402,11 +2402,11 @@ function copyDialog(task, presetTarget) {
     <div class="cp-grp"><b>金额</b>
       <label class="cp-f"><span>方式</span><select data-cp="mode"><option value="fixed" ${p.mode === 'fixed' ? 'selected' : ''}>固定金额</option><option value="ratio" ${p.mode === 'ratio' ? 'selected' : ''}>按对方买入的比例</option></select></label>
       ${num('amountBnb', '每次买入（BNB）', '0.001', '固定金额时用；每个钱包各买这么多')}${num('ratioPct', '跟对方的 %', '1', '比例方式：对方买 1 BNB、填 10 = 买 0.1')}
-      ${num('maxPerTrade', '单笔上限（BNB）', '0.001', '最高 0.5，另外还受交易设置的单笔上限')}${num('maxPerToken', '每个币最多（BNB）')}${num('dailyCap', '每天合计最多（BNB）')}${num('maxOpen', '最多同时持有几个币', '1')}</div>
+      ${num('maxCopies', '最多跟单几次', '1', '跟买成功这么多次后自动停止、进「历史」；0 = 不限。模拟和真实分开计数')}${num('maxPerTrade', '单笔上限（BNB）', '0.001', '最高 0.5，另外还受交易设置的单笔上限')}${num('maxPerToken', '每个币最多（BNB）')}${num('dailyCap', '每天合计最多（BNB）')}${num('maxOpen', '最多同时持有几个币', '1')}</div>
     <div class="cp-grp"><b>条件</b>${chk('onlyFirst', '只跟建仓（对方第一次买这个币）', '关掉则加仓也跟')}
       ${num('minTargetBnb', '对方买入至少（BNB）', '0.01', '0 = 不限')}${num('maxTargetBnb', '对方买入最多（BNB）', '0.01', '0 = 不限')}${num('maxMcUsd', '市值最高（美元）', '1000', '0 = 不限')}${num('maxDelaySec', '最多晚几秒', '1', '发现得比这晚就不跟')}${num('slippage', '滑点 %', '1')}
       <div class="cp-row">平台：${['flap', 'four', 'gang'].map((x) => `<label class="cp-c"><input type="checkbox" data-cpplat="${x}" ${p.platforms.includes(x) ? 'checked' : ''}/> ${x === 'flap' ? 'Flap' : x === 'four' ? 'Four' : 'Gang'}</label>`).join('')}</div>
-      <div class="cp-row">用哪些钱包下单：${ws.map((w) => `<label class="cp-c"><input type="checkbox" data-cpw="${w.slot}" ${p.wallets.includes(w.slot) ? 'checked' : ''}/> ${esc(w.agentId || w.label)}</label>`).join('')}</div>
+      <div class="cp-row">用哪些钱包下单（可多选，每个钱包各买一份）：${ws.map((w) => `<label class="cp-c" title="${esc(w.label)} ${w.address || ''}"><input type="checkbox" data-cpw="${w.slot}" ${p.wallets.includes(w.slot) ? 'checked' : ''}/> ${esc(w.agentId || w.label)} <i class="${w.auth === 'ok' || !w.auth ? 'g' : 'r'}">${w.auth === 'ok' || !w.auth ? '已登录' : '未登录'}</i></label>`).join('')}</div>
       ${chk('followSell', '跟卖：对方卖出时，我们卖出同样比例（默认关）')}</div>
     <div class="cp-grp"><b>运行方式</b>${chk('dryRun', '模拟（只记录会买多少，不真的下单）', '建议先模拟一段时间再关掉')}<div class="ui-note">${task ? '' : '新建的任务是「已暂停」状态，要在列表里点「启动」才会开始。'}</div></div>
     <div class="cp-err r" id="cpErr"></div></div>
@@ -2449,7 +2449,7 @@ $('#track').addEventListener('click', async (e) => {
   if (d.cpact) {
     const [act, id] = d.cpact.split(':'), t = TRK.tasks.find((x) => x.id === id); if (!t) return;
     if (act === 'edit') return copyDialog(t);
-    if (act === 'start' && !(await ui.confirm({ title: `启动跟单「${t.name}」？`, body: t.params?.dryRun ? '<p>这是<b class="y">模拟</b>任务：只记录会买多少，不会下单。</p>' : `<p class="r"><b>真实下单：</b>对方买入时会用 ${(t.params.wallets || []).length} 个钱包自动买入，每次每个钱包最多 ${t.params.maxPerTrade} BNB，每天合计最多 ${t.params.dailyCap} BNB。会花真实的 BNB，可能亏损。</p>`, confirmText: '启动', danger: !t.params?.dryRun }))) return;
+    if (act === 'start' && !(await ui.confirm({ title: `启动跟单「${t.name}」？`, body: t.params?.dryRun ? '<p>这是<b class="y">模拟</b>任务：只记录会买多少，不会下单。</p>' : `<p class="r"><b>真实下单：</b>对方买入时会用 ${(t.params.wallets || []).length} 个钱包（${(t.params.wallets || []).map((n) => esc(S.walletsInfo?.find((w) => w.slot === n)?.agentId || '钱包 ' + n)).join('、')}）自动买入：每次每个钱包最多 ${t.params.maxPerTrade} BNB，每天合计最多 ${t.params.dailyCap} BNB，${t.params.maxCopies > 0 ? `最多跟 ${t.params.maxCopies} 次（已跟 ${t.stats?.copies || 0} 次），跟满自动停止` : '<b>次数不限</b>'}。会花真实的 BNB，可能亏损。</p>`, confirmText: '启动', danger: !t.params?.dryRun }))) return;
     if (act === 'close' && !(await ui.confirm({ title: `关闭跟单「${t.name}」？`, body: '关闭后不再跟单（已买的币不会自动卖出），会移到「历史」。', confirmText: '关闭' }))) return;
     try { await api('/api/copy/tasks', { id, status: act === 'start' ? 'running' : act === 'pause' ? 'paused' : 'closed' }); loadTrack(); } catch (err) { toast({ status: 'failed', symbol: '跟单', reason: err.message }); }
   }
@@ -2462,3 +2462,28 @@ $('#track').addEventListener('change', (e) => {
 $('#trkAddr')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#trkAddBtn').click(); });
 setInterval(() => { if (S.view === 'track' && TRK.tab === 'feed') renderTrkFeed(); }, 15_000);   // 「多久前」刷新
 setTimeout(() => { if (LIVE()) api('/api/copy').then((b) => { TRK.tasks = b.tasks || []; TRK.paused = !!b.paused; renderTrkKill(); }).catch(() => {}); }, 4000);   // 顶栏跟单状态
+
+// 交易者盈亏抽屉底部：「追踪」「跟单」两个按钮（自己的钱包不显示）
+function trdActs(addr) {
+  if (!LIVE() || !addr || isMe(addr)) return '';
+  const on = TRK.targets.some((x) => x.address === String(addr).toLowerCase());
+  return `<div class="trd-acts"><button class="trd-track ${on ? 'on' : ''}" data-trdtrack="${esc(addr)}">${on ? '✓ 已追踪（点击取消）' : '＋ 追踪'}</button><button class="trd-copy" data-trdcopy="${esc(addr)}">跟单</button></div>`;
+}
+async function trkEnsure() { if (!TRK.loaded) await loadTrack().catch(() => {}); }
+document.addEventListener('click', async (e) => {
+  const tb = e.target.closest('[data-trdtrack]'), cb = e.target.closest('[data-trdcopy]'); if (!tb && !cb) return;
+  e.preventDefault(); e.stopPropagation(); await trkEnsure();
+  const addr = String((tb || cb).dataset.trdtrack || (tb || cb).dataset.trdcopy).toLowerCase(), dom = NAMES[addr] || null;
+  const tracked = TRK.targets.some((x) => x.address === addr);
+  try {
+    if (tb) {
+      if (tracked) { await api('/api/track/targets', { address: addr, remove: true }); note('已取消追踪'); }
+      else { await api('/api/track/targets', { address: addr, domain: dom, name: dom || '' }); note(`已追踪 ${dom || short(addr, 6, 4)}`); }
+      await loadTrack();
+      $$('.trd-acts').forEach((x) => { x.outerHTML = trdActs(addr); });
+      return;
+    }
+    if (!tracked) { await api('/api/track/targets', { address: addr, domain: dom, name: dom || '' }); await loadTrack(); }   // 跟单要先在追踪列表里
+    copyDialog(null, addr);
+  } catch (err) { toast({ status: 'failed', symbol: '追踪', reason: err.message }); }
+}, true);

@@ -1014,3 +1014,10 @@ body.fav-on .favbar { display: flex; }
 .cp-f i, .cp-c i { font-style: normal; color: var(--muted); font-size: 11px; margin-left: 4px; }
 .cp-c { grid-column: 1 / -1; font-size: 13px; display: flex; align-items: center; gap: 6px; } .cp-row { grid-column: 1 / -1; display: flex; gap: 14px; align-items: center; font-size: 12px; flex-wrap: wrap; } .cp-row .cp-c { grid-column: auto; }
 .cp-tgt { margin-bottom: 6px; } .cp-err { min-height: 16px; font-size: 12px; }
+
+/* 盈亏抽屉底部：追踪 / 跟单 */
+.trd-acts { display: flex; gap: 10px; margin: 14px 0 6px; }
+.trd-acts button { flex: 1; height: 36px; border: 1px solid var(--line2); font-weight: 600; }
+.trd-track { color: var(--y); } .trd-track.on { color: var(--g); border-color: rgba(30,203,129,.45); }
+.trd-copy { background: var(--y); border-color: var(--y) !important; color: #1a1400; }
+.trd-acts button:hover { filter: brightness(1.12); }

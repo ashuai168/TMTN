@@ -24,7 +24,7 @@ const day = (ts = Date.now()) => new Date(ts).toISOString().slice(0, 10);
 export const COPY_DEFAULTS = {
   mode: 'fixed', amountBnb: 0.01, ratioPct: 10, maxPerTrade: 0.05, maxPerToken: 0.05, dailyCap: 0.2, maxOpen: 5,
   onlyFirst: true, minTargetBnb: 0, maxTargetBnb: 0, maxMcUsd: 0, platforms: ['flap', 'four', 'gang'], maxDelaySec: 15,
-  slippage: 20, wallets: [1], followSell: false, dryRun: true,
+  slippage: 20, wallets: [1], followSell: false, dryRun: true, maxCopies: 1,
 };
 const HARD_MAX_TRADE = 0.5;   // 无论参数怎么填，单笔不超过 0.5 BNB（另外还受交易设置里的单笔上限约束）
 
@@ -82,7 +82,7 @@ export class Tracker extends EventEmitter {
   createTask({ target, name, params }) {
     const a = lc(target); if (!/^0x[0-9a-f]{40}$/.test(a)) throw new Error('目标地址格式不对');
     const task = { id: 'c' + Date.now().toString(36), target: a, name: String(name || this.target(a)?.name || a.slice(0, 8)).slice(0, 40), createdAt: Date.now(),
-      status: 'paused', params: this.cleanParams({ ...COPY_DEFAULTS, ...(params || {}) }), stats: { buyBnb: 0, sellBnb: 0, buys: 0, sells: 0, sims: 0, realized: 0, lastAt: null }, tokens: {}, days: {} };
+      status: 'paused', params: this.cleanParams({ ...COPY_DEFAULTS, ...(params || {}) }), stats: { buyBnb: 0, sellBnb: 0, buys: 0, sells: 0, sims: 0, realized: 0, lastAt: null, copies: 0, simCopies: 0 }, tokens: {}, days: {} };
     this.tasks.push(task); this.saveTasks(); return task;   // 新建一律暂停
   }
   cleanParams(p) {
@@ -90,7 +90,8 @@ export class Tracker extends EventEmitter {
     return { mode: p.mode === 'ratio' ? 'ratio' : 'fixed', amountBnb: n(p.amountBnb, 0.01, 0, HARD_MAX_TRADE), ratioPct: n(p.ratioPct, 10, 0, 1000), maxPerTrade: n(p.maxPerTrade, 0.05, 0, HARD_MAX_TRADE),
       maxPerToken: n(p.maxPerToken, 0.05, 0, 10), dailyCap: n(p.dailyCap, 0.2, 0, 50), maxOpen: Math.round(n(p.maxOpen, 5, 0, 100)), onlyFirst: p.onlyFirst !== false,
       minTargetBnb: n(p.minTargetBnb, 0), maxTargetBnb: n(p.maxTargetBnb, 0), maxMcUsd: n(p.maxMcUsd, 0), platforms: (Array.isArray(p.platforms) ? p.platforms : ['flap', 'four', 'gang']).filter((x) => ['flap', 'four', 'gang'].includes(x)),
-      maxDelaySec: n(p.maxDelaySec, 15, 1, 600), slippage: n(p.slippage, 20, 1, 50), wallets: (Array.isArray(p.wallets) ? p.wallets : [1]).map(Number).filter((x) => x > 0), followSell: p.followSell === true, dryRun: p.dryRun !== false };
+      maxDelaySec: n(p.maxDelaySec, 15, 1, 600), slippage: n(p.slippage, 20, 1, 50), wallets: (Array.isArray(p.wallets) ? p.wallets : [1]).map(Number).filter((x) => x > 0), followSell: p.followSell === true, dryRun: p.dryRun !== false,
+      maxCopies: Math.round(n(p.maxCopies, 1, 0, 1000)) };   // 最多跟单几次（跟买成功的次数），0 = 不限；模拟和真实分开计数
   }
   updateTask(id, patch) {
     const t = this.tasks.find((x) => x.id === id); if (!t) throw new Error('任务不存在');
@@ -111,6 +112,7 @@ export class Tracker extends EventEmitter {
     const p = task.params, tk = (task.tokens[ev.token] ||= { bought: 0, sold: 0, open: false, n: 0 });
     if (task.status !== 'running') return;                                   // 暂停 / 关闭的任务不记录（太多）
     if (this.allPaused) return this.record(task, ev, 'skip', '全部暂停中');
+    { const max = p.maxCopies || 0, n = p.dryRun ? task.stats.simCopies || 0 : task.stats.copies || 0; if (max > 0 && n >= max && ev.side === 'buy') return this.record(task, ev, 'skip', `已跟满 ${max} 次`); }
     const delay = (Date.now() - (ev.ts || ev.seenAt)) / 1000;
     if (ev.side === 'sell') {
       if (!p.followSell) return;
@@ -141,8 +143,9 @@ export class Tracker extends EventEmitter {
     if (!(amt >= 0.001)) return this.record(task, ev, 'skip', '每日额度不够');
     tk.n++;   // 先占位，避免同一个币连续两笔重复跟
     if (p.dryRun) {
-      task.stats.sims++; tk.simBnb = (tk.simBnb || 0) + amt * nW; this.saveTasks();
-      return this.record(task, ev, 'sim', `模拟买入：每个钱包 ${amt} BNB × ${nW} 个钱包（对方 ${ev.action} ${ev.bnb?.toFixed(4)} BNB）`);
+      task.stats.sims++; task.stats.simCopies = (task.stats.simCopies || 0) + 1; tk.simBnb = (tk.simBnb || 0) + amt * nW;
+      const row = this.record(task, ev, 'sim', `模拟买入：每个钱包 ${amt} BNB × ${nW} 个钱包（对方 ${ev.action} ${ev.bnb?.toFixed(4)} BNB）· 模拟第 ${task.stats.simCopies} 次`);
+      this.checkLimit(task, ev, true); this.saveTasks(); return row;
     }
     const res = await this.placeOrder({ token: ev.token, side: 'buy', amount: amt, slippage: p.slippage, slots: p.wallets, source: `跟单 ${task.name}` });
     return this.afterOrder(task, ev, res, 'buy', amt);
@@ -155,7 +158,17 @@ export class Tracker extends EventEmitter {
       else { const b = Number(o.out) || 0; task.stats.sellBnb += b; task.stats.sells++; tk.sold += b; if (amt >= 100) { tk.open = false; task.stats.realized += tk.sold - tk.bought; } }
     }
     if (ok.length) task.stats.lastAt = Date.now();
-    this.saveTasks();
-    return this.record(task, ev, ok.length ? 'order' : 'fail', `${side === 'buy' ? `跟买 ${amt} BNB` : `跟卖 ${amt}%`}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : '失败 ' + (o.reason || '')}`).join('；')}`, { results: list.map((o) => ({ wallet: o.wallet, status: o.status, tx: o.tx, reason: o.reason })) });
+    if (side === 'buy' && ok.length) task.stats.copies = (task.stats.copies || 0) + 1;   // 一次跟买（不管几个钱包成交）算一次
+    const row = this.record(task, ev, ok.length ? 'order' : 'fail', `${side === 'buy' ? `跟买 ${amt} BNB` : `跟卖 ${amt}%`}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : '失败 ' + (o.reason || '')}`).join('；')}`, { results: list.map((o) => ({ wallet: o.wallet, status: o.status, tx: o.tx, reason: o.reason })) });
+    if (side === 'buy' && ok.length) this.checkLimit(task, ev, false);
+    this.saveTasks(); return row;
+  }
+
+  // 跟满 N 次：任务自动关闭、进「历史」，记下原因。模拟只看模拟次数，真实只看真实次数
+  checkLimit(task, ev, sim) {
+    const max = task.params.maxCopies || 0, n = sim ? task.stats.simCopies : task.stats.copies;
+    if (!(max > 0) || n < max) return;
+    task.status = 'closed'; task.closedAt = Date.now(); task.closeReason = `${sim ? '模拟' : '真实'}跟单已满 ${max} 次，自动停止`;
+    this.record(task, ev, 'stop', task.closeReason);
   }
 }
