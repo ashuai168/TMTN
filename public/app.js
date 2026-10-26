@@ -57,7 +57,7 @@ function myWallets() {
 }
 const isMe = (a) => !!a && myWallets().has(String(a).toLowerCase());
 const meTag = (a) => { const slot = myWallets().get(String(a || '').toLowerCase()); return `<i class="me-tag" title="${MW() ? '我的钱包 ' + slot : '我的钱包'}">我${MW() && slot ? '·' + slot : ''}</i>`; };
-const whoHtml = (addr, name, a = 6, b = 4) => isMe(addr) ? `<b class="me">${esc(name || short(addr, a, b))}</b>${meTag(addr)}` : name ? `<b class="y">${esc(name)}</b>` : `<span class="mono">${short(addr, a, b)}</span>`;
+const whoHtml = (addr, name0, a = 6, b = 4, name = (typeof trkRemark === 'function' && TRK.targets.length && trkRemark(addr)) || name0) => isMe(addr) ? `<b class="me">${esc(name || short(addr, a, b))}</b>${meTag(addr)}` : name ? `<b class="y">${esc(name)}</b>` : `<span class="mono">${short(addr, a, b)}</span>`;
 // 地址 / 域名：点击在新标签打开 GMGN 的地址页（点行的其他地方仍打开盈亏抽屉）
 const gmgnWho = (addr, name, a = 6, b = 4) => /^0x[0-9a-fA-F]{40}$/.test(addr || '') ? `<a class="gm-addr" data-gmgn href="https://gmgn.ai/bsc/address/${esc(addr)}" target="_blank" rel="noopener noreferrer" title="在 GMGN 查看 ${esc(addr)}">${whoHtml(addr, name, a, b)}</a>` : whoHtml(addr, name, a, b);
 document.addEventListener('click', (e) => { if (e.target.closest('a[data-gmgn]')) e.stopPropagation(); }, true);   /* 只打开链接，不再触发行点击 */
@@ -2332,7 +2332,23 @@ $('#donateBtn')?.addEventListener('click', openDonate);
 const ACT_CLS = { 建仓: 'g', 加仓: 'g', 减仓: 'r', 清仓: 'r' };
 const trkAgo = (ts) => { const s = Math.max(0, (Date.now() - ts) / 1000); return s < 60 ? Math.floor(s) + '秒' : s < 3600 ? Math.floor(s / 60) + '分' : s < 86400 ? Math.floor(s / 3600) + '时' : Math.floor(s / 86400) + '天'; };
 function trkPass(e) { const tg = TRK.targets.find((x) => x.address === e.target); return (!TRK.fGroup || (tg?.group || '默认') === TRK.fGroup) && (!(TRK.fMin > 0) || (e.bnb || 0) >= TRK.fMin); }
-function trkName(addr) { const t = TRK.targets.find((x) => x.address === addr); return t?.name || t?.domain || NAMES[addr] || short(addr, 6, 4); }
+// 追踪地址的显示名：备注名 > 域名 > 短地址（备注存服务器的追踪数据里，和钱包无关）
+function trkT(addr) { return TRK.targets.find((x) => x.address === String(addr || '').toLowerCase()) || null; }
+function trkRemark(addr) { const t = trkT(addr); return t ? (t.remark || (t.name && t.name !== t.domain ? t.name : '')) : ''; }
+function trkName(addr) { const t = trkT(addr); return trkRemark(addr) || t?.domain || NAMES[String(addr || '').toLowerCase()] || short(addr, 6, 4); }
+function trkSub(addr) { const t = trkT(addr), dom = t?.domain || NAMES[String(addr || '').toLowerCase()]; return trkRemark(addr) ? (dom || short(addr, 6, 4)) : dom ? short(addr, 6, 4) : ''; }
+async function trkSaveRemark(addr, v) { const t = trkT(addr); v = String(v || '').trim().slice(0, 40); await api('/api/track/targets', { address: addr, remark: v, name: v || t?.domain || '', domain: t?.domain || null, group: t?.group }); await loadTrack(); renderTrkPanel(); }
+// 就地编辑：点 ✎ 把名字换成输入框，回车保存、Esc 取消；清空 = 恢复显示域名 / 地址
+function trkEditInline(btn) {
+  const addr = btn.dataset.trkedit, host = btn.closest('[data-trkname]') || btn.parentElement; if (!addr || host.querySelector('input.trk-ed')) return;
+  const old = trkRemark(addr), inp = document.createElement('input'); inp.className = 'trk-ed'; inp.value = old; inp.placeholder = '备注名（留空 = 显示域名 / 地址）'; inp.maxLength = 40;
+  const saved = host.innerHTML; host.innerHTML = ''; host.appendChild(inp); inp.focus(); inp.select();
+  let done = false; const finish = async (save) => { if (done) return; done = true; if (save && inp.value.trim() !== old) { try { await trkSaveRemark(addr, inp.value); note(inp.value.trim() ? '备注已保存' : '已清除备注'); } catch (e) { toast({ status: 'failed', symbol: '备注', reason: e.message }); host.innerHTML = saved; } } else host.innerHTML = saved; if (S.view === 'track') renderTrack(); };
+  inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); finish(true); } else if (e.key === 'Escape') { e.preventDefault(); finish(false); } e.stopPropagation(); });
+  inp.addEventListener('blur', () => finish(true));
+  inp.addEventListener('click', (e) => e.stopPropagation(), true);
+}
+document.addEventListener('click', (e) => { const b = e.target.closest('[data-trkedit]'); if (!b) return; e.preventDefault(); e.stopPropagation(); trkEditInline(b); }, true);
 async function loadTrack() {
   try { const [a, b] = await Promise.all([api('/api/track'), api('/api/copy')]); Object.assign(TRK, { targets: a.targets || [], groups: a.groups || ['默认'], feed: a.feed || [], tasks: b.tasks || [], paused: !!b.paused, log: b.log || [], loaded: true }); }
   catch (e) { TRK.err = e.message; }
@@ -2361,14 +2377,14 @@ function renderTrkFeed() {
   $('#trkGroups').innerHTML = TRK.groups.map((g) => `<option value="${esc(g)}">`).join('');
   const fg = $('#trkFGroup'); const cur = TRK.fGroup; fg.innerHTML = '<option value="">全部分组</option>' + TRK.groups.map((g) => `<option ${g === cur ? 'selected' : ''}>${esc(g)}</option>`).join('');
   $('#trkList').innerHTML = TRK.targets.length ? TRK.targets.map((t) => `<div class="trk-t"><i class="ws-av" style="background:${wsColor((parseInt(t.address.slice(-2), 16) % 4) + 1)}"></i>
-    <div class="trk-t-id"><b>${esc(t.name || t.domain || short(t.address, 6, 4))}</b><span class="mono muted">${short(t.address, 6, 4)} · ${esc(t.group || '默认')}${t.remark ? ' · ' + esc(t.remark) : ''}</span></div>
+    <div class="trk-t-id"><span class="trk-nm" data-trkname><b>${esc(trkName(t.address))}</b><button class="trk-pen" data-trkedit="${t.address}" title="编辑备注名">✎</button></span><span class="mono muted">${esc(trkSub(t.address) || short(t.address, 6, 4))} · ${esc(t.group || '默认')}</span></div>
     <button class="trk-mini" data-trknew="${t.address}" title="给这个目标新建跟单任务（新建是暂停 + 模拟）">跟单</button><button class="trk-x" data-trkdel="${t.address}" title="不再追踪">×</button></div>`).join('')
     : '<div class="empty">还没有追踪的地址。上面填 .ai / .bnb 域名或 0x 地址添加</div>';
   const rows = TRK.feed.filter(trkPass);
   $('#trkCount').textContent = `${rows.length} 条`;
   $('#trkFeed').innerHTML = rows.length ? `<table class="trk-tbl"><tr><th class="l">时间</th><th class="l">目标</th><th class="l">动作</th><th>金额</th><th class="l">代币</th><th>币龄</th><th>市值</th></tr>
-    ${rows.slice(0, 300).map((e) => `<tr><td class="l dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}前</td>
-      <td class="l"><a href="#" data-trkwho="${e.target}:${e.token}">${esc(e.targetName || trkName(e.target))}</a></td>
+    ${rows.map((e) => `<tr><td class="l dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}前</td>
+      <td class="l"><a href="#" data-trkwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || e.target)}">${esc(trkName(e.target))}</a></td>
       <td class="l"><b class="${ACT_CLS[e.action] || ''}">${e.action}</b>${e.pct != null && e.side === 'sell' ? ` <span class="dim">${e.pct.toFixed(0)}%</span>` : ''}</td>
       <td><b>${e.bnb ? bnb(e.bnb, 4) + ' BNB' : '—'}</b>${e.quote !== 'BNB' ? `<div class="hsub">${K(e.quoteAmt)} ${esc(e.quote)}</div>` : ''}</td>
       <td class="l"><span class="side" data-a="${e.token}" style="cursor:pointer">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b>${e.quote !== 'BNB' ? ` <i class="tag">${esc(e.quote)}</i>` : ''}</span></td>
@@ -2382,13 +2398,13 @@ function renderTrkCopy() {
   const wl = (slots) => (slots || []).map((n) => esc(S.walletsInfo?.find((w) => w.slot === n)?.agentId || `钱包 ${n}`)).join(' + ');
   $('#trkTasks').innerHTML = list.length ? `<table class="trk-tbl"><tr><th class="l">钱包</th><th class="l">任务</th><th>总买入</th><th>总卖出</th><th>买 / 卖</th><th>已实现利润</th><th>最近交易</th><th class="l">状态</th><th class="l">操作</th></tr>
     ${list.map((t) => { const p = t.params || {}, st = t.status === 'running' ? (TRK.paused ? '<b class="y">运行中（被全部暂停）</b>' : `<b class="g">运行中</b>`) : t.status === 'paused' ? '<b class="muted">已暂停</b>' : '<span class="muted">已关闭</span>';
-      return `<tr><td class="l">${wl(p.wallets)}</td><td class="l"><b>${esc(t.name)}</b><div class="hsub">${short(t.target, 6, 4)} · ${p.mode === 'ratio' ? `跟 ${p.ratioPct}%` : `每次 ${p.amountBnb} BNB`}${p.onlyFirst ? ' · 只跟建仓' : ''}${p.followSell ? ' · 跟卖' : ''} · ${p.maxCopies > 0 ? `已跟 ${p.dryRun ? (t.stats?.simCopies || 0) : (t.stats?.copies || 0)}/${p.maxCopies} 次${p.dryRun ? '（模拟）' : ''}` : '次数不限'}</div>${t.closeReason ? `<div class="hsub y">${esc(t.closeReason)}</div>` : ''}</td>
+      return `<tr><td class="l">${wl(p.wallets)}</td><td class="l"><b title="${esc(t.target)}">${esc(trkRemark(t.target) || t.name)}</b><div class="hsub">${short(t.target, 6, 4)} · ${p.mode === 'ratio' ? `跟 ${p.ratioPct}%` : `每次 ${p.amountBnb} BNB`}${p.onlyFirst ? ' · 只跟建仓' : ''}${p.followSell ? ' · 跟卖' : ''} · ${p.maxCopies > 0 ? `已跟 ${p.dryRun ? (t.stats?.simCopies || 0) : (t.stats?.copies || 0)}/${p.maxCopies} 次${p.dryRun ? '（模拟）' : ''}` : '次数不限'}</div>${t.closeReason ? `<div class="hsub y">${esc(t.closeReason)}</div>` : ''}</td>
         <td>${tkFmt(t.stats?.buyBnb)}</td><td>${tkFmt(t.stats?.sellBnb)}</td><td>${t.stats?.buys || 0} / ${t.stats?.sells || 0}${t.stats?.sims ? `<div class="hsub">模拟 ${t.stats.sims} 次</div>` : ''}</td>
         <td class="${(t.stats?.realized || 0) >= 0 ? 'g' : 'r'}">${t.stats?.realized ? (t.stats.realized > 0 ? '+' : '') + bnb(t.stats.realized, 4) : '0'}</td><td class="dim">${t.stats?.lastAt ? trkAgo(t.stats.lastAt) + '前' : '—'}</td>
         <td class="l">${st}<div class="hsub">${p.dryRun ? '<b class="y">模拟</b>（不下单）' : '<b class="r">真实下单</b>'}</div></td>
         <td class="l trk-acts">${t.status === 'closed' ? '' : `${t.status === 'running' ? `<button data-cpact="pause:${t.id}">暂停</button>` : `<button class="go" data-cpact="start:${t.id}">启动</button>`}<button data-cpact="edit:${t.id}">参数</button><button data-cpact="close:${t.id}">关闭</button>`}</td></tr>`; }).join('')}</table>`
     : `<div class="empty">${TRK.cptab === 'active' ? '还没有跟单任务。点「新建跟单」，或在追踪动态里点目标旁的「跟单」' : '没有已关闭的任务'}</div>`;
-  $('#trkLog').innerHTML = TRK.log.length ? TRK.log.slice(0, 200).map((r) => `<div class="trk-lr ${r.kind}"><span class="dim">${new Date(r.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span><b>${esc(r.taskName || '')}</b><span>${esc(r.symbol || '')} ${esc(r.action || '')}</span><span class="trk-k">${{ order: '下单', sim: '模拟', skip: '跳过', fail: '失败', error: '出错', stop: '停止' }[r.kind] || r.kind}</span><span class="trk-r">${esc(r.reason || '')}</span></div>`).join('') : '<div class="empty">还没有记录</div>';
+  $('#trkLog').innerHTML = TRK.log.length ? TRK.log.slice(0, 200).map((r) => `<div class="trk-lr ${r.kind}"><span class="dim">${new Date(r.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span><b>${esc((r.target && trkRemark(r.target)) || r.taskName || '')}</b><span>${esc(r.symbol || '')} ${esc(r.action || '')}</span><span class="trk-k">${{ order: '下单', sim: '模拟', skip: '跳过', fail: '失败', error: '出错', stop: '停止' }[r.kind] || r.kind}</span><span class="trk-r">${esc(r.reason || '')}</span></div>`).join('') : '<div class="empty">还没有记录</div>';
 }
 // 新建 / 修改跟单参数的对话框
 function copyDialog(task, presetTarget) {
@@ -2441,7 +2457,7 @@ $('#track').addEventListener('click', async (e) => {
     msg.className = 'trk-msg'; msg.textContent = '正在解析…';
     try {
       const r = await api(`/api/track/resolve?name=${encodeURIComponent(raw)}`);
-      await api('/api/track/targets', { address: r.address, domain: /\.[a-z]+$/i.test(raw) && !raw.startsWith('0x') ? raw.toLowerCase() : null, name: $('#trkName').value.trim() || (raw.startsWith('0x') ? '' : raw.toLowerCase()), group: $('#trkGroup').value.trim() || '默认' });
+      await api('/api/track/targets', { address: r.address, domain: /\.[a-z]+$/i.test(raw) && !raw.startsWith('0x') ? raw.toLowerCase() : null, name: $('#trkName').value.trim() || (raw.startsWith('0x') ? '' : raw.toLowerCase()), remark: $('#trkName').value.trim(), group: $('#trkGroup').value.trim() || '默认' });
       msg.className = 'trk-msg g'; msg.textContent = `已添加 ${raw} → ${short(r.address, 6, 4)}`; $('#trkAddr').value = ''; $('#trkName').value = ''; loadTrack();
     } catch (err) { msg.className = 'trk-msg r'; msg.textContent = err.message; }
     return;
@@ -2467,10 +2483,12 @@ setTimeout(() => { if (LIVE()) api('/api/copy').then((b) => { TRK.tasks = b.task
 function trdActs(addr) {
   if (!LIVE() || !addr || isMe(addr)) return '';
   const on = TRK.targets.some((x) => x.address === String(addr).toLowerCase());
-  return `<div class="trd-acts"><button class="trd-track ${on ? 'on' : ''}" data-trdtrack="${esc(addr)}">${on ? '✓ 已追踪（点击取消）' : '＋ 追踪'}</button><button class="trd-copy" data-trdcopy="${esc(addr)}">跟单</button></div>`;
+  return `<div class="trd-acts"><button class="trd-track ${on ? 'on' : ''}" data-trdtrack="${esc(addr)}">${on ? '✓ 已追踪（点击取消）' : '＋ 追踪'}</button>${on ? `<button class="trd-remark" data-trdremark="${esc(addr)}" title="编辑备注名">✎ ${esc(trkRemark(addr) || '备注')}</button>` : ''}<button class="trd-copy" data-trdcopy="${esc(addr)}">跟单</button></div>`;
 }
 async function trkEnsure() { if (!TRK.loaded) await loadTrack().catch(() => {}); }
 document.addEventListener('click', async (e) => {
+  const rb = e.target.closest('[data-trdremark]');
+  if (rb) { e.preventDefault(); e.stopPropagation(); const addr = rb.dataset.trdremark; const v = await ui.prompt({ title: '备注名', label: '留空 = 显示域名 / 地址', value: trkRemark(addr) }); if (v === null) return; try { await trkSaveRemark(addr, v); $$('.trd-acts').forEach((x) => { x.outerHTML = trdActs(addr); }); note(String(v).trim() ? '备注已保存' : '已清除备注'); } catch (err) { toast({ status: 'failed', symbol: '备注', reason: err.message }); } return; }
   const tb = e.target.closest('[data-trdtrack]'), cb = e.target.closest('[data-trdcopy]'); if (!tb && !cb) return;
   e.preventDefault(); e.stopPropagation(); await trkEnsure();
   const addr = String((tb || cb).dataset.trdtrack || (tb || cb).dataset.trdcopy).toLowerCase(), dom = NAMES[addr] || null;
@@ -2478,7 +2496,11 @@ document.addEventListener('click', async (e) => {
   try {
     if (tb) {
       if (tracked) { await api('/api/track/targets', { address: addr, remove: true }); note('已取消追踪'); }
-      else { await api('/api/track/targets', { address: addr, domain: dom, name: dom || '' }); note(`已追踪 ${dom || short(addr, 6, 4)}`); }
+      else {
+        const v = await ui.prompt({ title: `追踪 ${dom || short(addr, 6, 4)}`, label: '备注名（可选，留空 = 显示域名 / 地址）', value: '' });
+        if (v === null) return;   // 取消
+        await api('/api/track/targets', { address: addr, domain: dom, name: String(v).trim() || dom || '', remark: String(v).trim() }); note(`已追踪 ${String(v).trim() || dom || short(addr, 6, 4)}`);
+      }
       await loadTrack();
       $$('.trd-acts').forEach((x) => { x.outerHTML = trdActs(addr); });
       return;
@@ -2498,11 +2520,11 @@ function renderTrkPanel() {
   if (document.body.classList.contains('trkp-on') !== TP.open) { document.body.classList.toggle('trkp-on', TP.open); window.dispatchEvent(new Event('resize')); }   // 一栏：主内容右移让出宽度（K 线等跟着重新排版）
   $('#bbTrackN').textContent = TRK.targets.length || '';
   if (!TP.open) return;
-  const rows = TRK.feed.slice(0, 150);
+  const rows = TRK.feed;
   $('#trkpCount').textContent = TRK.targets.length || '';
   $('#trkpList').innerHTML = !TRK.targets.length ? '<div class="trkp-empty">还没有追踪的地址。<br>可以在交易者盈亏抽屉里点「追踪」，或者到追踪页添加 .ai / .bnb 域名、0x 地址。<br><button data-tpgo>去添加</button></div>'
     : !rows.length ? '<div class="trkp-empty">追踪的地址在 Flap / Four / Gang V2 内盘上买卖时，会实时出现在这里。</div>'
-    : rows.map((e) => `<div class="trkp-e"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-who" data-tpwho="${e.target}:${e.token}" title="${e.target}（点击看它在这个币上的盈亏）">${esc(e.targetName || trkName(e.target))}</span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) : K(e.quoteAmt)}<small class="dim"> ${e.bnb ? 'BNB' : esc(e.quote)}</small></span></div>
+    : rows.map((e) => `<div class="trkp-e"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) : K(e.quoteAmt)}<small class="dim"> ${e.bnb ? 'BNB' : esc(e.quote)}</small></span></div>
       <div class="trkp-r2"><span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="dim">MC ${usd(e.mcapUsd)}</span><span class="spacer"></span><span class="dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}</span></div></div>`).join('');
 }
 function setTrkPanel(on) { TP.open = on; try { localStorage.trkPanel = on ? '1' : '0'; } catch { /* ignore */ } if (on && !TRK.loaded) loadTrack().then(renderTrkPanel); renderTrkPanel(); }
@@ -2522,3 +2544,17 @@ $('#trkpDrag')?.addEventListener('mousedown', (e) => {
 });
 setTimeout(() => { if (LIVE() && (TP.open || !TRK.loaded)) loadTrack().then(renderTrkPanel).catch(() => {}); else renderTrkPanel(); }, 2500);
 setInterval(() => { if (TP.open) renderTrkPanel(); }, 15_000);
+
+// 追踪历史往回翻：追踪页和左侧栏滚到底时，按时间加载更早的记录（服务器从 data/track-feed.jsonl 读）
+async function trkMore() {
+  if (TRK.moreBusy || TRK.feedEnd || !TRK.feed.length) return; TRK.moreBusy = true;
+  try {
+    const last = TRK.feed[TRK.feed.length - 1], r = await api(`/api/track/feed?before=${last.ts}&limit=150`), seen = new Set(TRK.feed.map((x) => x.id));
+    for (const x of r.items || []) if (!seen.has(x.id)) TRK.feed.push(x);
+    if (!r.more || !(r.items || []).length) TRK.feedEnd = true;
+    renderTrkPanel(); if (S.view === 'track') renderTrack();
+  } catch { /* 下次滚动再试 */ }
+  TRK.moreBusy = false;
+}
+const trkNearEnd = (el) => el && el.scrollTop + el.clientHeight > el.scrollHeight - 120;
+document.addEventListener('scroll', (e) => { const t = e.target; if (!(t instanceof Element)) return; if ((t.id === 'trkpList' || t.id === 'track') && trkNearEnd(t)) trkMore(); }, true);

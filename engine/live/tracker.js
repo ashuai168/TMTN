@@ -17,6 +17,7 @@ const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, 'utf8')); }
 const writeJson = (f, v) => { try { mkdirSync(new URL('.', f), { recursive: true }); writeFileSync(f, JSON.stringify(v, null, 1)); } catch { /* ignore */ } };
 const append = (f, v) => { try { mkdirSync(new URL('.', f), { recursive: true }); appendFileSync(f, JSON.stringify(v) + '\n'); } catch { /* ignore */ } };
 const lc = (a) => String(a || '').toLowerCase();
+const FEED_DAYS = 30, FEED_MAX = 50_000;   // 追踪历史保留 30 天、最多 5 万条
 const erc20 = new ethers.Interface(['function balanceOf(address) view returns (uint256)']);
 const day = (ts = Date.now()) => new Date(ts).toISOString().slice(0, 10);
 
@@ -37,7 +38,9 @@ export class Tracker extends EventEmitter {
     const k = readJson(TASKS, { tasks: [], paused: false });
     this.tasks = k.tasks || []; this.allPaused = !!k.paused;
     this.feed = []; this.log = []; this.pos = new Map();   // pos：目标地址|代币 → 我们看到的持仓（只用来判断建仓）
-    try { this.feed = readFileSync(FEED, 'utf8').trim().split('\n').slice(-300).map((l) => JSON.parse(l)).reverse(); } catch { /* 第一次 */ }
+    this.compactFeed();   // 历史记录：只保留最近 30 天、最多 5 万条（超出时重写文件），启动时只把最近 500 条放进内存
+    try { this.feed = readFileSync(FEED, 'utf8').trim().split('\n').slice(-500).map((l) => JSON.parse(l)).reverse(); } catch { /* 第一次 */ }
+    this.appended = 0;
     try { this.log = readFileSync(LOG, 'utf8').trim().split('\n').slice(-300).map((l) => JSON.parse(l)).reverse(); } catch { /* 第一次 */ }
   }
 
@@ -48,10 +51,12 @@ export class Tracker extends EventEmitter {
   addTarget({ address, name, remark, group, avatar, domain }) {
     const a = lc(address); if (!/^0x[0-9a-f]{40}$/.test(a)) throw new Error('地址格式不对');
     const cur = this.target(a);
-    const v = { address: a, name: String(name || domain || cur?.name || '').slice(0, 40), domain: domain || cur?.domain || null, remark: String(remark ?? cur?.remark ?? '').slice(0, 80),
+    const v = { address: a, name: String((name !== undefined ? name : cur?.name) || domain || cur?.domain || '').slice(0, 40),   /* 显式传空 = 清掉旧名字 */ domain: domain || cur?.domain || null, remark: String(remark ?? cur?.remark ?? '').slice(0, 80),
       group: group || cur?.group || '默认', avatar: avatar || cur?.avatar || null, addedAt: cur?.addedAt || Date.now(), sound: cur?.sound ?? true };
     if (v.group && !this.groups.includes(v.group)) this.groups.push(v.group);
-    this.targets = [...this.targets.filter((x) => x.address !== a), v]; this.saveTargets(); return v;
+    const i = this.targets.findIndex((x) => x.address === a);   // 改备注等：保持原来的位置
+    if (i >= 0) this.targets[i] = v; else this.targets.push(v);
+    this.saveTargets(); return v;
   }
   removeTarget(address) { this.targets = this.targets.filter((x) => x.address !== lc(address)); this.saveTargets(); }
 
@@ -71,9 +76,26 @@ export class Tracker extends EventEmitter {
       action, side: tr.side, token: lc(tr.address), symbol: t.symbol, image: t.image || null, platform: t.platform, quote: t.quote || 'BNB', quoteAmt: tr.bnb, bnb: tr.bnb * (rate || (t.quote === 'BNB' ? 1 : 0)),
       usd: tr.usd ?? null, tokens, pct, mcapUsd: t.mcapUsd || null, createdAt: t.createdAt || null, tx: tr.tx };
     if (this.feed.some((x) => x.id === ev.id)) return;
-    this.feed.unshift(ev); if (this.feed.length > 500) this.feed.length = 500; append(FEED, ev);
+    this.feed.unshift(ev); if (this.feed.length > 500) this.feed.length = 500; append(FEED, ev); this.older = null;
+    if (++this.appended % 2000 === 0) this.compactFeed();
     this.emit('event', ev);
     for (const task of this.tasks) if (task.target === who) this.decide(task, ev).catch((e) => this.record(task, ev, 'error', `出错：${e.message}`));
+  }
+
+  // 历史记录轮转：超过 30 天或多于 5 万条的旧记录删掉（文件重写一次）
+  compactFeed() {
+    try {
+      const lines = readFileSync(FEED, 'utf8').trim().split('\n').filter(Boolean); const cut = Date.now() - FEED_DAYS * 86400_000;
+      const keep = lines.slice(-FEED_MAX).filter((l) => { try { return JSON.parse(l).ts >= cut; } catch { return false; } });
+      if (keep.length < lines.length) writeFileSync(FEED, keep.join('\n') + (keep.length ? '\n' : ''));
+    } catch { /* 文件还不存在 */ }
+  }
+  // 往回翻：before 之前的 limit 条（新→旧）。第一次翻页时把文件读进内存缓存，有新记录时缓存作废
+  feedPage({ before = Date.now() + 1, limit = 100 } = {}) {
+    if (!this.older) { try { this.older = readFileSync(FEED, 'utf8').trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean).reverse(); } catch { this.older = []; } }
+    const items = []; let i = this.older.findIndex((x) => x.ts < before); if (i < 0) i = this.older.length;
+    for (; i < this.older.length && items.length < limit; i++) items.push(this.older[i]);
+    return { items, more: i < this.older.length, total: this.older.length };
   }
 
   // ---------- 跟单任务 ----------

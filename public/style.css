@@ -1060,3 +1060,19 @@ body.trkp-on main.layout { width: auto; }
   body.trkp-on main.layout, body.trkp-on #pulse, body.trkp-on #hold, body.trkp-on #track { margin-left: 0; }
 }
 body.trkp-on .pulse.trench { grid-template-columns: repeat(3, minmax(240px, 1fr)); }
+
+/* 追踪备注名：名字旁的铅笔，就地编辑 */
+.trk-nm, .trkp-nm { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; }
+.trkp-nm { max-width: 55%; } .trkp-nm .trkp-who { max-width: none; }
+.trk-pen { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 12px; opacity: .55; line-height: 1; } .trk-pen:hover { opacity: 1; color: var(--y); }
+input.trk-ed { height: 22px; width: 160px; padding: 0 6px; border: 1px solid var(--y); background: var(--panel2); color: var(--text); font-size: 12px; }
+.trd-remark { color: var(--text); }
+
+/* 追踪页铺满：左栏 380px，右边动态流 / 跟单表占满剩余宽度 */
+.trk-side { width: 380px; }
+.trk-main, .trk-copy { flex: 1; min-width: 0; }
+.trk-copy .trk-tbl th:nth-child(2), .trk-copy .trk-tbl td:nth-child(2) { width: 34%; white-space: normal; }
+.trk-feed .trk-tbl td:nth-child(5) { width: 30%; }
+.trk-log { max-height: 46vh; }
+@media (max-width: 1100px) { .trk-side { width: 320px; } }
+@media (max-width: 760px) { .trk-body { flex-direction: column; } .trk-side { width: 100%; } }

@@ -114,6 +114,14 @@ app.use((req, res, next) => {
   if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && !(req.path === '/api/order' && WALLET_PEERS.length) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });   // 多钱包时下单按钱包分别处理（未登录的跳过）
   next();
 });
+// 首页：把 app.js / style.css 的版本号换成文件修改时间（每次改动都是新地址，浏览器不会用旧缓存），首页本身不缓存
+app.get(['/', '/index.html'], (req, res) => {
+  try {
+    const pub = path.join(__dirname, 'public'), v = (f) => Math.round(fs.statSync(path.join(pub, f)).mtimeMs);
+    const html = fs.readFileSync(path.join(pub, 'index.html'), 'utf8').replace(/(app\.js|style\.css)\?v=[^"']*/g, (m, f) => `${f}?v=${v(f)}`);
+    res.setHeader('Cache-Control', 'no-store'); res.type('html').send(html);
+  } catch (e) { res.status(500).send(e.message); }
+});
 app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));   // 每次都向服务器确认有没有更新（没变就 304），避免浏览器一直用旧的 app.js / style.css
 
 const state = () => ({
@@ -207,6 +215,7 @@ app.get('/api/track/resolve', async (req, res) => {   // .ai / .bnb 域名 → �
   try { const { resolveDomain } = await import('./engine/live/baw.js'); const d = await resolveDomain(name); if (!d?.address) throw new Error('没有解析到地址'); res.json({ address: String(d.address).toLowerCase(), name }); }
   catch (e) { res.status(400).json({ error: `解析失败：${e.message}` }); }
 });
+app.get('/api/track/feed', (req, res) => { if (!needTracker(res)) return; res.json(tracker.feedPage({ before: Number(req.query.before) || undefined, limit: Math.min(300, Number(req.query.limit) || 100) })); });   // 追踪历史往回翻
 app.post('/api/track/targets', (req, res) => {
   if (!needTracker(res)) return; const b = req.body || {};
   try { if (b.remove) tracker.removeTarget(b.address); else tracker.addTarget(b); res.json(tracker.targetsView()); } catch (e) { res.status(400).json({ error: e.message }); }
