@@ -218,9 +218,10 @@ app.get('/api/preview', async (req, res) => {
 });
 
 // 按代币总量百分比买入：反推需要多少 BNB（多轮报价逼近）
-app.get('/api/cost-for-pct', async (req, res) => {
-  const q = req.query; let pct = Math.min(100, Number(q.pct) || 0);
-  if (!(pct > 0)) return res.json({ bnb: 0 });
+// 买「总量的 X%」需要多少 BNB（按这个钱包自己的持仓上限 / 余额 / 单笔上限压好）。多钱包时每个钱包各自算
+async function costForPct(q) {
+  q = q || {}; let pct = Math.min(100, Number(q.pct) || 0);
+  if (!(pct > 0)) return ({ bnb: 0 });
   // Four Agent 专属币每个钱包最多持有总量 1%，超过的部分买不到，按 1% 算，避免反推出离谱的 BNB
   const tk = market.get?.(q.token); let capped = false; const asked = pct; const notes = [];
   // Four / Gang 都是单钱包最多持有总量 1%
@@ -231,7 +232,7 @@ app.get('/api/cost-for-pct', async (req, res) => {
     try {
       const w = trader.wallet?.(q.wallet); const mine = w ? await trader.tokenBal(w, tk.address) : 0;
       const room = (1e7 - (mine || 0)) * 0.99;
-      if (room <= 1e7 * 0.001) return res.json({ bnb: 0, capReached: true, error: '已达单钱包上限 1%' });
+      if (room <= 1e7 * 0.001) return ({ bnb: 0, capReached: true, error: '已达单钱包上限 1%' });
       if (target > room) { target = room; capped = true; pct = +(room / 1e7).toFixed(3); }
     } catch { /* 读不到持仓就按 1% */ }
   }
@@ -240,7 +241,7 @@ app.get('/api/cost-for-pct', async (req, res) => {
     try {
       const w = trader.wallet?.(q.wallet);
       const room = !w ? 1e7 : (trader.useGangV2(tk) ? Number(await trader.gangV2.room(tk.address, w.address)) / 1e18 : await trader.gangTrade.walletRoom(tk.address, w.address)) * 0.99;
-      if (room <= 1e7 * 0.001) return res.json({ bnb: 0, capReached: true, error: '已达单钱包上限 1%' });
+      if (room <= 1e7 * 0.001) return ({ bnb: 0, capReached: true, error: '已达单钱包上限 1%' });
       if (target > room) { target = room; capped = true; pct = +(room / 1e7).toFixed(3); }
     } catch { /* 读不到额度就按 1% */ }
   }
@@ -253,7 +254,7 @@ app.get('/api/cost-for-pct', async (req, res) => {
       const [cap, mine] = await Promise.all([c.maxSharesPerWallet().catch(() => 0n), w ? c.sharesOf(w.address).catch(() => 0n) : 0n]);
       if (cap > 0n) {
         const room = Number(ethers.formatEther(cap - (mine > cap ? cap : mine))) * 0.99;
-        if (room <= 0) return res.json({ bnb: 0, capReached: true, error: '已达单钱包持仓上限' });
+        if (room <= 0) return ({ bnb: 0, capReached: true, error: '已达单钱包持仓上限' });
         if (target > room) { target = room; capped = true; pct = +(room / 1e7).toFixed(3); }
       }
     } catch { /* 读不到上限就按原目标 */ }
@@ -268,23 +269,32 @@ app.get('/api/cost-for-pct', async (req, res) => {
       if (Math.abs(next - a) / a < 0.002) { a = next; break; }
       a = next;
     }
-    if (!ok) return res.json({ bnb: 0, error: '拿不到报价' });
+    if (!ok) return ({ bnb: 0, error: '拿不到报价' });
     // 下单前一次性把金额压到能成交的范围：持仓上限 → 单笔上限 → 余额（留 0.002 BNB 付 gas），不让后端先失败再重试
     if (capped) notes.push(asked > 1 && pct >= 0.98 ? `${asked}% 超过单钱包上限 1%，已按 1% 买入` : `${asked}% 超过单钱包剩余额度，已按剩余额度（约 ${pct}%）买入`);
     const maxTrade = LIVE ? Number(trader.status?.maxTradeBnb) || 0 : 0;
     if (maxTrade > 0 && a > maxTrade) { a = maxTrade; notes.push(`超过单笔上限 ${maxTrade} BNB，已按 ${maxTrade} BNB 买入`); }
     const w = trader.wallet?.(q.wallet); const bal = Number(w?.bnb) || 0;
     if (LIVE && bal > 0 && a > bal - 0.002) { a = Math.max(0, bal - 0.002); notes.push(`BNB 余额不足，已按余额 ${a.toFixed(4)} BNB 买入`); }
-    if (!(a > 0)) return res.json({ bnb: 0, error: 'BNB 余额不足' });
-    res.json({ bnb: +a.toFixed(6), tokens: target, pct, capped, note: notes.join('；') || null });
-  } catch (e) { res.status(400).json({ error: e.message }); }
-});
+    if (!(a > 0)) return ({ bnb: 0, error: 'BNB 余额不足' });
+    return ({ bnb: +a.toFixed(6), tokens: target, pct, capped, note: notes.join('；') || null });
+  } catch (e) { return { bnb: 0, error: e.message }; }
+}
+app.get('/api/cost-for-pct', async (req, res) => res.json(await costForPct(req.query)));
 
 app.post('/api/order', async (req, res) => {
-  const { wallets = ['big'], token, side, amount, slippage, via, clientTs } = req.body;
+  const { wallets = ['big'], token, side, amount, slippage, via, clientTs, pctSupply } = req.body;   // pctSupply：买总量的 X%（每个钱包各买 X%，各自按自己的报价算 BNB）
   try {
     if (LIVE && token && !market.get(token)) await market.lookup(token).catch(() => null);   // 本后端还没收录这个币（多钱包时第二个后端可能会这样）
-    const local = () => Promise.all(wallets.map((w) => trader.execute({ walletId: w, token, side, amount, slippage, source: '手动', via: via === 'quick' ? 'quick' : null, clientTs: Number(clientTs) || null })));
+    const local = () => Promise.all(wallets.map(async (w) => {
+      let amt = amount;
+      if (side === 'buy' && Number(pctSupply) > 0) {   // 每个钱包自己报价：买到总量的 X% 要多少 BNB
+        const c = await costForPct({ wallet: w, token, pct: Number(pctSupply), slippage });
+        if (!(c.bnb > 0)) { const o = { id: `pct-${Date.now()}`, ts: Date.now(), wallet: WALLET_LABEL, token, symbol: market.get(token)?.symbol || '', side, amount: 0, status: 'failed', reason: c.capReached ? c.error : `买 ${pctSupply}% 报价失败：${c.error || '拿不到报价'}` }; broadcast({ type: 'order', data: o }); return o; }
+        amt = c.bnb;
+      }
+      return trader.execute({ walletId: w, token, side, amount: amt, slippage, source: '手动', via: via === 'quick' ? 'quick' : null, clientTs: Number(clientTs) || null });
+    }));
     if (!LIVE || !WALLET_PEERS.length) return res.json(await local());
     // 多钱包：所有「参与下单」的钱包同时执行（买入 = 每个钱包各买 amount BNB；卖出 = 每个钱包卖自己持仓的 amount%）。未登录 / 连不上的跳过，其他照常
     const t = market.get(token), sym = t?.symbol || '';
@@ -293,7 +303,7 @@ app.post('/api/order', async (req, res) => {
     if (walletOn(WALLET_SLOT)) jobs.push(trader.status?.auth?.state === 'ok' ? local().then((r) => r.map((o) => ({ ...o, walletSlot: WALLET_SLOT }))) : Promise.resolve(skip(WALLET_SLOT, WALLET_LABEL, '币安钱包未登录')));
     for (const p of WALLET_PEERS) {
       if (!walletOn(p.slot)) continue; const label = p.label || `钱包 ${p.slot}`;
-      jobs.push(peerFetch(p, '/api/order', { wallets: ['baw'], token, side, amount, slippage, via, clientTs }, 200_000)
+      jobs.push(peerFetch(p, '/api/order', { wallets: ['baw'], token, side, amount, slippage, via, clientTs, pctSupply }, 200_000)
         .then((r) => (r || []).map((o) => { const x = { ...o, id: `w${p.slot}-${o.id}`, wallet: label, walletSlot: p.slot }; broadcast({ type: 'order', data: x }); return x; }))
         .catch((e) => skip(p.slot, label, e.status === 401 ? '币安钱包未登录' : `后端连不上（${e.message}）`)));
     }

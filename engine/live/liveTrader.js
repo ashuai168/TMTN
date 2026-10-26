@@ -38,7 +38,7 @@ export class LiveTrader extends EventEmitter {
       autoSendGangMigrated: !!AUTO_TRANSFER_TO && loadSaved().autoSendGangMigrated === true,
       qbPresets: loadSaved().qbPresets || null,
       sellToBnb: loadSaved().sellToBnb !== false,
-      preApproveCap: loadSaved().preApproveCap !== false };   // 预先授权（较大固定额度，用户可在页面关闭）；关掉 = 只授权本次数量   // 卖出后自动把报价币（BNCB / GANG / 币股…）换回 BNB，默认开，可在交易设置里关   // 一键买卖面板的预设金额 / 比例（页面上编辑，存 live-settings.json）   // Gang 发射（毕业）后自动转出，同样只能本人打开   // Four 发射后自动转出（同样只能本人在页面打开）
+      preApproveCap: loadSaved().preApproveCap !== false, walletOn: loadSaved().walletOn || {} };   /* 多钱包「参与下单」开关，重启后保留 */   // 预先授权（较大固定额度，用户可在页面关闭）；关掉 = 只授权本次数量   // 卖出后自动把报价币（BNCB / GANG / 币股…）换回 BNB，默认开，可在交易设置里关   // 一键买卖面板的预设金额 / 比例（页面上编辑，存 live-settings.json）   // Gang 发射（毕业）后自动转出，同样只能本人打开   // Four 发射后自动转出（同样只能本人在页面打开）
     this.claimable = []; this.claimRetry = new Map(); this.claiming = new Set(); this.inflight = new Set();
     this.preapproving = new Set();
     this.on('order', (o) => { try { latency.record(o, { gasLevel: this.settings.gas, rpc: this.market.provider?._getConnection?.().url || null }); } catch {} });

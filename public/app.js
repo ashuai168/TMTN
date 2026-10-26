@@ -370,6 +370,15 @@ function renderTop() {
   $('#blockNo').textContent = '#' + S.block.toLocaleString('en-US');
   $('#bnbPx').textContent = 'BNB $' + S.bnbUsd.toFixed(2);
   const w = wallet(S.activeWallet);
+  // 多钱包：顶栏只放一个紧凑的胶囊 —— 叠在一起的小头像 + 主钱包 .ai 名（+N）+ 参与下单钱包的 BNB 合计 + 状态点；地址都放在下拉菜单里
+  const sel = $('#walletSel'); sel.classList.toggle('mw', MW());
+  if (MW()) {
+    let box = $('#wsMw'); if (!box) { box = document.createElement('span'); box.id = 'wsMw'; box.className = 'ws-mw'; sel.insertBefore(box, sel.querySelector('.caret')); }
+    const all = S.walletsInfo, on = onWallets(), ok = on.filter((x) => x.auth === 'ok'), first = on[0] || all[0], tot = on.reduce((a, x) => a + (x.bnb || 0), 0);
+    box.innerHTML = `<span class="ws-stack">${(on.length ? on : [first]).map((x) => `<i class="ws-av" style="background:${wsColor(x.slot)}"></i>`).join('')}</span><b class="ws-name">${esc(first?.agentId || first?.label || '钱包')}</b>${on.length > 1 ? `<span class="ws-more">+${on.length - 1}</span>` : ''}<span class="mono ws-bal">${tot.toFixed(tot >= 10 ? 2 : 3)} BNB</span><i class="dot ${ok.length === on.length && on.length ? 'g' : ok.length ? 'y' : 'r'}"></i>`;
+    sel.title = all.map((x) => `${x.label} ${x.agentId || ''}：${x.auth === 'ok' ? '已登录' : '未登录'}，${x.on ? '参与下单' : '不参与'}，${x.bnb != null ? x.bnb.toFixed(4) + ' BNB' : '—'}`).join('\n');
+    return;
+  }
   if (!w.id && LIVE()) { $('#wsLabel').textContent = 'baw'; $('#wsAddr').textContent = '未连接'; $('#wsBal').textContent = S.baw?.error ? '点此查看' : ''; }
   if (w.id) {
     $('#wsLabel').textContent = w.label; $('#wsAvatar').style.background = w.color;
@@ -377,12 +386,17 @@ function renderTop() {
   }
 }
 
+const wsColor = (slot) => ['linear-gradient(135deg,#f0b90b,#3fb950)', 'linear-gradient(135deg,#a855f7,#ec4899)', 'linear-gradient(135deg,#38bdf8,#6366f1)', 'linear-gradient(135deg,#f97316,#ef4444)'][(slot - 1) % 4];
 function renderWalletMenu() {
   if (MW()) {   // 多钱包：每个钱包一行，「参与下单」开关 + 登录状态 + BNB；没登录的显示登录命令
-    $('#walletMenu').innerHTML = S.walletsInfo.map((w) => `<div class="wi mw-row"><label class="tgl" title="参与下单：开着的钱包每次下单都会一起执行"><input type="checkbox" data-mwon="${w.slot}" ${w.on ? 'checked' : ''}/><i></i></label>
-      <b>${esc(w.label)}</b><span class="mono muted">${w.address ? short(w.address, 6, 4) : '—'}</span>${w.agentId ? `<span class="handle mw-ai">${esc(w.agentId)}</span>` : ''}<span class="spacer"></span><span class="mono">${w.bnb != null ? w.bnb.toFixed(4) + ' BNB' : '—'}</span>
-      <span class="${w.auth === 'ok' ? 'g' : w.auth === 'checking' ? 'y' : 'r'}">${w.auth === 'ok' ? '已登录' : w.auth === 'checking' ? '检查中' : w.auth === 'offline' ? '后端未启动' : '未登录'}</span></div>
-      ${w.auth !== 'ok' && w.auth !== 'checking' ? `<div class="note mw-cmd">${w.auth === 'offline' ? `这个钱包的后端（${esc(w.error || '')}）没有运行` : '登录：在终端运行'} <code>${esc(w.signin)}</code> <button class="ui-copy" data-agcopy="${esc(w.signin)}">复制</button></div>` : ''}`).join('')
+    $('#walletMenu').innerHTML = S.walletsInfo.map((w) => `<div class="mw-row ${w.on ? '' : 'off'}">
+      <i class="ws-av big" style="background:${wsColor(w.slot)}"></i>
+      <div class="mw-id"><b>${esc(w.agentId || w.label)}</b><span class="mono muted">${esc(w.label)} · ${w.address ? short(w.address, 6, 4) : '—'}${w.address ? ` <button class="mw-copy" data-agcopy="${esc(w.address)}" title="复制地址">⧉</button>` : ''}</span></div>
+      <span class="mono mw-bal">${w.bnb != null ? w.bnb.toFixed(4) : '—'}<small> BNB</small></span>
+      <span class="mw-st ${w.auth === 'ok' ? 'g' : w.auth === 'checking' ? 'y' : 'r'}"><i class="dot ${w.auth === 'ok' ? 'g' : w.auth === 'checking' ? 'y' : 'r'}"></i>${w.auth === 'ok' ? '已登录' : w.auth === 'checking' ? '检查中' : w.auth === 'offline' ? '后端未启动' : w.auth === 'wrong_account' ? '账号不对' : '未登录'}</span>
+      <label class="tgl mw-tg" title="参与下单"><input type="checkbox" data-mwon="${w.slot}" ${w.on ? 'checked' : ''}/><i></i></label></div>
+      ${w.auth !== 'ok' && w.auth !== 'checking' ? `<div class="note mw-cmd">登录：<code>${esc(w.signin)}</code> <button class="ui-copy" data-agcopy="${esc(w.signin)}">复制</button></div>` : ''}`).join('')
+      + `<div class="mw-head-note">右侧开关 =「参与下单」</div>`
       + `<div class="note" style="padding:6px 8px">开了「参与下单」的钱包同时下单：买入每个钱包各花输入的 BNB；卖出每个钱包卖自己持仓的同样比例。没登录的钱包自动跳过。</div>`;
     return;
   }
@@ -819,12 +833,14 @@ async function submitOrder({ token = S.selected, side = S.side, wallets = [...S.
     if (!S.pctBnb && c.capReached) return note(`${t.symbol}：${c.error}，没有下单`, 'info');
     if (c.note) note(`${t.symbol}：${c.note}`, 'info');
   }
+  // 多钱包 + 按总量 % 买：每个钱包各买 X%，由各自后端报价算 BNB
+  const pctMW = side === 'buy' && S.amtMode === 'pct' && amountFor === orderAmount && MW() ? parseFloat($('#amount').value) || 0 : 0;
   const items = wallets.map((w) => ({ w, amount: amountFor(w) })).filter((x) => x.amount > 0);
   if (!items.length) return toast({ status: 'failed', reason: side === 'buy' ? '请输入买入金额' : '请输入卖出比例', symbol: t.symbol });
   const go = async () => {
     const btn = $('#submit'); btn.classList.add('busy');
     topPop({ status: 'pending', side, symbol: t.symbol, amountIn: side === 'buy' ? items[0].amount : items[0].amount });
-    try { await Promise.all(items.map((x) => api('/api/order', { wallets: [x.w], token, side, amount: x.amount, slippage: S.slippage }))); }
+    try { await Promise.all(items.map((x) => api('/api/order', { wallets: [x.w], token, side, amount: x.amount, slippage: S.slippage, ...(pctMW > 0 ? { pctSupply: pctMW } : {}) }))); }
     catch (e) { toast({ status: 'failed', reason: e.message, symbol: t.symbol }); topPop({ status: 'failed', side, reason: e.message, symbol: t.symbol }); }
     btn.classList.remove('busy');
   };
@@ -1041,6 +1057,15 @@ async function pulseBuy1(token) {
   const t = S.tokens.get(token); if (!t || pBusy.has(token)) return;
   const ws = [...S.selWallets]; if (!ws.length) return topPop({ status: 'failed', side: 'buy', symbol: t.symbol, reason: '没有选钱包' });
   pBusy.add(token);
+  if (MW()) {   // 多钱包：「买 X%」= 每个钱包各买总量的 X%，每个钱包自己报价算 BNB（持仓上限、余额不足的钱包会单独提示并跳过）
+    try {
+      const pct = qPct(t); topPop({ status: 'pending', side: 'buy', symbol: t.symbol });
+      const r = [].concat(await api('/api/order', { wallets: ws, token: t.address, side: 'buy', amount: 0, pctSupply: pct, slippage: S.slippage, via: 'quick' }));
+      if (r.length && r.every((o) => o?.status === 'failed')) topPop({ status: 'failed', side: 'buy', symbol: t.symbol, reason: r.map((o) => o.reason).filter(Boolean).join('；') });
+    } catch (e) { topPop({ status: 'failed', side: 'buy', symbol: t.symbol, reason: e.message }); }
+    finally { pBusy.delete(token); }
+    return;
+  }
   try {
     const pcts = qPct(t) === 2 ? [2, 1] : [1];
     for (let n = 0; n < pcts.length; n++) {
@@ -1904,7 +1929,14 @@ const tcPaused = new Set();
 // 卡片下单状态（点击后立刻显示，几秒后清掉）：busy 下单中 / ok 已提交 / pend 待确认 / err 失败
 const tcState = new Map();
 const TC_ST = { busy: '<i class="spin"></i>下单中…', ok: '✓ 已提交', pend: '… 待确认', err: '✗ 失败' };
-const tcBuyLabel = (t, k) => `⚡ ${P(k).amt > 0 ? P(k).amt + ' BNB' : `买 ${qPct(t)}%`}`;                 // 鼠标停在某列里时暂停这一列的更新
+const tcBuyLabel = (t, k) => `⚡ ${P(k).amt > 0 ? P(k).amt + ' BNB' : `买 ${qPct(t)}%`}`;
+// 快捷买入的悬停说明：多钱包时写明「每个钱包」买多少、合计大约多少 BNB（按现价估算，没算价格冲击）
+function tcBuyTip(t, k) {
+  const n = MW() ? onWallets().filter((w) => w.auth === 'ok').length : 1, amt = P(k).amt;
+  if (amt > 0) return n > 1 ? `每个钱包 ${amt} BNB · ${n} 个钱包 = ${+(amt * n).toFixed(6)} BNB 合计` : `买入 ${amt} BNB`;
+  const pct = qPct(t), per = t?.priceUsd && S.bnbUsd ? (1e9 * pct / 100) * t.priceUsd / S.bnbUsd : null;
+  return n > 1 ? `每个钱包买总量的 ${pct}% · ${n} 个钱包${per ? ` ≈ ${(per * n).toFixed(4)} BNB 合计（每个约 ${per.toFixed(4)}，按现价估算）` : ''}` : `买总量的 ${pct}%${per ? `（约 ${per.toFixed(4)} BNB）` : ''}`;
+}                 // 鼠标停在某列里时暂停这一列的更新
 const tcSeen = { new: new Set(), soon: new Set(), dex: new Set() };
 const tcKnown = new Set(); let tcPrimed = false; const tcSoundAt = {};
 // 列提示音单独控制（只看这一列的开关，不受顶栏🔊影响）
@@ -2009,7 +2041,7 @@ function tcCard(t, k) {
       <div class="tc-who">${fb ? `<span class="g">👑</span> 首买 ${isMe(t.firstBuyer) ? `<b class="me">${esc(fb)}</b><i class="me-tag">我</i>` : esc(fb)}` : ''}${hp ? `<span class="y">持有 ${K(hp.amount)}</span>` : ''}</div>
     </div>
     ${gangOnly ? `<div class="tc-r off" title="Gang V2 报价币盘暂不支持下单"><div class="tc-mc"><span>MC</span> <b>${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</b></div><span class="tc-buy">仅行情</span></div>`
-      : `<div class="tc-r buyable ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="点这里买入"><div class="tc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算的市值' : '市值'}"><span>MC</span> <b class="${curve ? '' : 'cy'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</b></div>
+      : `<div class="tc-r buyable ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="${esc(tcBuyTip(t, k))}"><div class="tc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算的市值' : '市值'}"><span>MC</span> <b class="${curve ? '' : 'cy'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</b></div>
         <span class="tc-buy">${TC_ST[st] || tcBuyLabel(t, k)}</span></div>`}</div>`;
 }
 const amtFmt = (v) => amt(v);
@@ -2027,7 +2059,7 @@ function tlCard(t) {
         <button class="tlc-ic tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tlc-ic tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button></div>
       <div class="tlc-r2">${taxChip(t, 'chip')}<i class="chip q">${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent</i>' : ''}<span class="g">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span>1h ${chgTxt(t.chg.h1)}</span>` : ''}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tlc-r3"><div class="tlc-bar ${curve ? '' : 'dex'}"><i style="width:${curve ? prog : 100}%"></i></div><span class="tlc-rt">${route}</span>
-        <span class="tlc-buy ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="快捷买入（金额在战壕对应列设置）">${TC_ST[st] || '⚡' + tcBuyLabel(t, k).replace(/^[⚡\s]*/, '')}</span></div>
+        <span class="tlc-buy ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="${esc(tcBuyTip(t, k))}（金额在战壕对应列设置）">${TC_ST[st] || '⚡' + tcBuyLabel(t, k).replace(/^[⚡\s]*/, '')}</span></div>
     </div></div>`;
 }
 
