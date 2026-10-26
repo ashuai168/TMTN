@@ -149,8 +149,8 @@ function onMsg({ type, data, full }) {
       S.flow.unshift(data); if (S.flow.length > 150) S.flow.length = 150;
       if (S.bottomTab === 'flow') scheduleBottom();
       break;
-    case 'track': { if (!TRK.feed.some((x) => x.id === data.id)) { TRK.feed.unshift(data); if (TRK.feed.length > 500) TRK.feed.length = 500; if (TRK.sound && trkPass(data)) beep(data.side === 'buy' ? 1000 : 520, 0.06); if (S.view === 'track') renderTrack(); } break; }
-    case 'trackTargets': { TRK.targets = data.targets || []; TRK.groups = data.groups || TRK.groups; if (S.view === 'track') renderTrack(); break; }
+    case 'track': { if (!TRK.feed.some((x) => x.id === data.id)) { TRK.feed.unshift(data); if (TRK.feed.length > 500) TRK.feed.length = 500; if (TRK.sound && trkPass(data)) beep(data.side === 'buy' ? 1000 : 520, 0.06); if (S.view === 'track') renderTrack(); renderTrkPanel(); } break; }
+    case 'trackTargets': { TRK.targets = data.targets || []; TRK.groups = data.groups || TRK.groups; if (S.view === 'track') renderTrack(); renderTrkPanel(); break; }
     case 'copyTasks': { TRK.tasks = data.tasks || []; TRK.paused = !!data.paused; renderTrkKill(); if (S.view === 'track') renderTrack(); break; }
     case 'copyLog': { TRK.log.unshift(data); if (TRK.log.length > 300) TRK.log.length = 300; if (S.view === 'track' && TRK.tab === 'copy') renderTrack(); break; }
     case 'wallets': { S.walletsInfo = data; renderAuth(); scheduleRender(); break; }
@@ -2487,3 +2487,38 @@ document.addEventListener('click', async (e) => {
     copyDialog(null, addr);
   } catch (err) { toast({ status: 'failed', symbol: '追踪', reason: err.message }); }
 }, true);
+
+/* ---------- 左侧「钱包追踪」面板 + 底部工具栏 ---------- */
+// 复用追踪页的数据（/api/track + 推送），不额外查链。开关状态和宽度记在浏览器里
+const TP = { open: false, w: 340 };
+try { TP.open = localStorage.trkPanel === '1'; TP.w = Math.min(640, Math.max(260, Number(localStorage.trkPanelW) || 340)); } catch { /* ignore */ }
+function renderTrkPanel() {
+  const panel = $('#trkPanel'), btn = $('#bbTrack'); if (!panel) return;
+  panel.classList.toggle('hidden', !TP.open); btn?.classList.toggle('on', TP.open); document.documentElement.style.setProperty('--trkpW', TP.w + 'px');
+  $('#bbTrackN').textContent = TRK.targets.length || '';
+  if (!TP.open) return;
+  const rows = TRK.feed.slice(0, 150);
+  $('#trkpCount').textContent = TRK.targets.length ? `${TRK.targets.length} 个地址` : '';
+  $('#trkpList').innerHTML = !TRK.targets.length ? '<div class="trkp-empty">还没有追踪的地址。<br>可以在交易者盈亏抽屉里点「追踪」，或者到追踪页添加 .ai / .bnb 域名、0x 地址。<br><button data-tpgo>去添加</button></div>'
+    : !rows.length ? '<div class="trkp-empty">追踪的地址在 Flap / Four / Gang V2 内盘上买卖时，会实时出现在这里。</div>'
+    : rows.map((e) => `<div class="trkp-e"><div class="trkp-r1"><span class="trkp-who" data-tpwho="${e.target}:${e.token}" title="${e.target}（点击看它在这个币上的盈亏）">${esc(e.targetName || trkName(e.target))}</span><span class="spacer"></span><span class="dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}前</span></div>
+      <div class="trkp-r2"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) + ' BNB' : (K(e.quoteAmt) + ' ' + esc(e.quote))}</span>
+        <span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="spacer"></span><span class="dim">${usd(e.mcapUsd)}</span></div></div>`).join('');
+}
+function setTrkPanel(on) { TP.open = on; try { localStorage.trkPanel = on ? '1' : '0'; } catch { /* ignore */ } if (on && !TRK.loaded) loadTrack().then(renderTrkPanel); renderTrkPanel(); }
+$('#bbTrack')?.addEventListener('click', () => setTrkPanel(!TP.open));
+$('#trkpClose')?.addEventListener('click', () => setTrkPanel(false));
+$('#trkpGo')?.addEventListener('click', () => { TRK.tab = 'feed'; setView('track'); });
+$('#trkPanel')?.addEventListener('click', (e) => {
+  if (e.target.closest('[data-tpgo]')) { TRK.tab = 'feed'; return setView('track'); }
+  const w = e.target.closest('[data-tpwho]'); if (w) { const [who, tok] = w.dataset.tpwho.split(':'); if (S.tokens.has(tok)) { if (S.view !== 'trade') setView('trade'); select(tok); setTimeout(() => openTrader(who), 400); } else window.open(`https://gmgn.ai/bsc/address/${who}`, '_blank', 'noopener'); return; }
+  const t = e.target.closest('[data-a]'); if (t) { e.preventDefault(); e.stopPropagation(); if (S.tokens.has(t.dataset.a)) { if (S.view !== 'trade') setView('trade'); select(t.dataset.a); } else window.open(`https://gmgn.ai/bsc/token/${t.dataset.a}`, '_blank', 'noopener'); }
+}, true);
+$('#trkpDrag')?.addEventListener('mousedown', (e) => {
+  e.preventDefault(); const x0 = e.clientX, w0 = TP.w;
+  const mv = (ev) => { TP.w = Math.min(640, Math.max(260, w0 + ev.clientX - x0)); document.documentElement.style.setProperty('--trkpW', TP.w + 'px'); };
+  const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); try { localStorage.trkPanelW = TP.w; } catch { /* ignore */ } };
+  document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
+});
+setTimeout(() => { if (LIVE() && (TP.open || !TRK.loaded)) loadTrack().then(renderTrkPanel).catch(() => {}); else renderTrkPanel(); }, 2500);
+setInterval(() => { if (TP.open) renderTrkPanel(); }, 15_000);

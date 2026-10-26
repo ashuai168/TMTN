@@ -1021,3 +1021,25 @@ body.fav-on .favbar { display: flex; }
 .trd-track { color: var(--y); } .trd-track.on { color: var(--g); border-color: rgba(30,203,129,.45); }
 .trd-copy { background: var(--y); border-color: var(--y) !important; color: #1a1400; }
 .trd-acts button:hover { filter: brightness(1.12); }
+
+/* 底部工具栏（参考 GMGN）：占用 26px，页面各区域的高度通过 --favH 一起扣掉 */
+body { --favH: 26px; } body.fav-on { --favH: 60px; }
+.botbar { position: fixed; left: 0; right: 0; bottom: 0; height: 26px; z-index: 40; display: flex; align-items: center; gap: 6px; padding: 0 8px; background: var(--panel); border-top: 1px solid var(--line2); font-size: 12px; }
+.bb-btn { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 10px; border: 1px solid var(--line2); color: var(--muted); transition: color .15s, border-color .15s, background .15s; }
+.bb-btn:hover { color: var(--text); border-color: var(--muted); } .bb-btn:active { transform: scale(.97); }
+.bb-btn.on { color: var(--y); border-color: var(--y); background: rgba(240, 185, 11, .1); }
+.bb-ic { font-size: 11px; } .bb-n { font-style: normal; font-size: 10px; padding: 0 4px; border-radius: 6px; background: var(--y); color: #1a1400; } .bb-n:empty { display: none; }
+.bb-note { font-size: 11px; }
+/* 左侧钱包追踪面板：覆盖在内容上（不改动下面的布局），宽度可拖 */
+.trk-panel { position: fixed; left: 0; top: calc(46px + var(--favH) - 26px); bottom: 26px; width: var(--trkpW, 340px); z-index: 39; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line2); box-shadow: 8px 0 24px rgba(0, 0, 0, .45); }
+.trkp-h { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); } .trkp-h b { font-size: 14px; }
+.trkp-x { border: 1px solid var(--line2); color: var(--muted); padding: 0 8px; height: 24px; } .trkp-x:hover { color: var(--text); }
+.trkp-list { flex: 1; overflow: auto; }
+.trkp-e { padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; } .trkp-e:hover { background: rgba(255, 255, 255, .03); }
+.trkp-r1, .trkp-r2 { display: flex; align-items: center; gap: 6px; } .trkp-r2 { margin-top: 4px; }
+.trkp-who { color: var(--y); font-weight: 600; cursor: pointer; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .trkp-who:hover { text-decoration: underline; }
+.trkp-act { font-weight: 700; padding: 0 5px; border: 1px solid currentColor; font-size: 11px; } .trkp-amt { font-weight: 600; }
+.trkp-tok { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; } .trkp-tok:hover b { text-decoration: underline; }
+.trkp-empty { padding: 24px 14px; color: var(--muted); font-size: 13px; line-height: 1.7; } .trkp-empty button { margin-top: 8px; padding: 4px 12px; background: var(--y); color: #1a1400; font-weight: 600; }
+.trkp-drag { position: absolute; top: 0; right: -4px; width: 8px; height: 100%; cursor: ew-resize; }
+@media (max-width: 760px) { .trk-panel { width: 100vw; } .trkp-drag { display: none; } }

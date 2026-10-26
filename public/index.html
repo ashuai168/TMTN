@@ -130,6 +130,9 @@
     <div class="card" id="tokenInfo"></div>
   </aside>
 </main>
+<!-- 左侧「钱包追踪」面板（覆盖在页面左边，可拖宽度、可关闭）+ 底部工具栏 -->
+<aside class="trk-panel hidden" id="trkPanel"><div class="trkp-h"><b>钱包追踪</b><span class="muted" id="trkpCount"></span><span class="spacer"></span><button class="trkp-x" id="trkpGo" title="打开追踪页（管理地址、跟单）">管理</button><button class="trkp-x" id="trkpClose" title="关闭面板">×</button></div><div class="trkp-list" id="trkpList"></div><i class="trkp-drag" id="trkpDrag" title="拖动调整宽度"></i></aside>
+<footer class="botbar" id="botbar"><button class="bb-btn" id="bbTrack" title="打开 / 关闭左侧的钱包追踪面板"><span class="bb-ic">👁</span>钱包追踪<i class="bb-n" id="bbTrackN"></i></button><span class="spacer"></span><span class="muted bb-note">TMTN</span></footer>
 <section class="track hidden" id="track">
   <div class="trk-top"><div class="trk-tabs"><button data-trtab="feed" class="on">追踪动态</button><button data-trtab="copy">跟单</button></div><span class="spacer"></span>
     <span class="muted trk-note">只追踪 Flap / Four / Gang V2 内盘成交（链上订阅）</span><button class="trk-kill" id="trkKill" title="一键暂停所有跟单任务">全部暂停</button></div>
