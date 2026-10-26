@@ -11,6 +11,7 @@ import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs';
 import { ethers } from 'ethers';
 import { dataFile } from './config.js';
+import { fetchTraderHistory, labelActions } from './trackBackfill.js';
 
 const TARGETS = dataFile('track-targets.json'), TASKS = dataFile('copy-tasks.json'), FEED = dataFile('track-feed.jsonl'), LOG = dataFile('copy-log.jsonl');
 const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return d; } };
@@ -55,8 +56,53 @@ export class Tracker extends EventEmitter {
       group: group || cur?.group || '默认', avatar: avatar || cur?.avatar || null, addedAt: cur?.addedAt || Date.now(), sound: cur?.sound ?? true };
     if (v.group && !this.groups.includes(v.group)) this.groups.push(v.group);
     const i = this.targets.findIndex((x) => x.address === a);   // 改备注等：保持原来的位置
-    if (i >= 0) this.targets[i] = v; else this.targets.push(v);
-    this.saveTargets(); return v;
+    if (i >= 0) this.targets[i] = { ...v, backfilledAt: cur?.backfilledAt }; else this.targets.push(v);
+    this.saveTargets();
+    if (i < 0) this.backfill([a]).catch((e) => this.logFn(`[追踪] 历史回补失败：${e.message}`));   // 新加的地址：补最近 24 小时
+    return v;
+  }
+  // ---------- 历史回补（只写历史，不响提示音、不触发跟单）----------
+  // 新加的追踪地址，以及启动时还没回补过的地址，从链上补最近 24 小时的内盘买卖
+  backfillPending() { const list = this.targets.filter((t) => !t.backfilledAt).map((t) => t.address); if (list.length) this.backfill(list).catch((e) => this.logFn(`[追踪] 历史回补失败：${e.message}`)); }
+  async backfill(addresses, { hours = 24 } = {}) {
+    if (this.backfilling) { this.backfillQueue = [...new Set([...(this.backfillQueue || []), ...addresses])]; return; }
+    this.backfilling = true;
+    try {
+      const { trades, head } = await fetchTraderHistory(this.provider, addresses, { hours });
+      // 区块 → 时间：取两个区块的时间戳线性估算（只多 2 次查询）
+      const hb = await this.provider.getBlock(head), lo = trades.length ? Math.max(0, trades[0].block) : head, lb = lo < head ? await this.provider.getBlock(lo) : hb;
+      const msPer = lo < head ? ((Number(hb.timestamp) - Number(lb.timestamp)) * 1000) / (head - lo) : 450;
+      const tsOf = (n) => Number(hb.timestamp) * 1000 - (head - n) * msPer;
+      // 卖出前窗口内没看到买入的，用当前余额判断是不是已经清仓（最多查 150 个）
+      const bal = new Map(); const need = [...new Set(trades.filter((t) => t.side === 'sell').map((t) => `${t.trader}|${t.token}`))].slice(0, 150);
+      for (const k of need) { const [w, tok] = k.split('|'); try { bal.set(k, Number(ethers.formatEther(erc20.decodeFunctionResult('balanceOf', await this.provider.call({ to: tok, data: erc20.encodeFunctionData('balanceOf', [w]) }))[0]))); } catch { /* 不知道就算减仓 */ } }
+      const have = new Set(); try { for (const l of readFileSync(FEED, 'utf8').split('\n')) { if (!l) continue; try { have.add(JSON.parse(l).id); } catch { /* 坏行 */ } } } catch { /* 没有文件 */ }
+      const sym = new Map(); const evs = [];
+      for (const tr of labelActions(trades, bal)) {
+        const id = `${tr.tx}:${tr.side}:${tr.trader}`; if (have.has(id)) continue; have.add(id);
+        const tg = this.target(tr.trader); if (!tg) continue;
+        const t = this.market.get(tr.token);
+        let symbol = t?.symbol; if (!symbol) { if (!sym.has(tr.token)) { try { sym.set(tr.token, await new ethers.Contract(tr.token, ['function symbol() view returns (string)'], this.provider).symbol()); } catch { sym.set(tr.token, tr.token.slice(0, 6)); } } symbol = sym.get(tr.token); }
+        const quote = t?.quote || (tr.platform === 'gang' ? '报价币' : 'BNB'), rate = t ? (this.market.quoteUsd?.(t) || 0) / (this.market.bnbUsd || 1) : (quote === 'BNB' ? 1 : 0);
+        evs.push({ id, ts: Math.round(tsOf(tr.block)), seenAt: Date.now(), target: tr.trader, targetName: tg.name || tg.domain || null, group: tg.group, action: tr.action, side: tr.side,
+          token: tr.token, symbol, image: t?.image || null, platform: t?.platform || tr.platform, quote, quoteAmt: tr.bnb, bnb: tr.bnb * (rate || (quote === 'BNB' ? 1 : 0)), usd: null, tokens: tr.tokens, pct: tr.pct,
+          mcapUsd: t?.mcapUsd || null, createdAt: t?.createdAt || null, tx: tr.tx, backfill: true });
+      }
+      if (evs.length) {
+        // 合并进历史文件，按时间排序重写；内存里的最近 500 条也重建
+        let rows = []; try { rows = readFileSync(FEED, 'utf8').trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean); } catch { /* 第一次 */ }
+        rows = rows.concat(evs).sort((a, b) => a.ts - b.ts);
+        mkdirSync(new URL('.', FEED), { recursive: true }); writeFileSync(FEED, rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
+        this.feed = rows.slice(-500).reverse(); this.older = null;
+      }
+      const now = Date.now(); for (const a of addresses) { const t = this.target(a); if (t) t.backfilledAt = now; } this.saveTargets();
+      this.logFn(`[追踪] 历史回补 ${addresses.length} 个地址：链上 ${trades.length} 笔，新增 ${evs.length} 条`);
+      this.emit('reload');   // 页面重新拉一次追踪数据（不逐条推送，所以不响提示音；也不进 decide，不会跟单）
+      return { trades: trades.length, added: evs.length };
+    } finally {
+      this.backfilling = false;
+      const q = this.backfillQueue; this.backfillQueue = null; if (q?.length) this.backfill(q).catch(() => {});
+    }
   }
   removeTarget(address) { this.targets = this.targets.filter((x) => x.address !== lc(address)); this.saveTargets(); }
 

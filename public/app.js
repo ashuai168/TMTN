@@ -152,6 +152,7 @@ function onMsg({ type, data, full }) {
       S.flow.unshift(data); if (S.flow.length > 150) S.flow.length = 150;
       if (S.bottomTab === 'flow') scheduleBottom();
       break;
+    case 'trackReload': { if (TRK.loaded || TP.open) loadTrack().then(renderTrkPanel); break; }
     case 'track': { if (!TRK.feed.some((x) => x.id === data.id)) { TRK.feed.unshift(data); if (TRK.feed.length > 500) TRK.feed.length = 500; if (TRK.sound && trkPass(data)) beep(data.side === 'buy' ? 1000 : 520, 0.06); if (S.view === 'track') renderTrack(); renderTrkPanel(); } break; }
     case 'trackTargets': { TRK.targets = data.targets || []; TRK.groups = data.groups || TRK.groups; if (S.view === 'track') renderTrack(); renderTrkPanel(); break; }
     case 'copyTasks': { TRK.tasks = data.tasks || []; TRK.paused = !!data.paused; renderTrkKill(); if (S.view === 'track') renderTrack(); break; }

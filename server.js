@@ -208,12 +208,14 @@ app.post('/api/ui-prefs', (req, res) => {
 let tracker = null;
 if (LIVE && WALLET_SLOT === 1) {
   const { Tracker } = await import('./engine/live/tracker.js');
-  tracker = new Tracker({ market, provider: market.provider, placeOrder });
+  tracker = new Tracker({ market, provider: market.provider, placeOrder, log: (m) => console.log(m) });
   market.on('trade', (t) => tracker.onTrade(t).catch(() => {}));
   tracker.on('event', (e) => broadcast({ type: 'track', data: e }));
   tracker.on('targets', (v) => broadcast({ type: 'trackTargets', data: v }));
   tracker.on('tasks', (v) => broadcast({ type: 'copyTasks', data: v }));
   tracker.on('log', (r) => broadcast({ type: 'copyLog', data: r }));
+  tracker.on('reload', () => broadcast({ type: 'trackReload' }));   // 历史回补完成：页面重新拉追踪数据
+  setTimeout(() => tracker.backfillPending(), 20_000);   // 启动后补一次还没回补过的追踪地址（最近 24 小时，只写历史，不跟单）
 }
 const needTracker = (res) => { if (!tracker) { res.status(400).json({ error: '只有实盘主后端支持追踪 / 跟单' }); return false; } return true; };
 app.get('/api/track', (req, res) => { if (!needTracker(res)) return; res.json({ ...tracker.targetsView(), feed: tracker.feed.slice(0, 300) }); });
