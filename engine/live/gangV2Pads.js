@@ -7,6 +7,7 @@ import { ethers } from 'ethers';
 import * as baw from './baw.js';
 import { capFor, capLabel, sendApproval } from './approvals.js';
 import { BNB_NATIVE } from './config.js';
+import { getRoute, setRoute } from './quoteRoutes.js';
 
 export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
 const USDT = '0x55d398326f99059fF775485246999027B3197955';   // BSC USDT（18 位小数）
@@ -70,8 +71,9 @@ export class GangV2 {
     this.viaUsdt ||= new Map(); const k = String(q).toLowerCase();
     if (isWbnb(q) || k === USDT.toLowerCase()) return false;
     if (this.viaUsdt.has(k)) return this.viaUsdt.get(k);
-    try { await baw.marketQuote({ fromTokenQty: '0.01', fromToken: BNB_NATIVE, toToken: q }); this.viaUsdt.set(k, false); return false; }
-    catch (e) { if (ONDO_RE.test(e.message)) { this.viaUsdt.set(k, true); return true; } return false; }   // 其他错误（网络等）不缓存
+    const saved = getRoute(k); if (saved?.buy) { const v = saved.buy === 'via_USDT'; this.viaUsdt.set(k, v); return v; }   // 路线表（data/quote-routes.json）
+    try { await baw.marketQuote({ fromTokenQty: '0.01', fromToken: BNB_NATIVE, toToken: q }); this.viaUsdt.set(k, false); setRoute(k, { buy: 'direct', sell: 'direct' }); return false; }
+    catch (e) { if (ONDO_RE.test(e.message)) { this.viaUsdt.set(k, true); setRoute(k, { buy: 'via_USDT', sell: 'via_USDT', note: '只能和稳定币直接兑换（Ondo 类）' }); return true; } return false; }   // 其他错误（网络等）不缓存
   }
   // 一笔 baw 兑换并等到完成；返回到账数量（按链上余额差）
   async swapWait({ wallet, from, to, qty, slippage, step, label }) {
@@ -82,7 +84,7 @@ export class GangV2 {
     const o = await baw.pollOrder(sw.orderId);
     if (o?.status !== 'FINISHED') throw new Error(`${label}${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${sw.orderId}），后续步骤没有执行`);
     if (before == null) return { o, got: null };
-    let got = 0n; for (let i = 0; i < 10; i++) { got = (await this.balanceOf(to, wallet)) - before; if (got > 0n) break; await sleep(1000); }
+    let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(to, wallet)) - before; if (got > 0n) break; await sleep(300); }   // 到账一般 1 秒内，300ms 查一次（最多约 10 秒）
     if (got <= 0n) throw new Error(`${label} 没有到账，停止后续步骤`);
     return { o, got };
   }
@@ -100,9 +102,19 @@ export class GangV2 {
     return ethers.parseUnits(Number(r?.toCoinAmount || 0).toFixed(Math.min(12, dec)), dec);
   }
 
+  // 报价用：1 BNB 能换多少报价币，按币缓存 8 秒。「买总量 X%」要反复试算好几次，以前每次都调 baw 报价（USDT 中转还要两次），下单前就要等 4～8 秒；
+  // 真实下单时的兑换照样按实时数量走，不用这个缓存
+  async quoteRate(q) {
+    this.rateCache ||= new Map(); const k = String(q).toLowerCase(), hit = this.rateCache.get(k);
+    if (hit && Date.now() - hit.at < 8_000) return hit.rate;
+    const dec = await this.decimals(q), one = await this.bnbToQuote(q, 0.1);
+    const rate = Number(ethers.formatUnits(one, dec)) / 0.1; this.rateCache.set(k, { rate, at: Date.now(), dec }); return rate;
+  }
+
   async preview({ token, wallet, amountBnb }) {
     const { c } = await this.curve(token); const q = this.quoteToken(c);
-    const quoteIn = await this.bnbToQuote(q, amountBnb);
+    const dec = await this.decimals(q);
+    const quoteIn = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * await this.quoteRate(q)).toFixed(Math.min(12, dec)), dec);
     const r = this.buyQuote(c, quoteIn, await this.room(token, wallet).catch(() => null));
     return { quote: q, quoteIn, ...r, out: Number(ethers.formatEther(r.tokens)), feePct: 1 };
   }
@@ -163,7 +175,7 @@ export class GangV2 {
         if (o?.status !== 'FINISHED') throw new Error(`BNB→报价币兑换${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${sw.orderId}），后续步骤没有执行`);
         if (o.txHash) hashes.push(o.txHash);
       }
-      let got = 0n; for (let i = 0; i < 10; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(1000); }
+      let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(300); }
       if (got <= 0n) throw new Error('报价币没有到账，停止后续步骤');
       need = got; step(`收到 ${ethers.formatUnits(got, dec)} ${qSym}`, Date.now() - t0);
     } else step(`钱包里已有足够${qSym}，直接使用 ${ethers.formatUnits(need, dec)}`, 0);
@@ -188,7 +200,7 @@ export class GangV2 {
     try { await this.provider.call({ from: wallet, to: p, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
     const before = await this.balanceOf(q, wallet);
     hashes.push(await this.send({ wallet, to: p, inputData: data, label: 'Gang V2 sell', step }));
-    let got = 0n; for (let i = 0; i < 10; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(1000); }
+    let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(300); }
     if (!toBnb || got <= 0n) return { venue: 'Gang V2 sell', expected: null, txHash: hashes.at(-1), hashes, note: got > 0n ? `已卖出得到报价币 ${ethers.formatUnits(got, 18)}（「卖出后自动换回 BNB」已关闭，留在钱包）` : '已卖出，没读到报价币到账' };
     if (isWbnb(q)) { hashes.push(await this.send({ wallet, to: WBNB, inputData: erc20.encodeFunctionData('withdraw', [got]), label: 'WBNB→BNB 解包', step })); return { venue: 'Gang V2 sell → BNB', expected: Number(ethers.formatEther(got)), txHash: hashes.at(-1), hashes }; }
     const dec = await this.decimals(q);
