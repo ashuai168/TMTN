@@ -38,6 +38,8 @@ const K = (n, d = 2) => { const a = Math.abs(n); return a >= 1e9 ? (n / 1e9).toF
 const usd = (n) => (!n || !isFinite(n) ? '—' : Math.abs(n) < 0.01 ? '$' + sub(n) : '$' + K(n));
 const bnb = (n, d = 4) => (n == null || !isFinite(n) ? '—' : n !== 0 && Math.abs(n) < 0.0001 ? sub(n) : n.toFixed(d));
 const short = (a, h = 6, t = 4) => (a ? a.slice(0, h) + '…' + a.slice(-t) : '');
+// 相对时间旁边悬停显示的精确时间：本地时区，精确到秒，例如 2026/10/27 01:37:12
+const fullTime = (ts) => { if (!ts) return ''; const d = new Date(ts), p = (n) => String(n).padStart(2, '0'); return isNaN(d) ? '' : `${d.getFullYear()}/${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 const age = (ts) => { const s = Math.max(0, (Date.now() - ts) / 1000); return s < 60 ? Math.floor(s) + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; };
 const hms = (ts) => new Date(ts).toTimeString().slice(0, 8);
 const pctS = (n) => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
@@ -522,7 +524,7 @@ function renderHead() {
       <div class="th-main">
         <div class="th-title">${favStar(t.address)}<b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b><span class="muted">${esc(t.name)}</span>${tagsHtml(t)}</div>
         <div class="th-sub"><span>代币 <span class="mono">${short(t.address, 8, 6)}</span> <span class="copy" data-copy="${t.address}">⧉</span></span><span>创建者 ${whoHtml(t.creator, t.creatorName || NAMES[String(t.creator || '').toLowerCase()])}</span>${t.firstBuyer ? `<span>首买 <a href="https://bscscan.com/address/${esc(t.firstBuyer)}" target="_blank" rel="noopener" title="${esc(t.firstBuyer)}">${whoHtml(t.firstBuyer, t.firstBuyerName || NAMES[t.firstBuyer.toLowerCase()])}</a></span>` : ''}</div>
-        <div class="th-sub"><span>预设 ${t.preset}</span><span>${age(t.createdAt)} 前创建</span></div>
+        <div class="th-sub"><span>预设 ${t.preset}</span><span title="${fullTime(t.createdAt)}">${age(t.createdAt)} 前创建</span></div>
       </div>
       <div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制 CA'}</span><b class="mono">${short(t.address, 6, 4)}</b></button><a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}<a href="#" data-qbtoggle class="${qbOpen() ? 'qb-on' : ''}" title="显示 / 隐藏一键买卖面板">⚡ 一键买卖</a></div>${ruleBanner(t.address)}
       <div class="th-price"><div class="p">$${sub(t.priceUsd)}</div><div class="s">每枚 · ${sub(t.price)} ${esc(t.quote || 'BNB')}</div></div>
@@ -542,7 +544,7 @@ function renderHead() {
       <div><span title="涨幅（开盘以来）：${esc(chgTip(t, 'launch'))}">涨幅</span><b title="${esc(chgTip(t, 'launch'))}">${chgTxt(t.chg?.launch)}</b><small class="chg-row"> <span title="${esc(chgTip(t, 'm5'))}">5m ${chgTxt(t.chg?.m5)}</span> · <span title="${esc(chgTip(t, 'h1'))}">1h ${chgTxt(t.chg?.h1)}</span>${t.chg?.h24 != null ? ` · <span title="${esc(chgTip(t, 'h24'))}">24h ${chgTxt(t.chg.h24)}</span>` : ''}</small></div>
       <div><span>持有人</span><b>${t.holders ?? '—'}</b></div>
       
-      <div><span>最新</span><b>${t.lastTradeAt ? age(t.lastTradeAt) + ' 前' : '—'}</b></div>
+      <div><span>最新</span><b title="${fullTime(t.lastTradeAt)}">${t.lastTradeAt ? age(t.lastTradeAt) + ' 前' : '—'}</b></div>
     </div>`;
 }
 
@@ -1703,7 +1705,7 @@ function renderAct() {
   // 正序时如果还没加载到开盘第一笔，先自动往前加载（最多加载到全部）
   if (actAsc && !OT.end && !OT.loading && LIVE()) loadOlderTrades();
   const prevTop = body.scrollTop, prevH = body.scrollHeight, atBottom = prevH - prevTop - body.clientHeight < 30;
-  body.innerHTML = rows.slice(0, 1500).map((r) => `<div class="act-r ${isMe(r.trader) ? 'mine' : ''}" data-trader="${esc(r.trader || '')}" title="${new Date(r.ts).toLocaleString('zh-CN', { hour12: false })} · ${r.side === 'buy' ? '买入' : '卖出'} ${K(r.tokens)} 个">
+  body.innerHTML = rows.slice(0, 1500).map((r) => `<div class="act-r ${isMe(r.trader) ? 'mine' : ''}" data-trader="${esc(r.trader || '')}" title="${fullTime(r.ts)} · ${r.side === 'buy' ? '买入' : '卖出'} ${K(r.tokens)} 个">
     <span class="act-amt ${r.side === 'buy' ? 'g' : 'r'}"><i class="sd ${r.side}"></i>$${(r.usd ?? (r.bnb || 0) * qu).toFixed(2)}</span><span class="mc">${usd(tradeMc(r, t))}</span><span>${LIVE() && r.trader ? gmgnWho(r.trader, nameOf(r), 4, 4) : esc(short(r.trader || '', 4, 4))}</span><span class="tm">${relT(r.ts)}</span></div>`).join('')
     + (LIVE() ? `<div class="act-foot" id="actFoot">${OT.end ? '— 已到开盘第一笔 —' : OT.loading ? '正在加载…' : (actAsc ? '正在补全更早的成交…' : '往下滚动加载更早的成交')}</div>` : '');
   if (actAsc) { if (atBottom) body.scrollTop = body.scrollHeight; else body.scrollTop = prevTop; }   // 正序：在底部时跟着新成交往下，否则保持不动
@@ -2067,7 +2069,7 @@ function tcCard(t, k) {
     <div class="tc-m">
       <div class="tc-n"><b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b>${t.name && t.name !== t.symbol ? `<span>${esc(t.name)}</span>` : ''}<button class="tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button></div>
       <div class="tc-chips">${taxChip(t, 'chip')}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
-      <div class="tc-meta"><span class="g">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
+      <div class="tc-meta"><span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tc-route ${curve ? '' : 'dex'}">${route}</div>
       <div class="tc-who">${fb ? `<span class="g">👑</span> 首买 ${isMe(t.firstBuyer) ? `<b class="me">${esc(fb)}</b>${meTag(t.firstBuyer)}` : esc(fb)}` : ''}${hp ? `<span class="y">持有 ${K(hp.amount)}</span>` : ''}</div>
     </div>
@@ -2088,7 +2090,7 @@ function tlCard(t) {
       <div class="tlc-r1"><b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b>${t.name && t.name !== t.symbol ? `<span class="tlc-nm">${esc(t.name)}</span>` : ''}
         <span class="tlc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算' : '市值'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</span>
         <button class="tlc-ic tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tlc-ic tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button></div>
-      <div class="tlc-r2">${taxChip(t, 'chip')}<i class="chip q">${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent</i>' : ''}<span class="g">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span>1h ${chgTxt(t.chg.h1)}</span>` : ''}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
+      <div class="tlc-r2">${taxChip(t, 'chip')}<i class="chip q">${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent</i>' : ''}<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span>1h ${chgTxt(t.chg.h1)}</span>` : ''}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tlc-r3"><div class="tlc-bar ${curve ? '' : 'dex'}"><i style="width:${curve ? prog : 100}%"></i></div><span class="tlc-rt">${route}</span>
         <span class="tlc-buy ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="${esc(tcBuyTip(t, k))}（金额在战壕对应列设置）">${TC_ST[st] || '⚡' + tcBuyLabel(t, k).replace(/^[⚡\s]*/, '')}</span></div>
     </div></div>`;
@@ -2397,12 +2399,12 @@ function renderTrkFeed() {
   const rows = TRK.feed.filter(trkPass);
   $('#trkCount').textContent = `${rows.length} 条`;
   $('#trkFeed').innerHTML = rows.length ? `<table class="trk-tbl"><tr><th class="l">时间</th><th class="l">目标</th><th class="l">动作</th><th>金额</th><th class="l">代币</th><th>币龄</th><th>市值</th></tr>
-    ${rows.map((e) => `<tr data-a="${e.token}"><td class="l dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}前</td>
+    ${rows.map((e) => `<tr data-a="${e.token}"><td class="l dim" title="${fullTime(e.ts)}">${trkAgo(e.ts)}前</td>
       <td class="l"><a href="#" data-trkwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || e.target)}">${esc(trkName(e.target))}</a></td>
       <td class="l"><b class="${ACT_CLS[e.action] || ''}">${e.action}</b>${e.pct != null && e.side === 'sell' ? ` <span class="dim">${e.pct.toFixed(0)}%</span>` : ''}</td>
       <td><b>${e.bnb ? bnb(e.bnb, 4) + ' BNB' : '—'}</b>${e.quote !== 'BNB' ? `<div class="hsub">${K(e.quoteAmt)} ${esc(e.quote)}</div>` : ''}</td>
       <td class="l"><span class="side">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b>${e.quote !== 'BNB' ? ` <i class="tag">${esc(e.quote)}</i>` : ''}</span></td>
-      <td class="dim">${e.createdAt ? trkAgo(e.createdAt) : '—'}</td><td>${usd(e.mcapUsd)}</td></tr>`).join('')}</table>`
+      <td class="dim" title="${e.createdAt ? '创建于 ' + fullTime(e.createdAt) : ''}">${e.createdAt ? trkAgo(e.createdAt) : '—'}</td><td>${usd(e.mcapUsd)}</td></tr>`).join('')}</table>`
     : '<div class="empty">还没有动态。追踪的地址在 Flap / Four / Gang V2 内盘上买卖时会出现在这里</div>';
 }
 const tkFmt = (v) => (v ? bnb(v, 4) : '0');
@@ -2414,7 +2416,7 @@ function renderTrkCopy() {
     ${list.map((t) => { const p = t.params || {}, st = t.status === 'running' ? (TRK.paused ? '<b class="y">运行中（被全部暂停）</b>' : `<b class="g">运行中</b>`) : t.status === 'paused' ? '<b class="muted">已暂停</b>' : '<span class="muted">已关闭</span>';
       return `<tr><td class="l">${wl(p.wallets)}</td><td class="l"><b title="${esc(t.target)}">${esc(trkRemark(t.target) || t.name)}</b><div class="hsub">${short(t.target, 6, 4)} · ${p.mode === 'ratio' ? `跟 ${p.ratioPct}%` : `每次 ${p.amountBnb} BNB`}${p.onlyFirst ? ' · 只跟建仓' : ''}${p.followSell ? ' · 跟卖' : ''} · ${p.maxCopies > 0 ? `已跟 ${p.dryRun ? (t.stats?.simCopies || 0) : (t.stats?.copies || 0)}/${p.maxCopies} 次${p.dryRun ? '（模拟）' : ''}` : '次数不限'}</div>${t.closeReason ? `<div class="hsub y">${esc(t.closeReason)}</div>` : ''}</td>
         <td>${tkFmt(t.stats?.buyBnb)}</td><td>${tkFmt(t.stats?.sellBnb)}</td><td>${t.stats?.buys || 0} / ${t.stats?.sells || 0}${t.stats?.sims ? `<div class="hsub">模拟 ${t.stats.sims} 次</div>` : ''}</td>
-        <td class="${(t.stats?.realized || 0) >= 0 ? 'g' : 'r'}">${t.stats?.realized ? (t.stats.realized > 0 ? '+' : '') + bnb(t.stats.realized, 4) : '0'}</td><td class="dim">${t.stats?.lastAt ? trkAgo(t.stats.lastAt) + '前' : '—'}</td>
+        <td class="${(t.stats?.realized || 0) >= 0 ? 'g' : 'r'}">${t.stats?.realized ? (t.stats.realized > 0 ? '+' : '') + bnb(t.stats.realized, 4) : '0'}</td><td class="dim" title="${fullTime(t.stats?.lastAt)}">${t.stats?.lastAt ? trkAgo(t.stats.lastAt) + '前' : '—'}</td>
         <td class="l">${st}<div class="hsub">${p.dryRun ? '<b class="y">模拟</b>（不下单）' : '<b class="r">真实下单</b>'}</div></td>
         <td class="l trk-acts">${t.status === 'closed' ? `<button data-cpact="delete:${t.id}">删除</button>` : `${t.status === 'running' ? `<button data-cpact="pause:${t.id}">暂停</button>` : `<button class="go" data-cpact="start:${t.id}">启动</button>`}<button data-cpact="edit:${t.id}">参数</button><button data-cpact="close:${t.id}">关闭</button>`}</td></tr>`; }).join('')}</table>`
     : `<div class="empty">${TRK.cptab === 'active' ? '还没有跟单任务。点「新建跟单」，或在追踪动态里点目标旁的「跟单」' : '没有已关闭的任务'}</div>`;
@@ -2542,7 +2544,7 @@ function renderTrkPanel() {
   $('#trkpList').innerHTML = !TRK.targets.length ? '<div class="trkp-empty">还没有追踪的地址。<br>可以在交易者盈亏抽屉里点「追踪」，或者到追踪页添加 .ai / .bnb 域名、0x 地址。<br><button data-tpgo>去添加</button></div>'
     : !rows.length ? '<div class="trkp-empty">追踪的地址在 Flap / Four / Gang V2 内盘上买卖时，会实时出现在这里。</div>'
     : rows.map((e) => `<div class="trkp-e" data-a="${e.token}" title="点击进入 ${esc(e.symbol)} 详情"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) : K(e.quoteAmt)}<small class="dim"> ${e.bnb ? 'BNB' : esc(e.quote)}</small></span></div>
-      <div class="trkp-r2"><span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="dim">MC ${usd(e.mcapUsd)}</span><span class="spacer"></span><span class="dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}</span></div></div>`).join('');
+      <div class="trkp-r2"><span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="dim">MC ${usd(e.mcapUsd)}</span><span class="spacer"></span><span class="dim" title="${fullTime(e.ts)}">${trkAgo(e.ts)}</span></div></div>`).join('');
 }
 function setTrkPanel(on) { TP.open = on; try { localStorage.trkPanel = on ? '1' : '0'; } catch { /* ignore */ } tpSaveServer(); if (on && !TRK.loaded) loadTrack().then(renderTrkPanel); renderTrkPanel(); }
 $('#bbTrack')?.addEventListener('click', () => setTrkPanel(!TP.open));
