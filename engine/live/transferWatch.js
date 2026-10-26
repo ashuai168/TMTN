@@ -25,7 +25,7 @@ export function startTransferWatch(trader, provider, { intervalMs = 3000, dryRun
     for (const p of pad.get(w.token) ? [pad.get(w.token)] : PADS) {
       try {
         const r = V2.decodeFunctionResult('curves', await provider.call({ to: p, data: V2.encodeFunctionData('curves', [w.token]) }));
-        if (r.quote === ethers.ZeroAddress) continue;
+        if (r.creator === ethers.ZeroAddress) continue;   // 这个 pad 上没有这个币。不能看 quote：WBNB 盘的 quote 就是 0x0，以前会把它跳过，只能靠接口兜底
         pad.set(w.token, p);
         if (r.graduated || r.pair !== ethers.ZeroAddress) return `链上 curves.graduated=${r.graduated} pair=${r.pair}`;
         w.progress = Number(r.gradAmt) ? +(Number(r.realQuote) / Number(r.gradAmt) * 100).toFixed(2) : null;
