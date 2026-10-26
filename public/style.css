@@ -1100,7 +1100,10 @@ body.trkp-on #hold, body.trkp-on #track { margin-left: calc(var(--trkpW, 340px) 
   --text: #f4f4f6; --muted: #8a8a9a; --dim: #5a5a6a;
   --g: #22c58b; --g-bg: rgba(34, 197, 139, .13); --r: #f6465d; --r-bg: rgba(246, 70, 93, .14);
   --y: #f0c419; --y-bg: rgba(240, 196, 25, .14);
-  --card: #1a1544; --card-hover: #211a58; --card-line: #2a2160;          /* 战壕币卡：深紫蓝 */
+  /* 战壕币卡：按平台区分（和改版前一致）——Flap 深紫、Four 青绿、Gang 棕黄 */
+  --card-flap: #1a1030; --card-flap-line: #1f1a2e;
+  --card-four: #0f2226; --card-four-line: #173338;
+  --card-gang: #211c08; --card-gang-line: #3a3010;
   --mc-line: rgba(176, 58, 186, .55); --mc-line-hi: #c24ad0;             /* 卡片右侧 MC 区块：洋红细框 */
   --pink: #ff5fb7;                                                        /* ⚡ 快买 */
   --trk-card: #1c1a5c; --trk-card-hover: #252270;                         /* 追踪栏卡片：深靛蓝 */
@@ -1112,14 +1115,14 @@ html, body { font-family: var(--sans); font-variant-numeric: tabular-nums; }
 /* 战壕：近黑底、深紫蓝卡片、洋红 MC 框、粉色快买 */
 .pulse.trench { background: var(--bg); }
 .tcol { border-right-color: var(--line); } .tch { border-bottom-color: var(--line); } .tch .cnt { color: var(--muted); }
-.pulse.trench .tcard, .pulse.trench .tcard.four, .pulse.trench .tcard.gang { background: var(--card); border-color: var(--card-line); }
-.pulse.trench .tcard:hover { background: var(--card-hover); filter: none; }
+.pulse.trench .tcard { background: var(--card-flap); border-color: var(--card-flap-line); }
+.pulse.trench .tcard.four { background: var(--card-four); border-color: var(--card-four-line); }
+.pulse.trench .tcard.gang { background: var(--card-gang); border-color: var(--card-gang-line); }
+.pulse.trench .tcard:hover { filter: brightness(1.15); }
 .pulse.trench .tcard.sel { border-color: var(--g); }
 .tc-r { border-color: var(--mc-line); } .tc-r.buyable:hover { border-color: var(--mc-line-hi); }
 .tc-mc span { color: var(--muted); } .tc-mc b { font-size: 14px; color: #fff; }
 .tc-buy, .tlc-buy { color: var(--pink); }
-/* 交易页左栏卡片：同色系 */
-.panel.left .tcard:hover { background: var(--card-hover); }
 /* 钱包追踪栏：深靛蓝卡片 + 左侧黄色竖条、黄色名字、绿 / 红金额、灰色次要信息 */
 .trk-panel .trkp-list { padding: 4px 6px; }
 .trk-panel .trkp-e { background: var(--trk-card); border: 0; border-left: 3px solid var(--y); border-radius: 6px; margin: 4px 0; padding: 7px 10px; }
