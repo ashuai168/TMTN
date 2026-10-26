@@ -10,6 +10,7 @@ import { SimTrader, GAS_PRESETS } from './engine/trader.js';
 import { Agent } from './engine/agent.js';
 import { Blocklist } from './engine/blocklist.js';
 import { Favorites } from './engine/favorites.js';
+import { DATA_DIR as DATA_DIR_UI } from './engine/live/config.js';
 import { MODE, LIVE_TRADE, WALLET_SLOT, WALLET_PEERS, BAW_DIR, WALLET_LABEL } from './engine/live/config.js';
 import * as latency from './engine/live/latency.js';
 import { redactSecrets } from './engine/live/rpc.js';
@@ -194,6 +195,15 @@ app.post('/api/quote-to-bnb', async (req, res) => { if (!LIVE) return res.status
 app.get('/api/trades/:token', async (req, res) => { try { const v = LIVE ? await market.tradesPage(req.params.token, Number(req.query.before) || 0, Math.min(500, Number(req.query.limit) || 100)) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/trader/:token/:addr', async (req, res) => { try { const v = LIVE ? await market.traderStats(req.params.token, req.params.addr) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/rpc-usage', (req, res) => res.json(rpcUsageLog));
+// 页面布局偏好（左侧钱包追踪栏开 / 关、宽度）：服务器也存一份，浏览器数据丢了或换了地址也能恢复
+const UI_PREFS = path.join(DATA_DIR_UI, 'ui-prefs.json');
+app.get('/api/ui-prefs', (req, res) => { try { res.json(JSON.parse(fs.readFileSync(UI_PREFS, 'utf8'))); } catch { res.json({}); } });
+app.post('/api/ui-prefs', (req, res) => {
+  const b = req.body || {}, cur = (() => { try { return JSON.parse(fs.readFileSync(UI_PREFS, 'utf8')); } catch { return {}; } })();
+  if (typeof b.trkPanel === 'boolean') cur.trkPanel = b.trkPanel; if (Number(b.trkPanelW) > 0) cur.trkPanelW = Math.min(640, Math.max(260, Number(b.trkPanelW)));
+  try { fs.mkdirSync(path.dirname(UI_PREFS), { recursive: true }); fs.writeFileSync(UI_PREFS, JSON.stringify(cur)); } catch { /* ignore */ }
+  res.json(cur);
+});
 // ---------- 追踪 + 跟单（只在实盘、只在主后端）----------
 let tracker = null;
 if (LIVE && WALLET_SLOT === 1) {

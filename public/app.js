@@ -2514,7 +2514,9 @@ document.addEventListener('click', async (e) => {
 /* ---------- 左侧「钱包追踪」面板 + 底部工具栏 ---------- */
 // 复用追踪页的数据（/api/track + 推送），不额外查链。开关状态和宽度记在浏览器里
 const TP = { open: false, w: 340 };
-try { TP.open = localStorage.trkPanel === '1'; TP.w = Math.min(640, Math.max(260, Number(localStorage.trkPanelW) || 340)); } catch { /* ignore */ }
+let tpLocal = null; try { tpLocal = localStorage.trkPanel ?? null; TP.open = tpLocal === '1'; TP.w = Math.min(640, Math.max(260, Number(localStorage.trkPanelW) || 340)); } catch { /* ignore */ }
+// 服务器上也存一份（data/ui-prefs.json）：换了地址（localhost / 127.0.0.1）或浏览器数据被清掉时，用服务器上的状态恢复
+function tpSaveServer() { api('/api/ui-prefs', { trkPanel: TP.open, trkPanelW: TP.w }).catch(() => {}); }
 function renderTrkPanel() {
   const panel = $('#trkPanel'), btn = $('#bbTrack'); if (!panel) return;
   panel.classList.toggle('hidden', !TP.open); btn?.classList.toggle('on', TP.open); document.documentElement.style.setProperty('--trkpW', TP.w + 'px');
@@ -2528,7 +2530,7 @@ function renderTrkPanel() {
     : rows.map((e) => `<div class="trkp-e"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) : K(e.quoteAmt)}<small class="dim"> ${e.bnb ? 'BNB' : esc(e.quote)}</small></span></div>
       <div class="trkp-r2"><span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="dim">MC ${usd(e.mcapUsd)}</span><span class="spacer"></span><span class="dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}</span></div></div>`).join('');
 }
-function setTrkPanel(on) { TP.open = on; try { localStorage.trkPanel = on ? '1' : '0'; } catch { /* ignore */ } if (on && !TRK.loaded) loadTrack().then(renderTrkPanel); renderTrkPanel(); }
+function setTrkPanel(on) { TP.open = on; try { localStorage.trkPanel = on ? '1' : '0'; } catch { /* ignore */ } tpSaveServer(); if (on && !TRK.loaded) loadTrack().then(renderTrkPanel); renderTrkPanel(); }
 $('#bbTrack')?.addEventListener('click', () => setTrkPanel(!TP.open));
 $('#trkpClose')?.addEventListener('click', () => setTrkPanel(false));
 $('#trkpGo')?.addEventListener('click', () => { TRK.tab = 'feed'; setView('track'); });
@@ -2540,10 +2542,13 @@ $('#trkPanel')?.addEventListener('click', (e) => {
 $('#trkpDrag')?.addEventListener('mousedown', (e) => {
   e.preventDefault(); const x0 = e.clientX, w0 = TP.w;
   const mv = (ev) => { TP.w = Math.min(640, Math.max(260, w0 + ev.clientX - x0)); document.documentElement.style.setProperty('--trkpW', TP.w + 'px'); };
-  const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); try { localStorage.trkPanelW = TP.w; } catch { /* ignore */ } };
+  const up = () => { document.removeEventListener('mousemove', mv); document.removeEventListener('mouseup', up); try { localStorage.trkPanelW = TP.w; } catch { /* ignore */ } tpSaveServer(); };
   document.addEventListener('mousemove', mv); document.addEventListener('mouseup', up);
 });
-setTimeout(() => { if (LIVE() && (TP.open || !TRK.loaded)) loadTrack().then(renderTrkPanel).catch(() => {}); else renderTrkPanel(); }, 2500);
+// 打开 / 关闭状态一加载就恢复（以前要等 2.5 秒后、追踪数据读完才显示，刷新后看起来像「栏不见了」）；数据随后再填
+renderTrkPanel();
+if (tpLocal === null) api('/api/ui-prefs').then((p) => { if (p && typeof p.trkPanel === 'boolean') { TP.open = p.trkPanel; if (p.trkPanelW) TP.w = Math.min(640, Math.max(260, Number(p.trkPanelW) || 340)); try { localStorage.trkPanel = TP.open ? '1' : '0'; } catch { /* ignore */ } renderTrkPanel(); } }).catch(() => {});
+loadTrack().then(renderTrkPanel).catch(() => {});
 setInterval(() => { if (TP.open) renderTrkPanel(); }, 15_000);
 
 // 追踪历史往回翻：追踪页和左侧栏滚到底时，按时间加载更早的记录（服务器从 data/track-feed.jsonl 读）
