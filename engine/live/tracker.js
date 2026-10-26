@@ -122,6 +122,8 @@ export class Tracker extends EventEmitter {
     if (patch.status && ['running', 'paused', 'closed'].includes(patch.status)) t.status = patch.status;
     this.saveTasks(); return t;
   }
+  // 删除：只能删已关闭的任务（运行中 / 暂停的要先关闭）
+  deleteTask(id) { const t = this.tasks.find((x) => x.id === id); if (!t) throw new Error('任务不存在'); if (t.status !== 'closed') throw new Error('先关闭任务再删除'); this.tasks = this.tasks.filter((x) => x.id !== id); this.saveTasks(); return this.tasksView(); }
   setAllPaused(v) { this.allPaused = !!v; this.saveTasks(); }
 
   record(task, ev, kind, reason, extra = {}) {

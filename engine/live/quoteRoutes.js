@@ -25,8 +25,8 @@ async function deepestLiq(addr) {
   } catch { return r; }   // 查不到就按已有记录（没有记录则不拦）
   return getRoute(k);
 }
-export async function assertLiquid(addr, symbol = '计价币') {
-  const r = await deepestLiq(addr);
+export async function assertLiquid(addr, symbol) {
+  const r = await deepestLiq(addr); symbol ||= r?.symbol || r?.bestPool && null || `计价币 ${String(addr).slice(0, 6)}…${String(addr).slice(-4)}`;
   if (r?.liqUsd != null && r.liqUsd < MIN_LIQ_USD) throw new Error(`${symbol} 最深的池子流动性只有 $${Math.round(r.liqUsd).toLocaleString('en-US')}（低于 $${MIN_LIQ_USD.toLocaleString('en-US')}），为避免在小池子里吃大滑点，拒绝兑换`);
   return r;
 }

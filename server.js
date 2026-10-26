@@ -223,7 +223,7 @@ app.post('/api/track/targets', (req, res) => {
 app.get('/api/copy', (req, res) => { if (!needTracker(res)) return; res.json({ ...tracker.tasksView(), log: tracker.log.slice(0, 300) }); });
 app.post('/api/copy/tasks', (req, res) => {   // 新建：一律暂停 + 模拟；改参数 / 启动 / 暂停 / 关闭
   if (!needTracker(res)) return; const b = req.body || {};
-  try { res.json(b.id ? tracker.updateTask(b.id, b) : tracker.createTask(b)); } catch (e) { res.status(400).json({ error: e.message }); }
+  try { res.json(b.id && b.delete ? tracker.deleteTask(b.id) : b.id ? tracker.updateTask(b.id, b) : tracker.createTask(b)); } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/copy/pause-all', (req, res) => { if (!needTracker(res)) return; tracker.setAllPaused(req.body?.paused !== false); res.json(tracker.tasksView()); });
 app.get('/api/wallet-info', (req, res) => res.json(LIVE ? selfInfo() : null));
