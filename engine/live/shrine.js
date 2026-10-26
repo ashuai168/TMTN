@@ -36,7 +36,9 @@ export class ShrineFeeds extends EventEmitter {
     // 断线重连：连续失败时间隔加倍（最长 5 分钟）。被 shrine 限流（429）时至少等 60 秒，以前每 3 秒重连一次，越连越被限流
     ws.on('close', () => {
       clearInterval(this.pingers[kind]); st.connected = false; st.reconnects++; st.fails = (st.fails || 0) + 1; st.downSince ||= Date.now();
-      const wait = Math.min(300_000, Math.max(/429/.test(st.lastError || '') ? 60_000 : 0, retryMs * 2 ** Math.min(st.fails - 1, 7)));
+      // 429：shrine 每个 IP 只允许一个订阅（同一台电脑上别的程序占着时就会这样），5 分钟后再试
+      st.busy = /429/.test(st.lastError || '');
+      const wait = st.busy ? 300_000 : Math.min(300_000, retryMs * 2 ** Math.min(st.fails - 1, 7));
       st.retryAt = Date.now() + wait; setTimeout(() => this.connect(kind, url, retryMs), wait);
     });
     ws.on('error', (e) => { st.lastError = e.message; });

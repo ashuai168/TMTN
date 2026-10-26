@@ -134,6 +134,7 @@ engine/
     fourMeme.js openFour.js              Four：链上事件、OpenFour 技能脚本
     gangFun.js gangTrade.js gangV2Pads.js  gang.fun：接口、老盘、V2 盘
     gangChain.js     gang.fun 新盘：监听链上创建事件（WSS 订阅 + getLogs 补查），比接口轮询快
+    flapChain.js     Flap Agent 曲线：订阅链上成交 / 新市场事件（代替第三方 shrine 推送）
     portal.js        Flap Portal 买 / 卖 / 领取、发交易并等回执
     liveTrader.js    下单流程、自动领取、单币规则 / 自动转出、计价币换回 BNB、授权管理
     holdings.js      持仓与盈亏（钱包历史、历史 BNB 价格、链上卖出报价核对）

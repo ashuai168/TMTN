@@ -300,21 +300,23 @@ $('#loginRecheck').addEventListener('click', async () => { const r = await api('
 function pillState(el, st, ms, tip) {
   const pill = el.closest('.pill'), dot = pill.querySelector('.dot'), cls = st === 'ok' ? 'g' : st === 'down' ? 'r' : 'y';
   el.className = `mono ${cls}`; dot.className = `dot ${cls}`;
-  el.textContent = st === 'down' ? '断开' : st === 'retry' ? '重连中' : (ms != null ? ms + 'ms' : '') + (st === 'partial' ? ' · 部分' : '');
+  el.textContent = st === 'down' ? '断开' : st === 'retry' ? '重连中' : (ms != null ? ms + 'ms' : st === 'ok' ? '已连接' : '') + (st === 'partial' ? (ms != null ? ' · ' : '') + '部分' : '');
   if (tip != null) pill.title = tip;
 }
 function ago2(ts) { return !ts ? '—' : Math.round((Date.now() - ts) / 1000) + ' 秒前'; }   // 用函数声明：启动时可能在这行执行前就被调用
 function wssTip() {
   const sh = S.net.shrine; if (!LIVE() || !sh) return '';
   const one = (k, n) => { const x = sh[k] || {}; return `${n}：${x.connected ? '已连接' : '断开'}${x.connected ? '' : x.retryAt ? `（${Math.max(0, Math.round((x.retryAt - Date.now()) / 1000))} 秒后重连）` : ''}，最后消息 ${ago2(x.lastEventAt)}${x.lastError && !x.connected ? `，错误：${x.lastError}` : ''}`; };
-  return `shrine.trade 第三方实时推送（补充 Flap 新盘信息和成交；代币列表本身来自链上，不受影响）\n${one('launch', '新盘频道')}\n${one('stream', '成交频道')}`;
+  const c = S.net.chainSubs || {}, sub = (k, n) => { const x = c[k] || {}; return `${n}：${x.connected ? '已连接' : '断开'}${x.wss ? `（${x.wss}）` : ''}，最后消息 ${ago2(x.lastLogAt)}`; };
+  const shr = (k, n) => { const x = sh[k] || {}; return `${n}：${x.connected ? '已连接' : x.busy ? '被同 IP 其他程序占用（shrine 每个 IP 只允许一个订阅），5 分钟后再试' : '断开' + (x.lastError ? '：' + x.lastError : '')}`; };
+  return `链上实时订阅（WebSocket）\n${sub('flap', 'Flap 成交 / 新市场')}\n${sub('four', 'Four 新盘 / 成交')}\n${sub('gang', 'Gang 新盘')}\n\n补充来源 shrine.trade（可选，断开不影响）\n${shr('launch', '新盘频道')}\n${shr('stream', '成交频道')}`;
 }
 function renderTop() {
   renderAuth();
   pillState($('#wssMs'), LIVE() ? S.net.wssState || (S.net.wss == null ? 'down' : 'ok') : (S.net.wss == null ? 'down' : 'ok'), S.net.wss, wssTip());
   pillState($('#rpcMs'), S.net.rpc == null ? 'down' : LIVE() && S.net.rpcNode?.fallback ? 'partial' : 'ok', S.net.rpc);
 
-  $('#wssName').textContent = LIVE() ? 'shrine' : 'GetBlock';
+  $('#wssName').textContent = LIVE() ? '链上订阅' : 'GetBlock';
   const rn = S.net.rpcNode;
   if (LIVE() && rn) {
     $('#rpcName').innerHTML = rn.fallback ? `<span class="y">备用: ${esc(rn.active)}</span>` : esc(rn.active);

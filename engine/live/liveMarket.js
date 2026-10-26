@@ -8,6 +8,7 @@ import { FourMeme, AGENT_ID_TEMPLATE } from './fourMeme.js';
 import { MetaFetcher, ipfsUrl } from './meta.js';
 import { GangFun } from './gangFun.js';
 import { GangChain } from './gangChain.js';
+import { FlapChain } from './flapChain.js';
 import { GangV2 } from './gangV2Pads.js';
 import { NameCache } from './names.js';
 import { ShrineFeeds, tokenInfo } from './shrine.js';
@@ -34,6 +35,9 @@ export class LiveMarket extends EventEmitter {
     this.gang = new GangFun();
     this.gangChain = new GangChain(this.provider);   // 链上创建事件，比接口轮询快
     this.gangChain.on('token', (it) => this.onGangChainToken(it));
+    this.flapChain = new FlapChain(this.provider);   // Flap 成交 / 新市场：链上订阅（代替 shrine 推送）
+    this.flapChain.on('trade', (tr) => this.onFlapChainTrade(tr));
+    this.flapChain.on('created', () => { try { this.curve.tick?.(); } catch { /* 下一轮 Reader 轮询也会扫到 */ } });
     this.meta = new MetaFetcher();
     this.names = new NameCache();
     this.feeds = new ShrineFeeds();
@@ -55,7 +59,7 @@ export class LiveMarket extends EventEmitter {
     this.four.start();
     this.fourRestore();
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
-    this.gang.start(); this.gangChain.start();
+    this.gang.start(); this.gangChain.start(); this.flapChain.start();
     this.feeds.start();
     const blk = async () => { const t0 = Date.now(); try { this.block = await this.provider.getBlockNumber(); this.rpcMs = Date.now() - t0; this.rpcError = null; } catch (e) { this.rpcError = e.shortMessage || e.message; } };
     const px = async () => { try { const j = await (await fetch(BNB_PRICE_URL)).json(); if (+j.price) this.bnbUsd = +j.price; } catch { /* 保留上次 */ } };
@@ -221,6 +225,16 @@ export class LiveMarket extends EventEmitter {
     this.upsertGang(it, true);
     const t = this.get(it.address);
     if (t && it.track === 'v2') this.gangV2Curve(t).then(() => { if (!(t.price > 0) && t.launchPrice > 0) { t.price = t.launchPrice; const q = this.quoteUsd(t); if (q && !(t.mcapUsd > 0)) t.mcapUsd = t.price * 1e9 * q; } }).catch(() => {});
+  }
+
+  // 链上 Flap 成交（virtualBuyFill / virtualSellFill）：金额是报价币单位，和其他平台一致；按 tx + 方向去重（shrine 若也推了同一笔不会重复）
+  onFlapChainTrade(tr) {
+    const t = this.get(tr.token); if (!t || t.source !== 'agent-curve') return;
+    if (t.trades.some((x) => x.tx === tr.tx && x.side === tr.side)) return;
+    const trade = { ts: tr.ts || Date.now(), side: tr.side, bnb: tr.bnb, tokens: tr.tokens, price: tr.price, trader: tr.trader, tx: tr.tx };
+    this.addTrade(t, trade);
+    const q = this.quoteUsd(t); if (q && tr.price > 0) t.mcapUsd = tr.price * (t.maxSupply || 1e9) * q;
+    this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: tr.bnb * q, mcapUsd: t.mcapUsd });
   }
 
   onGangTrade(tr, live) {
@@ -522,9 +536,11 @@ export class LiveMarket extends EventEmitter {
 
   netStatus() {
     const l = this.feeds.status.launch;
-    const sm = this.feeds.status.stream, up = l.connected || sm.connected;
-    // 顶栏 WSS：shrine 的新盘频道（launch）+ 成交频道（stream）。都通 = ok；只通一个 = partial；都不通且断了不到 30 秒 = retry；更久 = down
-    const wssState = l.connected && sm.connected ? 'ok' : up ? 'partial' : Date.now() - Math.min(l.downSince || Date.now(), sm.downSince || Date.now()) < 30_000 ? 'retry' : 'down';
-    return { wss: l.connected ? l.rttMs ?? 0 : sm.connected ? sm.rttMs ?? 0 : null, wssState, rpc: this.rpcError ? null : this.rpcMs, rpcError: this.rpcError, rpcNode: { ...this.tradeProvider.info, read: nodeName(this.provider.lastUrl || this.provider.urls[0]), gangWs: this.gangChain.status.wss || null, fourWs: this.four.ws?.wss || null, four: nodeName(this.four.status?.rpcActive || this.four.status?.rpc), curve: nodeName(this.curve.status?.rpc) }, shrine: this.feeds.status, curve: this.curve.status, four: this.four.status, gang: this.gang.status, gangChain: { ...this.gangChain.status, recent: (this.gangLat || []).slice(0, 8) } };
+    // 顶栏「链上订阅」：Flap / Four / Gang 三个 WebSocket 订阅都正常 = ok；部分正常 = partial；都断 = down。shrine 只是补充来源，不影响这个状态
+    const subs = [this.flapChain.status, this.four.ws || {}, this.gangChain.status], upN = subs.filter((x) => x.connected).length;
+    const wssState = upN === subs.length ? 'ok' : upN ? 'partial' : 'down';
+    const chainSubs = { flap: { wss: this.flapChain.status.wss, connected: this.flapChain.status.connected, lastLogAt: this.flapChain.status.lastLogAt, trades: this.flapChain.status.trades },
+      four: { wss: this.four.ws?.wss, connected: !!this.four.ws?.connected, lastLogAt: this.four.ws?.lastLogAt }, gang: { wss: this.gangChain.status.wss, connected: this.gangChain.status.connected, lastLogAt: this.gangChain.status.lastLogAt } };
+    return { wss: null, wssState, chainSubs, rpc: this.rpcError ? null : this.rpcMs, rpcError: this.rpcError, rpcNode: { ...this.tradeProvider.info, read: nodeName(this.provider.lastUrl || this.provider.urls[0]), gangWs: this.gangChain.status.wss || null, fourWs: this.four.ws?.wss || null, four: nodeName(this.four.status?.rpcActive || this.four.status?.rpc), curve: nodeName(this.curve.status?.rpc) }, shrine: this.feeds.status, curve: this.curve.status, four: this.four.status, gang: this.gang.status, gangChain: { ...this.gangChain.status, recent: (this.gangLat || []).slice(0, 8) } };
   }
 }
