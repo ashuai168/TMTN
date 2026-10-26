@@ -288,7 +288,8 @@ function renderAuth() {
     const k = 'mw|' + on.map((w) => w.slot + w.auth).join(','); if (modal.dataset.k === k) return; modal.dataset.k = k;
     const cmd = (c) => `<div class="ag-cmd"><code>${esc(c)}</code><button class="ui-copy" data-agcopy="${esc(c)}">复制</button></div>`;
     $('#loginLead').innerHTML = '参与下单的币安钱包<b class="r">都没有登录</b>（或登录已过期）。至少登录一个才能使用。';
-    $('#loginBody').innerHTML = on.map((w) => `<li><b>${esc(w.label)}</b>：在终端运行 ${cmd(w.signin)}</li>`).join('') + '<li>打开终端里给出的链接 / 二维码，在<b>币安 App</b> 中确认登录（每个钱包用自己的币安账号）</li><li>回到这里点「我已登录，重新检测」（每 10 秒也会自动检测）</li>';
+    $('#loginBody').innerHTML = `<div class="ag-ws">${(S.walletsInfo || []).map((w) => `<div class="ag-w ${w.auth === 'ok' ? 'ok' : 'bad'}"><b>${w.auth === 'ok' ? '✓' : '✗'} ${esc(w.label)}</b><span>${w.auth === 'ok' ? '已登录' + (w.address ? ' ' + short(w.address, 6, 4) : '') : w.auth === 'wrong_account' ? '登录的账号不对' : w.auth === 'offline' ? '后端没有运行' : '未登录'}${w.on ? '' : '（不参与下单）'}</span>${w.auth !== 'ok' ? cmd(w.signin) : ''}</div>`).join('')}</div>`
+      + '<li>在终端运行对应钱包的登录命令，打开终端里给出的链接，<b>用这个钱包自己的币安账号</b>在 App 中确认（核对配对码）</li><li>回到这里点「我已登录，重新检测」（每 10 秒也会自动检测）</li>';
     $('#loginNote').textContent = '';
     return;
   }
@@ -315,7 +316,20 @@ async function startLogin() {
 }
 $('#loginGo')?.addEventListener('click', startLogin);   // 页面上不再提供登录按钮（登录命令在终端运行）
 $('#loginModal').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; try { await navigator.clipboard.writeText(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } setTimeout(() => (b.textContent = '复制'), 1500); });
-$('#loginRecheck').addEventListener('click', async () => { const r = await api('/api/auth/check', {}); if (r && S.baw) S.baw.auth = r; $('#loginModal').dataset.k = ''; renderAuth(); });
+// 「我已登录，重新检测」：点了马上有反馈（转圈 + 禁用），检测完逐个钱包显示结果；能用了就淡出遮罩并提示
+$('#loginRecheck').addEventListener('click', async () => {
+  const b = $('#loginRecheck'); if (b.disabled) return;
+  b.disabled = true; b.classList.add('busy'); b.innerHTML = '<i class="spin"></i>检测中…';
+  try {
+    const r = await api('/api/auth/check', {}); if (r && S.baw) S.baw.auth = r;
+    if (LIVE()) { try { S.walletsInfo = await api('/api/wallets'); } catch { /* 单钱包 */ } }
+  } catch (e) { $('#loginNote').textContent = '检测失败：' + e.message; }
+  b.disabled = false; b.classList.remove('busy'); b.textContent = '我已登录，重新检测';
+  const res = (MW() ? S.walletsInfo : [{ label: '币安钱包', auth: S.baw?.auth?.state, signin: 'baw auth signin' }]).map((w) => `${w.auth === 'ok' ? '✓' : '✗'} ${w.label}${w.auth === 'ok' ? ' 已登录' : w.auth === 'wrong_account' ? ' 登录的账号不对' : ' 未登录'}`).join('　');
+  $('#loginModal').dataset.k = '';
+  if (AUTH_OK()) { const m = $('#loginModal'); m.classList.add('fade-out'); setTimeout(() => { m.classList.remove('fade-out'); renderAuth(); }, 350); note('已登录，欢迎回来'); }
+  else { renderAuth(); const n = $('#loginNote'); n.textContent = '检测结果：' + res; n.classList.remove('flash'); void n.offsetWidth; n.classList.add('flash'); }
+});
 
 // 顶栏状态胶囊：圆点和文字同色。ok 绿（显示毫秒）/ partial 黄（部分可用）/ retry 黄「重连中」/ down 红「断开」
 function pillState(el, st, ms, tip) {

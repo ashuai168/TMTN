@@ -116,6 +116,7 @@ npm run live:wallet2                                                            
 | `AUTH_SIMULATE_LOGGED_OUT` | `0` | 调试：假装未登录 |
 | `DATA_DIR` | `data/` | 数据目录（多钱包时每个后端各用一个） |
 | `WALLET_SLOT` / `WALLET_PEERS` | `1` / `[]` | 多钱包：本后端是第几个钱包 / 一起下单的其他钱包后端 |
+| `WALLET_ADDRESS` | （空） | 本后端只允许这个钱包地址；baw 登录成别的账号时拒绝使用（防止拿错账号下单 / 自动转出） |
 | `FEEDS_PUBLIC` | `0` | `1` = 行情订阅只用公共节点（第二个钱包的后端用，省 NodeReal 额度） |
 | `NAME_RPC` | publicnode / bnbchain（逗号分隔） | 解析 `.ai` 域名用的 RPC |
 | `BSC_TESTNET_RPC` | `https://data-seed-prebsc-1-s1.bnbchain.org:8545` | 测试网 RPC（模拟 / 测试网钱包用） |

@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { PREAPPROVE, QUOTE_TOKENS, dataFile } from './config.js';
+import { PREAPPROVE, QUOTE_TOKENS, dataFile, EXPECT_WALLET } from './config.js';
 import { setApprovalCtx, capFor, capLabel, sendApproval, listApprovals } from './approvals.js';
 import { DRY_RUN, AUTH_SIMULATE_LOGGED_OUT, MAX_TRADE_BNB, LIVE_SETTINGS_FILE, BNB_NATIVE, BINANCE_CHAIN_ID, WALLET_LABEL, AUTO_TRANSFER_TO, AUTO_TRANSFER_FOUR } from './config.js';
 const AT_FILE = dataFile('autoTransfer.json');
@@ -50,6 +50,7 @@ export class LiveTrader extends EventEmitter {
       const addrs = await baw.walletAddresses();
       const bsc = addrs.find((a) => String(a.binanceChainId) === String(BINANCE_CHAIN_ID));
       if (!bsc?.address) throw new Error('baw 未返回 BSC 地址，请先运行 baw auth signin');
+      if (EXPECT_WALLET && bsc.address.toLowerCase() !== EXPECT_WALLET) { this.wallets = []; this.status.auth.state = 'wrong_account'; this.status.auth.message = `baw 登录的是 ${bsc.address.slice(0, 6)}…${bsc.address.slice(-4)}，不是这个后端的钱包 ${EXPECT_WALLET.slice(0, 6)}…${EXPECT_WALLET.slice(-4)}。请用正确的币安账号重新登录`; throw new Error(this.status.auth.message); }
       this.wallets = [{ id: 'baw', label: WALLET_LABEL, color: 'linear-gradient(135deg,#f0b90b,#3fb950)', address: bsc.address, bnb: 0, agentId: true, whitelisted: true, nonce: '—' }];
       this.status.connected = true; this.status.error = null;
       await this.refreshBalance();
@@ -76,11 +77,12 @@ export class LiveTrader extends EventEmitter {
       message = e.message;
     }
     if (state === 'ok') this.authFails = 0; else this.authFails = (this.authFails || 0) + 1;
-    if (state === 'ok' || this.authFails >= 2) { a.state = state; a.message = message; }
+    if (state === 'ok' && a.state === 'wrong_account' && !this.wallets?.length) { /* 账号不对：保持锁定，直到用正确账号登录（下面会重新初始化核对地址） */ }
+    else if (state === 'ok' || this.authFails >= 2) { a.state = state; a.message = message; }
     else if (a.state === 'ok') a.message = `检查失败一次，稍后再确认：${message}`;
     if (state !== 'ok' && this.authFails === 1) setTimeout(() => this.checkAuth(), 3_000);   // 第一次失败 3 秒后马上再确认
     // 在终端重新登录后：钱包地址还没读到（启动时是未登录）就重新初始化一次，否则余额 / 持仓 / 下单都没有钱包
-    if (a.state === 'ok' && !this.wallets?.length && !this.reIniting) { this.reIniting = true; this.init().catch(() => {}).finally(() => { this.reIniting = false; }); }
+    if ((a.state === 'ok' || (state === 'ok' && a.state === 'wrong_account')) && !this.wallets?.length && !this.reIniting) { this.reIniting = true; this.init().catch(() => {}).finally(() => { this.reIniting = false; }); }
     if (a.state === 'ok' && !a.agentId) { try { const id = await baw.agentId(); a.agentId = id.claimed ? id.agentId : null; if (a.agentId) this.market.names?.set(this.wallets[0]?.address, a.agentId); } catch { /* 域名拿不到不影响登录状态 */ } }
     a.address = this.wallets[0]?.address || a.address;
     a.checkedAt = Date.now();

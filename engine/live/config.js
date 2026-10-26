@@ -26,7 +26,9 @@ export const dataFile = (name) => pathToFileURL(pathJoin(DATA_DIR, name));
 // 多钱包：本后端是第几个钱包（WALLET_SLOT），以及要一起下单的其他钱包后端（WALLET_PEERS，JSON 数组：[{ slot, label, url, bawDir }]）
 export const WALLET_SLOT = Number(env('WALLET_SLOT', '1'));
 export const WALLET_PEERS = (() => { try { return JSON.parse(env('WALLET_PEERS', '[]')) || []; } catch { return []; } })();
-export const BAW_DIR = env('BINANCE_BAW_DIR', '');   // baw 的登录信息目录（空 = 默认 ~/.baw）
+export const BAW_DIR = env('BINANCE_BAW_DIR', '');
+// 本后端只允许用这个钱包地址（可选）。baw 登录成别的账号时拒绝使用，防止拿错账号下单 / 自动转出
+export const EXPECT_WALLET = env('WALLET_ADDRESS', '').toLowerCase();   // baw 的登录信息目录（空 = 默认 ~/.baw）
 // 只用公共节点跑行情订阅（第二个钱包的后端用，省 NodeReal 额度；交易链路照样用 NodeReal）
 export const FEEDS_PUBLIC = env('FEEDS_PUBLIC', '0') === '1';
 export const LIVE_SETTINGS_FILE = dataFile('live-settings.json');

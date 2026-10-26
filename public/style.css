@@ -940,3 +940,17 @@ body.fav-on .favbar { display: flex; }
 .mw-cmd { padding: 2px 8px 8px 40px; font-size: 11px; } .mw-cmd code { color: var(--y); }
 .hold-wf { display: flex; gap: 6px; margin: 4px 0 8px; } .hold-wf button { padding: 4px 12px; border: 1px solid var(--line2); color: var(--muted); }
 .hold-wf button.on { color: var(--text); border-color: var(--y); }
+
+/* 登录遮罩：按钮要有明显的悬停 / 按下 / 检测中反馈；每个钱包一行状态 */
+#loginRecheck { transition: filter .15s, transform .08s, box-shadow .15s; }
+#loginRecheck:hover:not(:disabled) { filter: brightness(1.15); box-shadow: 0 0 0 3px rgba(30, 203, 129, .25), 0 0 18px rgba(30, 203, 129, .35); }
+#loginRecheck:active:not(:disabled) { transform: scale(.97); }
+#loginRecheck:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+#loginRecheck:disabled { opacity: .8; cursor: progress; }
+#loginRecheck .spin { display: inline-block; width: 13px; height: 13px; margin-right: 8px; vertical-align: -2px; border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff; border-radius: 50%; animation: agspin .7s linear infinite; }
+@keyframes agspin { to { transform: rotate(360deg); } }
+.authgate.fade-out { opacity: 0; transition: opacity .35s; }
+.ag-ws { display: grid; gap: 8px; margin: 4px 0 12px -20px; }
+.ag-w { padding: 8px 10px; border: 1px solid var(--line2); background: var(--panel2); }
+.ag-w b { margin-right: 8px; } .ag-w.ok b { color: var(--g); } .ag-w.bad b { color: var(--r); } .ag-w span { color: var(--muted); font-size: 12px; }
+#loginNote.flash { animation: agflash .6s; } @keyframes agflash { from { color: var(--y); } }
