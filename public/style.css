@@ -954,3 +954,8 @@ body.fav-on .favbar { display: flex; }
 .ag-w { padding: 8px 10px; border: 1px solid var(--line2); background: var(--panel2); }
 .ag-w b { margin-right: 8px; } .ag-w.ok b { color: var(--g); } .ag-w.bad b { color: var(--r); } .ag-w span { color: var(--muted); font-size: 12px; }
 #loginNote.flash { animation: agflash .6s; } @keyframes agflash { from { color: var(--y); } }
+.mw-ai { margin-left: 2px; white-space: nowrap; }
+.mw-row b, .mw-row .mono { white-space: nowrap; }
+/* 多钱包菜单：加宽，每个钱包一行不折行 */
+#walletMenu:has(.mw-row) { min-width: 560px; }
+.mw-row > * { white-space: nowrap; }

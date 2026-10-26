@@ -106,13 +106,13 @@ const peerFetch = async (peer, p, body, ms = 2500) => {
 };
 // 其他钱包的 baw 用自己的登录目录 + 自己的设备标识（BINANCE_INSTANCE_ID），避免和钱包 1 的登录互相影响
 const signinCmd = (dir, inst) => (dir ? `BINANCE_BAW_DIR=${dir}${inst ? ` BINANCE_INSTANCE_ID=${inst}` : ''} baw auth signin` : 'baw auth signin');
-const selfInfo = () => ({ slot: WALLET_SLOT, label: WALLET_LABEL, address: trader.wallets?.[0]?.address || null, bnb: trader.wallets?.[0]?.bnb ?? null, auth: trader.status?.auth?.state || 'checking', bawDir: BAW_DIR || null, signin: signinCmd(BAW_DIR, process.env.BINANCE_INSTANCE_ID) });
+const selfInfo = () => ({ slot: WALLET_SLOT, label: WALLET_LABEL, agentId: trader.status?.auth?.agentId || null, address: trader.wallets?.[0]?.address || null, bnb: trader.wallets?.[0]?.bnb ?? null, auth: trader.status?.auth?.state || 'checking', bawDir: BAW_DIR || null, signin: signinCmd(BAW_DIR, process.env.BINANCE_INSTANCE_ID) });
 const walletOn = (slot) => { const v = (trader.settings?.walletOn || {})[slot]; return v === undefined ? slot === WALLET_SLOT : v !== false; };   // 其他钱包默认不参与，要在钱包菜单里打开
 async function walletsView() {
   const out = [{ ...selfInfo(), self: true, reachable: true, on: walletOn(WALLET_SLOT) }];
   for (const p of WALLET_PEERS) {
     let info = null, err = null; try { info = await peerFetch(p, '/api/wallet-info'); } catch (e) { err = e.message; }
-    out.push({ slot: p.slot, label: p.label || info?.label || `钱包 ${p.slot}`, address: info?.address || null, bnb: info?.bnb ?? null, auth: info ? info.auth : 'offline', bawDir: p.bawDir || info?.bawDir || null, signin: p.signin || signinCmd(p.bawDir || info?.bawDir, p.instanceId),   /* WALLET_PEERS 里可以直接写登录命令（比如钱包 2 跑在 Docker 里） */ reachable: !!info, error: err, on: walletOn(p.slot) });
+    out.push({ slot: p.slot, label: p.label || info?.label || `钱包 ${p.slot}`, agentId: info?.agentId || null, address: info?.address || null, bnb: info?.bnb ?? null, auth: info ? info.auth : 'offline', bawDir: p.bawDir || info?.bawDir || null, signin: p.signin || signinCmd(p.bawDir || info?.bawDir, p.instanceId),   /* WALLET_PEERS 里可以直接写登录命令（比如钱包 2 跑在 Docker 里） */ reachable: !!info, error: err, on: walletOn(p.slot) });
   }
   return out;
 }

@@ -376,7 +376,7 @@ function renderTop() {
 function renderWalletMenu() {
   if (MW()) {   // 多钱包：每个钱包一行，「参与下单」开关 + 登录状态 + BNB；没登录的显示登录命令
     $('#walletMenu').innerHTML = S.walletsInfo.map((w) => `<div class="wi mw-row"><label class="tgl" title="参与下单：开着的钱包每次下单都会一起执行"><input type="checkbox" data-mwon="${w.slot}" ${w.on ? 'checked' : ''}/><i></i></label>
-      <b>${esc(w.label)}</b><span class="mono muted">${w.address ? short(w.address, 6, 4) : '—'}</span><span class="spacer"></span><span class="mono">${w.bnb != null ? w.bnb.toFixed(4) + ' BNB' : '—'}</span>
+      <b>${esc(w.label)}</b><span class="mono muted">${w.address ? short(w.address, 6, 4) : '—'}</span>${w.agentId ? `<span class="handle mw-ai">${esc(w.agentId)}</span>` : ''}<span class="spacer"></span><span class="mono">${w.bnb != null ? w.bnb.toFixed(4) + ' BNB' : '—'}</span>
       <span class="${w.auth === 'ok' ? 'g' : w.auth === 'checking' ? 'y' : 'r'}">${w.auth === 'ok' ? '已登录' : w.auth === 'checking' ? '检查中' : w.auth === 'offline' ? '后端未启动' : '未登录'}</span></div>
       ${w.auth !== 'ok' && w.auth !== 'checking' ? `<div class="note mw-cmd">${w.auth === 'offline' ? `这个钱包的后端（${esc(w.error || '')}）没有运行` : '登录：在终端运行'} <code>${esc(w.signin)}</code> <button class="ui-copy" data-agcopy="${esc(w.signin)}">复制</button></div>` : ''}`).join('')
       + `<div class="note" style="padding:6px 8px">开了「参与下单」的钱包同时下单：买入每个钱包各花输入的 BNB；卖出每个钱包卖自己持仓的同样比例。没登录的钱包自动跳过。</div>`;
