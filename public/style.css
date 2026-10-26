@@ -1093,3 +1093,39 @@ body.trkp-on #hold, body.trkp-on #track { margin-left: calc(var(--trkpW, 340px) 
 .mw-chip { position: relative; } .mw-chip.bad { opacity: .55; filter: grayscale(.6); } .mw-chip.busy { opacity: .6; cursor: progress; }
 .mw-chip .mw-ck { font-style: normal; color: var(--g); margin-left: 4px; font-weight: 700; }
 .mw-chip:not(.on) { color: var(--muted); }
+
+/* ================= GMGN 风格配色 + 字体（集中在这里，用变量统一） ================= */
+:root {
+  --bg: #0b0b0f; --panel: #111118; --panel2: #18181f; --line: #1e1e2a; --line2: #2a2a38;
+  --text: #f4f4f6; --muted: #8a8a9a; --dim: #5a5a6a;
+  --g: #22c58b; --g-bg: rgba(34, 197, 139, .13); --r: #f6465d; --r-bg: rgba(246, 70, 93, .14);
+  --y: #f0c419; --y-bg: rgba(240, 196, 25, .14);
+  --card: #1a1544; --card-hover: #211a58; --card-line: #2a2160;          /* 战壕币卡：深紫蓝 */
+  --mc-line: rgba(176, 58, 186, .55); --mc-line-hi: #c24ad0;             /* 卡片右侧 MC 区块：洋红细框 */
+  --pink: #ff5fb7;                                                        /* ⚡ 快买 */
+  --trk-card: #1c1a5c; --trk-card-hover: #252270;                         /* 追踪栏卡片：深靛蓝 */
+  --sans: Inter, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+html, body { font-family: var(--sans); font-variant-numeric: tabular-nums; }
+/* 顶栏：当前页黄色 */
+#viewSw button.active { color: var(--y); }
+/* 战壕：近黑底、深紫蓝卡片、洋红 MC 框、粉色快买 */
+.pulse.trench { background: var(--bg); }
+.tcol { border-right-color: var(--line); } .tch { border-bottom-color: var(--line); } .tch .cnt { color: var(--muted); }
+.pulse.trench .tcard, .pulse.trench .tcard.four, .pulse.trench .tcard.gang { background: var(--card); border-color: var(--card-line); }
+.pulse.trench .tcard:hover { background: var(--card-hover); filter: none; }
+.pulse.trench .tcard.sel { border-color: var(--g); }
+.tc-r { border-color: var(--mc-line); } .tc-r.buyable:hover { border-color: var(--mc-line-hi); }
+.tc-mc span { color: var(--muted); } .tc-mc b { font-size: 14px; color: #fff; }
+.tc-buy, .tlc-buy { color: var(--pink); }
+/* 交易页左栏卡片：同色系 */
+.panel.left .tcard:hover { background: var(--card-hover); }
+/* 钱包追踪栏：深靛蓝卡片 + 左侧黄色竖条、黄色名字、绿 / 红金额、灰色次要信息 */
+.trk-panel .trkp-list { padding: 4px 6px; }
+.trk-panel .trkp-e { background: var(--trk-card); border: 0; border-left: 3px solid var(--y); border-radius: 6px; margin: 4px 0; padding: 7px 10px; }
+.trk-panel .trkp-e:hover { background: var(--trk-card-hover); }
+.trk-panel .trkp-who { color: var(--y); } .trk-panel .trkp-tok b { color: var(--text); }
+.trk-panel .trkp-e .dim, .trk-panel .trkp-e .dim * { color: var(--muted); }
+.trk-panel .trkp-act { border: 0; border-radius: 3px; padding: 0 5px; } .trk-panel .trkp-act.g { background: var(--g-bg); color: var(--g); } .trk-panel .trkp-act.r { background: var(--r-bg); color: var(--r); }
+/* 追踪页动态表的动作也用同样的绿 / 红 */
+.trk-tbl b.g { color: var(--g); } .trk-tbl b.r { color: var(--r); }
