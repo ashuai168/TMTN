@@ -294,3 +294,13 @@ curl -s -X POST http://127.0.0.1:8788/api/order -H 'content-type: application/js
 [MIT](LICENSE) © 2026 0xZhangCrypto1
 
 作者：[𝕏 @0xZhangCrypto1](https://x.com/0xZhangCrypto1)
+
+## Star History
+
+<a href="https://star-history.com/#bnbxcs/TMTN&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=bnbxcs/TMTN&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=bnbxcs/TMTN&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=bnbxcs/TMTN&type=Date" />
+ </picture>
+</a>
