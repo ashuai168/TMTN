@@ -279,8 +279,12 @@ function renderAuth() {
     const on = onWallets(), bad = on.filter((w) => w.auth !== 'ok');
     if (AUTH_OK()) {
       modal.classList.add('hidden');
-      if (bad.length) { pill.classList.add('warn'); pill.querySelector('span').textContent = `${bad.map((w) => w.label).join('、')} 未登录（下单会跳过）`; pill.title = bad.map((w) => `${w.label}：在终端运行 ${w.signin}`).join('\n'); }
-      else { pill.querySelector('span').textContent = `${on.length} 个钱包已登录`; pill.title = on.map((w) => `${w.label} ${w.address || ''}`).join('\n'); }
+      if (bad.length) { pill.classList.add('warn'); pill.querySelector('span').textContent = `${on.length - bad.length}/${on.length} 个钱包已登录 · ${bad.map((w) => w.label).join('、')} ${bad.some((w) => w.auth === 'offline') ? '连不上' : '未登录'}（下单跳过）`; pill.title = bad.map((w) => `${w.label}：在终端运行 ${w.signin}`).join('\n'); }
+      else {
+        const all = S.walletsInfo || [], off = all.filter((w) => !w.on);
+        pill.querySelector('span').textContent = off.length ? `${on.length}/${all.length} 个钱包参与下单` : `${on.length} 个钱包已登录`;
+        pill.title = all.map((w) => `${w.label} ${w.agentId || ''} ${w.address || ''}：${w.auth === 'ok' ? '已登录' : '未登录'}${w.on ? '，参与下单' : '，不参与下单'}`).join('\n');
+      }
       return;
     }
     pill.classList.add('bad'); pill.querySelector('span').textContent = '币安钱包都未登录';
