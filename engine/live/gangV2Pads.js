@@ -9,6 +9,8 @@ import { capFor, capLabel, sendApproval } from './approvals.js';
 import { BNB_NATIVE } from './config.js';
 
 export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
+const USDT = '0x55d398326f99059fF775485246999027B3197955';   // BSC USDT（18 位小数）
+const ONDO_RE = /one side must be a supported stablecoin|Unsupported token pair for Ondo/i;
 const WBNB = '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c';
 const pad = new ethers.Interface([
   'function buy(address token, uint256 quoteIn, uint256 minTokensOut) returns (uint256)',
@@ -63,11 +65,38 @@ export class GangV2 {
   async balanceOf(token, wallet) { return (await this.call(token, erc20, 'balanceOf', [wallet]))[0]; }
   async decimals(token) { return Number((await this.call(token, erc20, 'decimals', []).catch(() => [18n]))[0]); }
 
-  // BNB 金额 → 大约能换到多少报价币（WBNB 1:1，其他用 baw 报价）
+  // 有的报价币（Ondo 代币化股票，如 FXIon）币安只允许和稳定币直接兑换：BNB↔报价币要经过 USDT 两步。按币缓存判断结果
+  async needsUsdt(q) {
+    this.viaUsdt ||= new Map(); const k = String(q).toLowerCase();
+    if (isWbnb(q) || k === USDT.toLowerCase()) return false;
+    if (this.viaUsdt.has(k)) return this.viaUsdt.get(k);
+    try { await baw.marketQuote({ fromTokenQty: '0.01', fromToken: BNB_NATIVE, toToken: q }); this.viaUsdt.set(k, false); return false; }
+    catch (e) { if (ONDO_RE.test(e.message)) { this.viaUsdt.set(k, true); return true; } return false; }   // 其他错误（网络等）不缓存
+  }
+  // 一笔 baw 兑换并等到完成；返回到账数量（按链上余额差）
+  async swapWait({ wallet, from, to, qty, slippage, step, label }) {
+    const t0 = Date.now(), before = to === BNB_NATIVE ? null : await this.balanceOf(to, wallet);
+    const sw = await baw.marketSwap({ fromTokenQty: String(qty), fromToken: from, toToken: to, slippage });
+    if (!sw.orderId) throw new Error(`${label} 没有返回 orderId`);
+    step(`${label} 已提交 ${sw.orderId}`, Date.now() - t0);
+    const o = await baw.pollOrder(sw.orderId);
+    if (o?.status !== 'FINISHED') throw new Error(`${label}${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${sw.orderId}），后续步骤没有执行`);
+    if (before == null) return { o, got: null };
+    let got = 0n; for (let i = 0; i < 10; i++) { got = (await this.balanceOf(to, wallet)) - before; if (got > 0n) break; await sleep(1000); }
+    if (got <= 0n) throw new Error(`${label} 没有到账，停止后续步骤`);
+    return { o, got };
+  }
+
+  // BNB 金额 → 大约能换到多少报价币（WBNB 1:1，其他用 baw 报价；Ondo 类经过 USDT 两步报价）
   async bnbToQuote(q, amountBnb) {
     if (isWbnb(q)) return ethers.parseEther(String(amountBnb));
-    const r = await baw.marketQuote({ fromTokenQty: String(amountBnb), fromToken: BNB_NATIVE, toToken: q });
     const dec = await this.decimals(q);
+    if (await this.needsUsdt(q)) {
+      const u = await baw.marketQuote({ fromTokenQty: String(amountBnb), fromToken: BNB_NATIVE, toToken: USDT });
+      const r = await baw.marketQuote({ fromTokenQty: Number(u?.toCoinAmount || 0).toFixed(6), fromToken: USDT, toToken: q });
+      return ethers.parseUnits(Number(r?.toCoinAmount || 0).toFixed(Math.min(12, dec)), dec);
+    }
+    const r = await baw.marketQuote({ fromTokenQty: String(amountBnb), fromToken: BNB_NATIVE, toToken: q });
     return ethers.parseUnits(Number(r?.toCoinAmount || 0).toFixed(Math.min(12, dec)), dec);
   }
 
@@ -123,7 +152,10 @@ export class GangV2 {
     if (have < need) {
       const before = have; const t0 = Date.now();
       if (isWbnb(q)) hashes.push(await this.send({ wallet, to: WBNB, valueWei: ethers.parseEther(String(amountBnb)), inputData: erc20.encodeFunctionData('deposit', []), label: 'BNB→WBNB 包装', step }));
-      else {
+      else if (await this.needsUsdt(q)) {   // Ondo 类报价币：BNB→USDT→报价币
+        const a = await this.swapWait({ wallet, from: BNB_NATIVE, to: USDT, qty: amountBnb, slippage, step, label: 'BNB→USDT' }); if (a.o.txHash) hashes.push(a.o.txHash);
+        const b = await this.swapWait({ wallet, from: USDT, to: q, qty: ethers.formatUnits(a.got, 18), slippage, step, label: 'USDT→报价币' }); if (b.o.txHash) hashes.push(b.o.txHash);
+      } else {
         const sw = await baw.marketSwap({ fromTokenQty: String(amountBnb), fromToken: BNB_NATIVE, toToken: q, slippage });
         if (!sw.orderId) throw new Error('BNB→报价币兑换没有返回 orderId');
         step(`BNB→报价币 已提交 ${sw.orderId}`, Date.now() - t0);
@@ -161,9 +193,14 @@ export class GangV2 {
     if (isWbnb(q)) { hashes.push(await this.send({ wallet, to: WBNB, inputData: erc20.encodeFunctionData('withdraw', [got]), label: 'WBNB→BNB 解包', step })); return { venue: 'Gang V2 sell → BNB', expected: Number(ethers.formatEther(got)), txHash: hashes.at(-1), hashes }; }
     const dec = await this.decimals(q);
     // 第二步：只换这次卖出实际到账的报价币（链上余额差，整数），失败最多再试 2 次
-    let o = null;
+    let o = null, usdtGot = null;
     for (let k = 0; k < 3; k++) {
-      try { const sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(got, dec), fromToken: q, toToken: BNB_NATIVE, slippage }); o = sw.orderId ? await baw.pollOrder(sw.orderId) : null; } catch (e) { o = { status: 'FAILED', err: e.message }; }
+      try {
+        if (await this.needsUsdt(q)) {   // Ondo 类：报价币→USDT→BNB
+          if (usdtGot == null) { const a = await this.swapWait({ wallet, from: q, to: USDT, qty: ethers.formatUnits(got, dec), slippage, step, label: '报价币→USDT' }); if (a.o.txHash) hashes.push(a.o.txHash); usdtGot = a.got; }   // 只换一次，重试时只重试 USDT→BNB
+          const sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(usdtGot, 18), fromToken: USDT, toToken: BNB_NATIVE, slippage }); o = sw.orderId ? await baw.pollOrder(sw.orderId) : null;
+        } else { const sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(got, dec), fromToken: q, toToken: BNB_NATIVE, slippage }); o = sw.orderId ? await baw.pollOrder(sw.orderId) : null; }
+      } catch (e) { o = { status: 'FAILED', err: e.message }; }
       if (o?.status === 'FINISHED' || (o && o.status !== 'FAILED')) break;
       step(`报价币→BNB 第 ${k + 1} 次没成功${o?.err ? '：' + o.err.slice(0, 60) : ''}，重试`, 0); await sleep(2000 * (k + 1));
     }

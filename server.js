@@ -260,16 +260,16 @@ async function costForPct(q) {
     } catch { /* 读不到上限就按原目标 */ }
   }
   try {
-    let a = 0.01, ok = false;
+    let a = 0.01, ok = false, lastErr = null;
     for (let i = 0; i < 6; i++) {
       const p = await trader.preview({ walletId: q.wallet, token: q.token, side: 'buy', amount: a, slippage: Number(q.slippage || 35) });
-      if (!(p?.out > 0)) break;
+      if (!(p?.out > 0)) { lastErr = p?.error || null; break; }
       ok = true;
       const next = a * target / p.out;
       if (Math.abs(next - a) / a < 0.002) { a = next; break; }
       a = next;
     }
-    if (!ok) return ({ bnb: 0, error: '拿不到报价' });
+    if (!ok) return ({ bnb: 0, error: `拿不到报价${lastErr ? '：' + lastErr : ''}` });
     // 下单前一次性把金额压到能成交的范围：持仓上限 → 单笔上限 → 余额（留 0.002 BNB 付 gas），不让后端先失败再重试
     if (capped) notes.push(asked > 1 && pct >= 0.98 ? `${asked}% 超过单钱包上限 1%，已按 1% 买入` : `${asked}% 超过单钱包剩余额度，已按剩余额度（约 ${pct}%）买入`);
     const maxTrade = LIVE ? Number(trader.status?.maxTradeBnb) || 0 : 0;
