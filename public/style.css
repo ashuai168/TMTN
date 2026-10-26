@@ -23,6 +23,7 @@ input { font: inherit; color: inherit; background: none; border: 0; outline: non
 .topbar { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--line); background: #090c10; }
 .brand { display: flex; align-items: center; gap: 8px; width: 214px; }
 .brand-t { font-weight: var(--fw-strong); font-size: 15px; letter-spacing: .5px; line-height: 1; }
+.brand-v { font-size: 10px; font-weight: var(--fw-strong); color: var(--y); letter-spacing: 0; margin-left: 2px; vertical-align: 1px; }
 .brand-s { font-size: 8.5px; color: var(--y); letter-spacing: 3.2px; margin-top: 3px; font-weight: var(--fw-strong); }
 .search { position: relative; display: flex; align-items: center; gap: 8px; width: 330px; height: 30px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 8px; background: var(--panel); color: var(--muted); }
 .search input { flex: 1; color: var(--text); }
