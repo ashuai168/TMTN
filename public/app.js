@@ -1125,7 +1125,7 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (el.closest('#wchips') && d.w) { S.selWallets.has(d.w) ? S.selWallets.delete(d.w) : S.selWallets.add(d.w); renderRight(); return refreshQuote(); }
-  if (d.a && !el.closest('#platTabs')) { e.preventDefault(); return select(d.a); }
+  if (d.a && !el.closest('#platTabs, #amtMode')) { e.preventDefault(); return select(d.a); }
   if (el.closest('#presets') && d.p) { $('#amount').value = d.p; return refreshQuote(); }
   if (el.closest('#platTabs') && d.p) { S.platform = d.p; $$('#platTabs button').forEach((b) => b.classList.toggle('active', b === el)); syncUrl(); lastList = 0; scheduleRender(); const f = filtered()[0]; if (f && S.tokens.get(S.selected)?.platform !== d.p) select(f.address); return; }
   if (el.closest('#sideTabs')) { S.side = d.s; $$('#sideTabs button').forEach((b) => b.classList.toggle('active', b === el)); $('#amount').value = ''; renderRight(); return refreshQuote(); }
@@ -2499,6 +2499,7 @@ function renderTrkCopy() {
 function copyDialog(task, presetTarget) {
   const p = { maxCopies: 1, mode: 'fixed', amountBnb: 0.01, ratioPct: 10, maxPerTrade: 0.05, maxPerToken: 0.05, dailyCap: 0.2, maxOpen: 5, onlyFirst: true, minTargetBnb: 0, maxTargetBnb: 0, maxMcUsd: 0, platforms: ['flap', 'four', 'gang'], maxDelaySec: 15, slippage: 20, wallets: [1], followSell: false, dryRun: true, ...(task?.params || {}) };
   const ws = (S.walletsInfo?.length ? S.walletsInfo : [{ slot: 1, label: '钱包 1' }]);
+  const one = ws.length === 1;   // 只有一个钱包：不显示多选框，直接用这个钱包
   const num = (k, label, step = '0.01', hint = '') => `<label class="cp-f"><span>${label}</span><input type="number" step="${step}" min="0" data-cp="${k}" value="${p[k]}"/>${hint ? `<i>${hint}</i>` : ''}</label>`;
   const chk = (k, label, hint = '') => `<label class="cp-c"><input type="checkbox" data-cp="${k}" ${p[k] ? 'checked' : ''}/> ${label}${hint ? `<i>${hint}</i>` : ''}</label>`;
   const wrap = document.createElement('div'); wrap.className = 'ui-dlg-back';
@@ -2506,12 +2507,12 @@ function copyDialog(task, presetTarget) {
     ${task ? `<div class="cp-tgt"><b>${esc(task.name)}</b> <span class="mono muted">${short(task.target, 6, 4)}</span></div>` : `<label class="cp-f wide"><span>跟谁</span><select data-cp="target">${TRK.targets.map((t) => `<option value="${t.address}" ${t.address === presetTarget ? 'selected' : ''}>${esc(t.name || t.domain || short(t.address, 6, 4))} · ${short(t.address, 6, 4)}</option>`).join('')}</select><i>先在追踪动态里添加目标</i></label>`}
     <div class="cp-grp"><b>金额</b>
       <label class="cp-f"><span>方式</span><select data-cp="mode"><option value="fixed" ${p.mode === 'fixed' ? 'selected' : ''}>固定金额</option><option value="ratio" ${p.mode === 'ratio' ? 'selected' : ''}>按对方买入的比例</option></select></label>
-      ${num('amountBnb', '每次买入（BNB）', '0.001', '固定金额时用；每个钱包各买这么多')}${num('ratioPct', '跟对方的 %', '1', '比例方式：对方买 1 BNB、填 10 = 买 0.1')}
+      ${num('amountBnb', '每次买入（BNB）', '0.001', one ? '固定金额时用' : '固定金额时用；每个钱包各买这么多')}${num('ratioPct', '跟对方的 %', '1', '比例方式：对方买 1 BNB、填 10 = 买 0.1')}
       ${num('maxCopies', '最多跟单几次', '1', '跟买成功这么多次后自动停止、进「历史」；0 = 不限。模拟和真实分开计数')}${num('maxPerTrade', '单笔上限（BNB）', '0.001', '最高 0.5，另外还受交易设置的单笔上限')}${num('maxPerToken', '每个币最多（BNB）')}${num('dailyCap', '每天合计最多（BNB）')}${num('maxOpen', '最多同时持有几个币', '1')}</div>
     <div class="cp-grp"><b>条件</b>${chk('onlyFirst', '只跟建仓（对方第一次买这个币）', '关掉则加仓也跟')}
       ${num('minTargetBnb', '对方买入至少（BNB）', '0.01', '0 = 不限')}${num('maxTargetBnb', '对方买入最多（BNB）', '0.01', '0 = 不限')}${num('maxMcUsd', '市值最高（美元）', '1000', '0 = 不限')}${num('maxDelaySec', '最多晚几秒', '1', '发现得比这晚就不跟')}${num('slippage', '滑点 %', '1')}
       <div class="cp-row">平台：${['flap', 'four', 'gang'].map((x) => `<label class="cp-c"><input type="checkbox" data-cpplat="${x}" ${p.platforms.includes(x) ? 'checked' : ''}/> ${x === 'flap' ? 'Flap' : x === 'four' ? 'Four' : 'Gang'}</label>`).join('')}</div>
-      <div class="cp-row">用哪些钱包下单（可多选，每个钱包各买一份）：${ws.map((w) => `<label class="cp-c" title="${esc(w.label)} ${w.address || ''}"><input type="checkbox" data-cpw="${w.slot}" ${p.wallets.includes(w.slot) ? 'checked' : ''}/> ${esc(w.agentId || w.label)} <i class="${w.auth === 'ok' || !w.auth ? 'g' : 'r'}">${w.auth === 'ok' || !w.auth ? '已登录' : '未登录'}</i></label>`).join('')}</div>
+      <div class="cp-row">${one ? '下单钱包：' : '用哪些钱包下单（可多选，每个钱包各买一份）：'}${ws.map((w) => `<label class="cp-c" title="${esc(w.label)} ${w.address || ''}"><input type="checkbox" data-cpw="${w.slot}" ${one || p.wallets.includes(w.slot) ? 'checked' : ''} ${one ? 'hidden' : ''}/> ${esc(w.agentId || w.label)} <i class="${w.auth === 'ok' || !w.auth ? 'g' : 'r'}">${w.auth === 'ok' || !w.auth ? '已登录' : '未登录'}</i></label>`).join('')}</div>
       ${chk('followSell', '跟卖：对方卖出时，我们卖出同样比例（默认关）')}</div>
     <div class="cp-grp"><b>运行方式</b>${chk('dryRun', '模拟（只记录会买多少，不真的下单）', '建议先模拟一段时间再关掉')}<div class="ui-note">${task ? '' : '新建的任务是「已暂停」状态，要在列表里点「启动」才会开始。'}</div></div>
     <div class="cp-err r" id="cpErr"></div></div>
