@@ -2,7 +2,8 @@
 // 查到的永久写入本地 data/names.json，重启不丢；查不到的 10 分钟后重查；查询出错不记为"没有"，稍后重试。
 import fs from 'node:fs';
 import { ethers } from 'ethers';
-const FILE = new URL('../../data/names.json', import.meta.url);
+import { dataFile } from './config.js';
+const FILE = dataFile('names.json');
 const RPCS = (process.env.NAME_RPC || 'https://bsc-rpc.publicnode.com,https://bsc.publicnode.com,https://bsc-dataseed.bnbchain.org').split(',');
 const regs = RPCS.map((u) => new ethers.Contract('0x60B9262456dE011F7d15a54CdD8c48bAaa8B022F', ['function handleOf(address) view returns (string)'],
   new ethers.JsonRpcProvider(u, 56, { staticNetwork: true })));

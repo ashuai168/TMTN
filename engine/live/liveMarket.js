@@ -1,7 +1,7 @@
 // 实盘行情适配器：把 Flap Agent Curve Reader + fsi、four.meme Agentic Wallet 专属内盘（链上事件）+ shrine 统一成和模拟盘一样的接口（list / get / detail / 事件）。
 import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
-import { RPC_URL, RPC_LIST, BNB_PRICE_URL } from './config.js';
+import { RPC_URL, RPC_LIST, BNB_PRICE_URL, dataFile } from './config.js';
 import { FailoverProvider, nodeName, PUBLIC_RPC } from './rpc.js';
 import { AgentCurve } from './agentCurve.js';
 import { FourMeme, AGENT_ID_TEMPLATE } from './fourMeme.js';
@@ -14,8 +14,8 @@ import { NameCache } from './names.js';
 import { ShrineFeeds, tokenInfo } from './shrine.js';
 import * as fsi from './fsi.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-const FOUR_REG = new URL('../../data/fourTokens.json', import.meta.url);
-const FLAP_REG = new URL('../../data/flapCreated.json', import.meta.url);
+const FOUR_REG = dataFile('fourTokens.json');
+const FLAP_REG = dataFile('flapCreated.json');
 const BOOT = Date.now();
 
 const MAX = 1000;                      // Flap Agent 曲线市场、持有中 / 收藏的币不参与淘汰，超出时淘汰最老的盘

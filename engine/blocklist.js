@@ -1,7 +1,8 @@
 // 屏蔽列表（全局、存服务器文件，换浏览器 / 重启都在）：按代币地址，或按创建者（开发者）地址
 // 被屏蔽的币：战壕、左侧列表不显示，不响提示音、不弹通知、不自动买；搜索还能找到，持仓照常显示
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-const FILE = new URL('../data/blocklist.json', import.meta.url);
+import { dataFile } from './live/config.js';
+const FILE = dataFile('blocklist.json');
 const lc = (a) => String(a || '').toLowerCase();
 
 export class Blocklist {

@@ -23,3 +23,6 @@ skills-lock.json
 
 # 开源前清理清单（里面列了私人地址，只自己看）
 OPEN_SOURCE_CHECKLIST.md
+
+# 多钱包：其他钱包后端的数据目录
+data-*/

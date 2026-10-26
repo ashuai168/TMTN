@@ -6,7 +6,8 @@
 // - 每次授权记到 data/approvals.json，页面「授权管理」据此读链上额度、提供「撤销」（approve 0，只在本人点击时发送）
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { ethers } from 'ethers';
-const FILE = new URL('../../data/approvals.json', import.meta.url);
+import { dataFile } from './config.js';
+const FILE = dataFile('approvals.json');
 const erc20 = new ethers.Interface(['function balanceOf(address) view returns (uint256)', 'function decimals() view returns (uint8)']);
 const ctx = { trader: null, market: null };
 export function setApprovalCtx(c) { Object.assign(ctx, c); }

@@ -75,6 +75,22 @@ npm run live:8788           # 实盘：真实行情 + baw 真实下单（只有�
 
 然后打开 `http://127.0.0.1:8787` 或 `http://127.0.0.1:8788`。服务只监听本机。
 
+### 多钱包同时下单（可选）
+
+每个币安 Agentic 钱包跑一个独立的后端：各自的 baw 登录目录（`BINANCE_BAW_DIR`）、设备标识（`BINANCE_INSTANCE_ID`）、数据目录（`DATA_DIR`），设置、授权、自动转出都分开（第二个钱包的自动转出默认关闭）。主后端（钱包 1）在 `.env` 里登记其他钱包：
+
+```bash
+WALLET_LABEL=钱包 1
+WALLET_PEERS=[{"slot":2,"label":"钱包 2","url":"http://127.0.0.1:8789","bawDir":"~/.baw-wallet2","instanceId":"tmtn-wallet2"}]
+```
+
+```bash
+BINANCE_BAW_DIR=~/.baw-wallet2 BINANCE_INSTANCE_ID=tmtn-wallet2 baw auth signin   # 用第二个币安账号登录钱包 2
+npm run live:wallet2                                                            # 启动钱包 2 的后端（8789，行情只用公共节点）
+```
+
+页面右上角的钱包菜单里打开钱包 2 的「参与下单」后：买入时每个钱包各花输入的 BNB；卖出时每个钱包卖自己持仓的同样比例；两个钱包并行执行，结果分别提示。没登录 / 后端没启动的钱包自动跳过。持仓页可以看全部钱包合并，或者只看某一个钱包。
+
 ### 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -98,6 +114,9 @@ npm run live:8788           # 实盘：真实行情 + baw 真实下单（只有�
 | `WALLET_LABEL` | `币安 Agentic 钱包` | 页面上显示的钱包名 |
 | `OPENFOUR_SCRIPT` | （自动查找） | Four 技能脚本路径 |
 | `AUTH_SIMULATE_LOGGED_OUT` | `0` | 调试：假装未登录 |
+| `DATA_DIR` | `data/` | 数据目录（多钱包时每个后端各用一个） |
+| `WALLET_SLOT` / `WALLET_PEERS` | `1` / `[]` | 多钱包：本后端是第几个钱包 / 一起下单的其他钱包后端 |
+| `FEEDS_PUBLIC` | `0` | `1` = 行情订阅只用公共节点（第二个钱包的后端用，省 NodeReal 额度） |
 | `NAME_RPC` | publicnode / bnbchain（逗号分隔） | 解析 `.ai` 域名用的 RPC |
 | `BSC_TESTNET_RPC` | `https://data-seed-prebsc-1-s1.bnbchain.org:8545` | 测试网 RPC（模拟 / 测试网钱包用） |
 | `BSC_WSS` | `wss://bsc-rpc.publicnode.com` | 只给 `scripts/watch-four.js` 用的 WebSocket 节点 |

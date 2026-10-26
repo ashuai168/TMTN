@@ -3,14 +3,14 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { PREAPPROVE, QUOTE_TOKENS } from './config.js';
+import { PREAPPROVE, QUOTE_TOKENS, dataFile } from './config.js';
 import { setApprovalCtx, capFor, capLabel, sendApproval, listApprovals } from './approvals.js';
 import { DRY_RUN, AUTH_SIMULATE_LOGGED_OUT, MAX_TRADE_BNB, LIVE_SETTINGS_FILE, BNB_NATIVE, BINANCE_CHAIN_ID, WALLET_LABEL, AUTO_TRANSFER_TO, AUTO_TRANSFER_FOUR } from './config.js';
-const AT_FILE = new URL('../../data/autoTransfer.json', import.meta.url);
-const RULE_FILE = new URL('../../data/tokenRules.json', import.meta.url);
+const AT_FILE = dataFile('autoTransfer.json');
+const RULE_FILE = dataFile('tokenRules.json');
 import * as baw from './baw.js';
 import { ethers } from 'ethers';
-const POS_FILE = new URL('../../data/positions.json', import.meta.url);
+const POS_FILE = dataFile('positions.json');
 import { Portal } from './portal.js';
 import * as openFour from './openFour.js';
 import { GangTrade } from './gangTrade.js';

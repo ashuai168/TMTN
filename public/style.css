@@ -934,3 +934,9 @@ body.fav-on .favbar { display: flex; }
 
 /* 顶栏状态：红点（断开） */
 .dot.r { background: var(--r); box-shadow: 0 0 6px var(--r); }
+
+/* 多钱包 */
+.mw-row { display: flex; align-items: center; gap: 8px; }
+.mw-cmd { padding: 2px 8px 8px 40px; font-size: 11px; } .mw-cmd code { color: var(--y); }
+.hold-wf { display: flex; gap: 6px; margin: 4px 0 8px; } .hold-wf button { padding: 4px 12px; border: 1px solid var(--line2); color: var(--muted); }
+.hold-wf button.on { color: var(--text); border-color: var(--y); }

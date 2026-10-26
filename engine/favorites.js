@@ -1,6 +1,7 @@
 // 收藏（参考 GMGN）：代币按分组收藏，存服务器 data/favorites.json，换浏览器也在
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-const FILE = new URL('../data/favorites.json', import.meta.url);
+import { dataFile } from './live/config.js';
+const FILE = dataFile('favorites.json');
 const lc = (a) => String(a || '').toLowerCase();
 const okAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || ''));
 const okName = (g) => { const s = String(g || '').trim().slice(0, 20); if (!s) throw new Error('分组名不能为空'); return s; };

@@ -10,7 +10,7 @@ import { SimTrader, GAS_PRESETS } from './engine/trader.js';
 import { Agent } from './engine/agent.js';
 import { Blocklist } from './engine/blocklist.js';
 import { Favorites } from './engine/favorites.js';
-import { MODE, LIVE_TRADE } from './engine/live/config.js';
+import { MODE, LIVE_TRADE, WALLET_SLOT, WALLET_PEERS, BAW_DIR, WALLET_LABEL } from './engine/live/config.js';
 import * as latency from './engine/live/latency.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,7 +77,7 @@ app.use(express.json());
 // 强制登录：实盘模式下币安钱包未登录时，所有动用资金的接口一律拒绝（买卖、兑换、换回 BNB、领取、撤销授权、单币转出规则）
 const AUTH_GATED = new Set(['/api/order', '/api/swap', '/api/quote-to-bnb', '/api/claim', '/api/approvals/revoke', '/api/token-rules']);
 app.use((req, res, next) => {
-  if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });
+  if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && !(req.path === '/api/order' && WALLET_PEERS.length) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });   // 多钱包时下单按钱包分别处理（未登录的跳过）
   next();
 });
 app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));   // 每次都向服务器确认有没有更新（没变就 304），避免浏览器一直用旧的 app.js / style.css
@@ -93,20 +93,57 @@ app.post('/api/auth/login', async (req, res) => { try { res.json(LIVE ? await tr
 app.post('/api/auth/check', async (req, res) => res.json(LIVE ? await trader.checkAuth() : null));
 setTimeout(() => { for (const o of [...trader.orders].reverse()) latency.record(o); }, 5000);   // 启动时把内存里已有订单补记一次（按 id/tx 去重）
 app.get('/api/latency-stats', (req, res) => res.json(latency.stats(Math.max(0.01, Number(req.query.days) || 1))));
-app.get('/api/state', (req, res) => res.json({ ...state(), holdings: holdSnap, orders: trader.orders.slice(0, 100), logs: agent.logs.slice(0, 150), records: agent.records, flow: market.named ? market.named(market.flow.slice(0, 80)) : market.flow.slice(0, 80) }));
+app.get('/api/state', (req, res) => res.json({ ...state(), holdings: holdView || holdSnap, orders: trader.orders.slice(0, 100), logs: agent.logs.slice(0, 150), records: agent.records, flow: market.named ? market.named(market.flow.slice(0, 80)) : market.flow.slice(0, 80) }));
 // 持仓快照：后台每 5 秒算一次（下单 / 领取 / 转账结束后立刻再算），通过 WebSocket 推给页面、也放进 /api/state，
 // 页面打开详情时直接用快照，不再每次现算（现算要读钱包历史和链上报价，慢）
-let holdSnap = null, holdBusy = false, holdAgain = false;
+let holdSnap = null, holdView = null, holdBusy = false, holdAgain = false;   // holdSnap：本钱包；holdView：多钱包时合并后的（给页面）
+// ---------- 多钱包（同时下单）----------
+// 每个钱包是一个独立的后端（各自的 baw 登录目录 BINANCE_BAW_DIR、数据目录 DATA_DIR、设置 / 授权 / 自动转出）。
+// 主后端（钱包 1）在 WALLET_PEERS 里登记其他钱包的后端地址；页面上的一笔订单由主后端同时发给所有「参与下单」的钱包。
+const peerFetch = async (peer, p, body, ms = 2500) => {
+  const r = await fetch(peer.url.replace(/\/$/, '') + p, { method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(ms) });
+  const j = await r.json().catch(() => null); if (!r.ok) throw Object.assign(new Error(j?.error || `HTTP ${r.status}`), { status: r.status }); return j;
+};
+// 其他钱包的 baw 用自己的登录目录 + 自己的设备标识（BINANCE_INSTANCE_ID），避免和钱包 1 的登录互相影响
+const signinCmd = (dir, inst) => (dir ? `BINANCE_BAW_DIR=${dir}${inst ? ` BINANCE_INSTANCE_ID=${inst}` : ''} baw auth signin` : 'baw auth signin');
+const selfInfo = () => ({ slot: WALLET_SLOT, label: WALLET_LABEL, address: trader.wallets?.[0]?.address || null, bnb: trader.wallets?.[0]?.bnb ?? null, auth: trader.status?.auth?.state || 'checking', bawDir: BAW_DIR || null, signin: signinCmd(BAW_DIR, process.env.BINANCE_INSTANCE_ID) });
+const walletOn = (slot) => { const v = (trader.settings?.walletOn || {})[slot]; return v === undefined ? slot === WALLET_SLOT : v !== false; };   // 其他钱包默认不参与，要在钱包菜单里打开
+async function walletsView() {
+  const out = [{ ...selfInfo(), self: true, reachable: true, on: walletOn(WALLET_SLOT) }];
+  for (const p of WALLET_PEERS) {
+    let info = null, err = null; try { info = await peerFetch(p, '/api/wallet-info'); } catch (e) { err = e.message; }
+    out.push({ slot: p.slot, label: p.label || info?.label || `钱包 ${p.slot}`, address: info?.address || null, bnb: info?.bnb ?? null, auth: info ? info.auth : 'offline', bawDir: p.bawDir || info?.bawDir || null, signin: signinCmd(p.bawDir || info?.bawDir, p.instanceId), reachable: !!info, error: err, on: walletOn(p.slot) });
+  }
+  return out;
+}
+// 持仓合并：同一个币各钱包的数量 / 市值 / 成本 / 已卖出 / 盈亏相加，byWallet 里留每个钱包自己的；wallets 里留每个钱包完整的持仓（页面可按钱包筛选）
+async function mergeHoldings(own) {
+  if (!WALLET_PEERS.length || !own) return own;
+  const parts = [{ slot: WALLET_SLOT, label: WALLET_LABEL, snap: own }];
+  for (const p of WALLET_PEERS) { try { const s = await peerFetch(p, '/api/holdings?own=1'); if (s?.rows) parts.push({ slot: p.slot, label: p.label || `钱包 ${p.slot}`, snap: s }); } catch { /* 这个钱包暂时连不上就先不算 */ } }
+  const by = new Map(), sumK = ['amount', 'valueBnb', 'valueUsd', 'costBnb', 'soldBnb', 'costUsd', 'soldUsd', 'pnlBnb', 'pnlUsd'];
+  for (const part of parts) for (const r of part.snap.rows || []) {
+    const k = String(r.token).toLowerCase(), cur = by.get(k);
+    const mine = { slot: part.slot, label: part.label, amount: r.amount, valueUsd: r.valueUsd, costUsd: r.costUsd, soldUsd: r.soldUsd, pnlUsd: r.pnlUsd };
+    if (!cur) { by.set(k, { ...r, byWallet: [mine] }); continue; }
+    for (const f of sumK) if (r[f] != null) cur[f] = (cur[f] || 0) + r[f];
+    cur.byWallet.push(mine); cur.firstAt = Math.min(cur.firstAt || Infinity, r.firstAt || Infinity);
+    cur.trades = [...(cur.trades || []), ...(r.trades || [])].sort((a, b) => b.ts - a.ts);
+  }
+  const rows = [...by.values()].map((r) => ({ ...r, pnlPct: r.costUsd > 0 && r.pnlUsd != null ? (r.pnlUsd / r.costUsd) * 100 : r.pnlPct }));
+  const totals = {}; for (const part of parts) for (const [k, v] of Object.entries(part.snap.totals || {})) if (typeof v === 'number') totals[k] = (totals[k] || 0) + v;
+  return { ...own, rows, totals, bnb: parts.reduce((a, x) => a + (x.snap.bnb || 0), 0), wallets: parts.map((x) => ({ slot: x.slot, label: x.label, rows: x.snap.rows, totals: x.snap.totals, bnb: x.snap.bnb })) };
+}
 async function refreshHoldSnap() {
   if (!holdings) return; if (holdBusy) { holdAgain = true; return; } holdBusy = true;
-  try { holdSnap = await holdings.view(); broadcast({ type: 'holdings', data: holdSnap }); } catch { /* 下次再算 */ }
+  try { holdSnap = await holdings.view(); holdView = await mergeHoldings(holdSnap); broadcast({ type: 'holdings', data: holdView }); } catch { /* 下次再算 */ }
   holdBusy = false; if (holdAgain) { holdAgain = false; setTimeout(refreshHoldSnap, 200); }
 }
 if (holdings) { setTimeout(refreshHoldSnap, 3000); setInterval(refreshHoldSnap, 5000); }
 app.get('/api/holdings', async (req, res) => {
   if (!holdings) return res.json({ rows: [], totals: {}, bnb: 0 });
-  if (req.query.refresh) { trader.syncAt = 0; await trader.refreshBalance?.().catch(() => {}); await trader.syncHoldings?.().catch(() => {}); await holdings.loadHistory(true).catch(() => {}); holdSnap = await holdings.view(); broadcast({ type: 'holdings', data: holdSnap }); return res.json(holdSnap); }
-  res.json(holdSnap || await holdings.view());
+  if (req.query.refresh) { trader.syncAt = 0; await trader.refreshBalance?.().catch(() => {}); await trader.syncHoldings?.().catch(() => {}); await holdings.loadHistory(true).catch(() => {}); holdSnap = await holdings.view(); holdView = await mergeHoldings(holdSnap); broadcast({ type: 'holdings', data: holdView }); return res.json(req.query.own ? holdSnap : holdView); }
+  res.json(req.query.own ? holdSnap || await holdings.view() : holdView || holdSnap || await holdings.view());   // own=1：只要本钱包的（其他后端合并时用）
 });
 // 计价币余额与一键换回 BNB（只在点击后执行；先 preview 给确认框看报价）
 app.get('/api/quote-balances', async (req, res) => { if (!LIVE) return res.json([]); try { res.json(await trader.quoteBalances()); } catch (e) { res.status(500).json({ error: e.message }); } });
@@ -115,6 +152,15 @@ app.post('/api/quote-to-bnb', async (req, res) => { if (!LIVE) return res.status
 app.get('/api/trades/:token', async (req, res) => { try { const v = LIVE ? await market.tradesPage(req.params.token, Number(req.query.before) || 0, Math.min(500, Number(req.query.limit) || 100)) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/trader/:token/:addr', async (req, res) => { try { const v = LIVE ? await market.traderStats(req.params.token, req.params.addr) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/rpc-usage', (req, res) => res.json(rpcUsageLog));
+app.get('/api/wallet-info', (req, res) => res.json(LIVE ? selfInfo() : null));
+app.get('/api/wallets', async (req, res) => res.json(LIVE ? await walletsView() : []));
+app.post('/api/wallets', (req, res) => {   // 某个钱包是否「参与下单」（存在主后端的设置里）
+  if (!LIVE) return res.status(400).json({ error: '只有实盘可用' });
+  const slot = Number(req.body?.slot); if (!slot) return res.status(400).json({ error: '缺少 slot' });
+  trader.settings.walletOn = { ...(trader.settings.walletOn || {}), [slot]: req.body.on !== false }; trader.saveSetting('walletOn', trader.settings.walletOn);
+  walletsView().then((v) => { broadcast({ type: 'wallets', data: v }); res.json(v); });
+});
+if (LIVE && WALLET_PEERS.length) setInterval(() => walletsView().then((v) => broadcast({ type: 'wallets', data: v })).catch(() => {}), 10_000);
 app.get('/api/lookup/:a', async (req, res) => {
   // 搜索：最多等 1.5 秒（链上查 Four 盘）；查不到 = 不是本终端跟踪的内盘（外盘 / 已毕业 / 其他平台），页面改为打开 GMGN
   const t = LIVE ? await Promise.race([market.lookup(req.params.a).catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]) : (market.get(req.params.a) ? market.summary(market.get(req.params.a)) : null);
@@ -237,8 +283,22 @@ app.get('/api/cost-for-pct', async (req, res) => {
 app.post('/api/order', async (req, res) => {
   const { wallets = ['big'], token, side, amount, slippage, via, clientTs } = req.body;
   try {
-    const out = await Promise.all(wallets.map((w) => trader.execute({ walletId: w, token, side, amount, slippage, source: '手动', via: via === 'quick' ? 'quick' : null, clientTs: Number(clientTs) || null })));
-    res.json(out);
+    if (LIVE && token && !market.get(token)) await market.lookup(token).catch(() => null);   // 本后端还没收录这个币（多钱包时第二个后端可能会这样）
+    const local = () => Promise.all(wallets.map((w) => trader.execute({ walletId: w, token, side, amount, slippage, source: '手动', via: via === 'quick' ? 'quick' : null, clientTs: Number(clientTs) || null })));
+    if (!LIVE || !WALLET_PEERS.length) return res.json(await local());
+    // 多钱包：所有「参与下单」的钱包同时执行（买入 = 每个钱包各买 amount BNB；卖出 = 每个钱包卖自己持仓的 amount%）。未登录 / 连不上的跳过，其他照常
+    const t = market.get(token), sym = t?.symbol || '';
+    const skip = (slot, label, reason) => { const o = { id: `w${slot}-skip-${Date.now()}`, ts: Date.now(), wallet: label, walletSlot: slot, token, symbol: sym, side, amount, status: 'failed', reason: `${label}：${reason}，已跳过` }; broadcast({ type: 'order', data: o }); return [o]; };
+    const jobs = [];
+    if (walletOn(WALLET_SLOT)) jobs.push(trader.status?.auth?.state === 'ok' ? local().then((r) => r.map((o) => ({ ...o, walletSlot: WALLET_SLOT }))) : Promise.resolve(skip(WALLET_SLOT, WALLET_LABEL, '币安钱包未登录')));
+    for (const p of WALLET_PEERS) {
+      if (!walletOn(p.slot)) continue; const label = p.label || `钱包 ${p.slot}`;
+      jobs.push(peerFetch(p, '/api/order', { wallets: ['baw'], token, side, amount, slippage, via, clientTs }, 200_000)
+        .then((r) => (r || []).map((o) => { const x = { ...o, id: `w${p.slot}-${o.id}`, wallet: label, walletSlot: p.slot }; broadcast({ type: 'order', data: x }); return x; }))
+        .catch((e) => skip(p.slot, label, e.status === 401 ? '币安钱包未登录' : `后端连不上（${e.message}）`)));
+    }
+    if (!jobs.length) return res.status(400).json({ error: '没有开启「参与下单」的钱包' });
+    res.json((await Promise.all(jobs)).flat());
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
 

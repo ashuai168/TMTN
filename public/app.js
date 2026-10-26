@@ -17,7 +17,10 @@ const S = {
 };
 const LIVE = () => S.mode === 'live';
 const REAL = () => LIVE() && S.baw?.dryRun === false;   // LIVE_TRADE=1：手动订单会真实上链
-const AUTH_OK = () => !LIVE() || S.baw?.auth?.state === 'ok';
+// 多钱包（同时下单）：S.walletsInfo = 主后端 /api/wallets 给的每个钱包（slot、标签、地址、BNB、登录状态、是否参与下单、登录命令）
+const MW = () => LIVE() && (S.walletsInfo || []).length > 1;
+const onWallets = () => (S.walletsInfo || []).filter((w) => w.on);
+const AUTH_OK = () => !LIVE() || (MW() ? onWallets().some((w) => w.auth === 'ok') : S.baw?.auth?.state === 'ok');
 
 /* ---------- 格式化 ---------- */
 function sub(x, sig = 4) {
@@ -137,6 +140,7 @@ function onMsg({ type, data, full }) {
       S.flow.unshift(data); if (S.flow.length > 150) S.flow.length = 150;
       if (S.bottomTab === 'flow') scheduleBottom();
       break;
+    case 'wallets': { S.walletsInfo = data; renderAuth(); scheduleRender(); break; }
     case 'order': {
       if (['filled', 'failed', 'unknown'].includes(data.status)) window.dispatchEvent(new Event('order-done'));
       const i = S.orders.findIndex((o) => o.id === data.id); i >= 0 ? (S.orders[i] = data) : S.orders.unshift(data);
@@ -271,6 +275,23 @@ function renderAuth() {
   const pill = $('#authPill'), modal = $('#loginModal'), a = S.baw?.auth;
   if (!LIVE() || !a) { pill.classList.add('hidden'); modal.classList.add('hidden'); return; }
   pill.classList.remove('hidden', 'bad', 'warn');
+  if (MW()) {   // 多钱包：只要有一个「参与下单」的钱包已登录就能用；没登录的在顶栏黄色提示、下单时跳过
+    const on = onWallets(), bad = on.filter((w) => w.auth !== 'ok');
+    if (AUTH_OK()) {
+      modal.classList.add('hidden');
+      if (bad.length) { pill.classList.add('warn'); pill.querySelector('span').textContent = `${bad.map((w) => w.label).join('、')} 未登录（下单会跳过）`; pill.title = bad.map((w) => `${w.label}：在终端运行 ${w.signin}`).join('\n'); }
+      else { pill.querySelector('span').textContent = `${on.length} 个钱包已登录`; pill.title = on.map((w) => `${w.label} ${w.address || ''}`).join('\n'); }
+      return;
+    }
+    pill.classList.add('bad'); pill.querySelector('span').textContent = '币安钱包都未登录';
+    modal.classList.remove('hidden');
+    const k = 'mw|' + on.map((w) => w.slot + w.auth).join(','); if (modal.dataset.k === k) return; modal.dataset.k = k;
+    const cmd = (c) => `<div class="ag-cmd"><code>${esc(c)}</code><button class="ui-copy" data-agcopy="${esc(c)}">复制</button></div>`;
+    $('#loginLead').innerHTML = '参与下单的币安钱包<b class="r">都没有登录</b>（或登录已过期）。至少登录一个才能使用。';
+    $('#loginBody').innerHTML = on.map((w) => `<li><b>${esc(w.label)}</b>：在终端运行 ${cmd(w.signin)}</li>`).join('') + '<li>打开终端里给出的链接 / 二维码，在<b>币安 App</b> 中确认登录（每个钱包用自己的币安账号）</li><li>回到这里点「我已登录，重新检测」（每 10 秒也会自动检测）</li>';
+    $('#loginNote').textContent = '';
+    return;
+  }
   if (a.state === 'ok') { pill.querySelector('span').textContent = '币安钱包已登录'; pill.title = `${a.agentId || ''} ${a.address || ''}`.trim(); modal.classList.add('hidden'); return; }
   pill.classList.add(a.state === 'checking' ? 'warn' : 'bad');
   pill.querySelector('span').textContent = a.state === 'checking' ? '检查登录中…' : '币安钱包未登录';
@@ -339,6 +360,14 @@ function renderTop() {
 }
 
 function renderWalletMenu() {
+  if (MW()) {   // 多钱包：每个钱包一行，「参与下单」开关 + 登录状态 + BNB；没登录的显示登录命令
+    $('#walletMenu').innerHTML = S.walletsInfo.map((w) => `<div class="wi mw-row"><label class="tgl" title="参与下单：开着的钱包每次下单都会一起执行"><input type="checkbox" data-mwon="${w.slot}" ${w.on ? 'checked' : ''}/><i></i></label>
+      <b>${esc(w.label)}</b><span class="mono muted">${w.address ? short(w.address, 6, 4) : '—'}</span><span class="spacer"></span><span class="mono">${w.bnb != null ? w.bnb.toFixed(4) + ' BNB' : '—'}</span>
+      <span class="${w.auth === 'ok' ? 'g' : w.auth === 'checking' ? 'y' : 'r'}">${w.auth === 'ok' ? '已登录' : w.auth === 'checking' ? '检查中' : w.auth === 'offline' ? '后端未启动' : '未登录'}</span></div>
+      ${w.auth !== 'ok' && w.auth !== 'checking' ? `<div class="note mw-cmd">${w.auth === 'offline' ? `这个钱包的后端（${esc(w.error || '')}）没有运行` : '登录：在终端运行'} <code>${esc(w.signin)}</code> <button class="ui-copy" data-agcopy="${esc(w.signin)}">复制</button></div>` : ''}`).join('')
+      + `<div class="note" style="padding:6px 8px">开了「参与下单」的钱包同时下单：买入每个钱包各花输入的 BNB；卖出每个钱包卖自己持仓的同样比例。没登录的钱包自动跳过。</div>`;
+    return;
+  }
   $('#walletMenu').innerHTML = S.wallets.map((w) => `<div class="wi" data-w="${w.id}"><i class="wav" style="background:${w.color}"></i><b>${w.label}</b><span class="mono muted">${short(w.address)}</span><span class="spacer"></span><span class="mono">${w.bnb.toFixed(4)}</span></div>`).join('')
     + (LIVE() ? `<div class="note" style="padding:6px 8px">币安 Agentic Wallet（baw）。${S.baw?.connected ? (REAL() ? `已连接，手动买卖会真实上链（单笔上限 ${S.baw.maxTradeBnb || '不限'} BNB）。` : '已连接，只读余额和报价。') : esc(S.baw?.error || '未连接')}</div>`
       : '<div class="note" style="padding:6px 8px">模拟钱包。私钥不存在于本程序中，所有成交仅在本地撮合。</div>');
@@ -677,6 +706,10 @@ function renderRight() {
   const gangOnly = false;   // Gang V2 报价币盘也能下单了（BNB→报价币→buy，非原子）
   btn.disabled = !t || !n || t.stage === 'rugged' || (REAL() && !AUTH_OK()) || gangOnly;
   if (REAL() && !AUTH_OK() && t) btn.textContent = '币安钱包未登录，不能下单';
+  else if (REAL() && t && MW()) {   // 多钱包：按钮上写明几个钱包一起下单；买入时写总金额
+    const k = onWallets().filter((w) => w.auth === 'ok').length, a = buy && S.amtMode !== 'pct' ? parseFloat($('#amount')?.value) : NaN;
+    if (k > 1) btn.textContent += buy && a > 0 ? ` · ${a} BNB ×${k} = ${+(a * k).toFixed(6)} BNB` : ` · ${k} 个钱包`;
+  }
   $('#fastMode').checked = !!S.fast; $('#autoClaim').checked = S.settings.autoClaim !== false; $('#sellToBnb').checked = S.settings.sellToBnb !== false; $('#preApproveCap').checked = S.settings.preApproveCap !== false;
   renderAutoSend();
   renderMyPos(t); renderInfo(t);
@@ -1132,6 +1165,8 @@ function openSettings() { S.settingsPlat = S.platform; renderSettings(); $('#set
 $('#btnSound').addEventListener('click', () => patchCfg('sound', !S.config.sound));
 $('#btnBell').addEventListener('click', () => { if (!S.config.notify && window.Notification) Notification.requestPermission(); patchCfg('notify', !S.config.notify); });
 $('#quickBuy').addEventListener('change', (e) => { const v = +e.target.value; if (v > 0) patchCfg('quickBuy', v); lastList = 0; });
+$('#walletMenu').addEventListener('change', async (e) => { const c = e.target.closest('[data-mwon]'); if (!c) return; try { S.walletsInfo = await api('/api/wallets', { slot: Number(c.dataset.mwon), on: c.checked }); renderWalletMenu(); renderAuth(); scheduleRender(); } catch (err) { toast({ status: 'failed', symbol: '钱包', reason: err.message }); } });
+$('#walletMenu').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; e.stopPropagation(); try { await navigator.clipboard.writeText(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } });
 $('#walletSel').addEventListener('click', (e) => { if (e.target.closest('#walletMenu')) return; renderWalletMenu(); $('#walletMenu').classList.toggle('hidden'); });
 $$('.modal').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m) m.classList.add('hidden'); }));
 
@@ -1671,6 +1706,7 @@ document.addEventListener('click', (e) => {
   renderControls(); renderAutoSend(); pickDefault(); connect(); renderBottom();
   if (LIVE()) api('/api/token-rules').then((r) => { S.rules = r || {}; scheduleRender(); }).catch(() => {});
   renderFavBar(); api('/api/favorites').then(setFav).catch(() => {});
+  if (LIVE()) api('/api/wallets').then((v) => { S.walletsInfo = v; renderAuth(); scheduleRender(); }).catch(() => {});   // 多钱包状态（之后每 10 秒通过 WS 推送）
   api('/api/blocklist').then(async (b) => { S.blk = b; afterBlock(); await migrateHidden(); }).catch(() => {});
   setInterval(() => { if (S.bottomTab === 'logs' || S.bottomTab === 'flow') return; renderBottom(); }, 2000);
 })();
@@ -1788,7 +1824,12 @@ const usdTip = (r) => (r.usdBasis === 'trade' ? '美元按每笔成交当时的 
 const ago = (ts) => { if (!ts) return '—'; const s = (Date.now() - ts) / 1000; return s < 3600 ? Math.round(s / 60) + ' 分钟' : s < 86400 ? (s / 3600).toFixed(1) + ' 小时' : (s / 86400).toFixed(1) + ' 天'; };
 function renderHold() {
   if (S.view === 'hold' && LIVE() && !$('#holdSwap').dataset.ready) swLoadInfo();
-  const d = HOLD.data; if (!d || S.view !== 'hold') return;
+  const d0 = HOLD.data; if (!d0 || S.view !== 'hold') return;
+  // 多钱包：全部（合并） / 某一个钱包
+  const ws = d0.wallets || [], wsel = ws.find((w) => w.slot === HOLD.wslot);
+  const d = wsel ? { ...d0, rows: wsel.rows || [], totals: wsel.totals || {}, bnb: wsel.bnb } : d0;
+  let wf = $('#holdWallets'); if (!wf && ws.length > 1) { wf = document.createElement('div'); wf.id = 'holdWallets'; wf.className = 'hold-wf'; $('#holdTot').before(wf); wf.addEventListener('click', (e) => { const b = e.target.closest('[data-hw]'); if (!b) return; HOLD.wslot = Number(b.dataset.hw) || 0; renderHold(); }); }
+  if (wf) wf.innerHTML = ws.length > 1 ? [{ slot: 0, label: '全部钱包' }, ...ws].map((w) => `<button class="${(HOLD.wslot || 0) === w.slot ? 'on' : ''}" data-hw="${w.slot}">${esc(w.label)}</button>`).join('') : '';
   const dust = $('#holdDust').checked;
   $$('#holdPlats [data-hp]').forEach((c) => c.classList.toggle('off', !HOLD.plats.has(c.dataset.hp)));
   const rows = d.rows.filter((r) => HOLD.plats.has(r.platform === 'four' || r.platform === 'gang' ? r.platform : 'flap') && (!dust || (r.amount > 0 && r.valueBnb >= 0.0005) || r.stage === 'claim'));
