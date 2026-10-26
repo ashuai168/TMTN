@@ -3,6 +3,7 @@
 import { execFile } from 'node:child_process';
 import { ethers } from 'ethers';
 import { BAW_BIN, BINANCE_CHAIN_ID, BAW_SLIPPAGE_UNIT, DRY_RUN, AUTO_TRANSFER_TO } from './config.js';
+import { assertLiquid, isQuoteToken } from './quoteRoutes.js';
 
 export function assertAddress(a, name = 'address') {
   if (!a || !ethers.isAddress(String(a))) throw new Error(`invalid_${name}`);
@@ -59,8 +60,8 @@ export async function walletBalance({ tokenAddress } = {}) {
 }
 
 export async function marketQuote({ fromTokenQty, fromToken, toToken, slippage }) {
-  const { assertLiquid } = await import('./quoteRoutes.js');   // 报价时就把「池子太小」的原因告诉页面，不等到下单
-  for (const tk of [fromToken, toToken]) if (!DEEP.has(String(tk).toLowerCase())) await assertLiquid(tk);
+  // 报价时就把「池子太小」的原因告诉页面，不等到下单。只检查计价币：普通代币（比如发射后在外盘卖出的持仓）不检查，池子再小也要能卖
+  for (const tk of [fromToken, toToken]) if (!DEEP.has(String(tk).toLowerCase()) && isQuoteToken(tk)) await assertLiquid(tk);
   const args = ['market-order', 'quote', '--fromTokenQty', String(fromTokenQty), '--fromToken', assertAddress(fromToken, 'fromToken'),
     '--toToken', assertAddress(toToken, 'toToken'), '--binanceChainId', String(BINANCE_CHAIN_ID)];
   if (slippage != null) args.push('--slippage', slip(slippage));
@@ -89,9 +90,9 @@ export async function contractCall({ from, to, valueWei = '0', inputData }) {
 
 const DEEP = new Set(['0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee', '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', '0x55d398326f99059ff775485246999027b3197955', '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', '0x8d0d000ee44948fc98c9b98a4fa4921476f08b0d']);   // BNB、WBNB、USDT、USDC、USD1
 export async function marketSwap({ fromTokenQty, fromToken, toToken, slippage, mev = false, gasLevel = 'HIGH' }) {
-  // 计价币兑换前检查流动性：最深的池子太小（低于 QUOTE_MIN_LIQ_USD，默认 $20,000）就拒绝，避免在小池子里吃大滑点。BNB / WBNB / 主流稳定币不查
-  const { assertLiquid } = await import('./quoteRoutes.js');
-  for (const tk of [fromToken, toToken]) if (!DEEP.has(String(tk).toLowerCase())) await assertLiquid(tk);
+  // 计价币兑换前检查流动性：最深的池子太小（低于 QUOTE_MIN_LIQ_USD，默认 $20,000）就拒绝，避免在小池子里吃大滑点。BNB / WBNB / 主流稳定币不查；
+  // 普通代币（发射后在外盘买卖的持仓）也不查——以前对所有代币都查，外盘池子小于 2 万美元、或 DexScreener 还没收录的币会被拒绝卖出
+  for (const tk of [fromToken, toToken]) if (!DEEP.has(String(tk).toLowerCase()) && isQuoteToken(tk)) await assertLiquid(tk);
   const args = ['market-order', 'swap', '--fromTokenQty', String(fromTokenQty), '--fromToken', assertAddress(fromToken, 'fromToken'),
     '--toToken', assertAddress(toToken, 'toToken'), '--binanceChainId', String(BINANCE_CHAIN_ID), '--mev', mev ? 'true' : 'false', '--gasLevel', gasLevel];
   if (slippage != null) args.push('--slippage', slip(slippage));
