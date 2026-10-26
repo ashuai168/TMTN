@@ -34,6 +34,23 @@ if (LIVE) {
 }
 const agent = new Agent(market, trader, { live: LIVE });
 const favorites = new Favorites();
+// RPC 用量：每分钟汇总一次（按节点 / 用途 / 方法），打印到控制台并追加到 data/rpc-usage.jsonl；/api/rpc-usage 看最近 60 分钟
+const rpcUsageLog = [];
+if (LIVE) {
+  const { takeUsage, cuOf } = await import('./engine/live/rpc.js');
+  const { appendFileSync, mkdirSync } = await import('node:fs');
+  setInterval(() => {
+    const u = takeUsage(), nr = Object.entries(u).filter(([k]) => k.startsWith('NodeReal'));
+    const total = nr.filter(([k]) => !k.endsWith('|ws_bytes')).reduce((a, [, n]) => a + n, 0);
+    const perKey = {}; for (const [k, n] of nr) { const [node, , m] = k.split('|'); const o = (perKey[node] ||= { req: 0, cu: 0 }); if (m !== 'ws_bytes') o.req += n; o.cu += cuOf(m, n); }
+    for (const o of Object.values(perKey)) o.cu = Math.round(o.cu);
+    const row = { ts: Date.now(), nodereal: total, cu: Object.values(perKey).reduce((a, o) => a + o.cu, 0), perKey, all: Object.values(u).reduce((a, n) => a + n, 0), detail: u };
+    rpcUsageLog.push(row); if (rpcUsageLog.length > 60) rpcUsageLog.shift();
+    const top = nr.filter(([k]) => !k.endsWith('|ws_bytes')).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, n]) => `${k}×${n}`).join('，');
+    console.log(`[RPC] 最近 1 分钟 NodeReal ${total} 次 / ${row.cu} CU（${Object.entries(perKey).map(([k, o]) => `${k} ${o.req} 次 ${o.cu} CU`).join('，')}）${top ? '：' + top : ''}`);
+    try { mkdirSync(path.join(__dirname, 'data'), { recursive: true }); appendFileSync(path.join(__dirname, 'data', 'rpc-usage.jsonl'), JSON.stringify(row) + '\n'); } catch { /* 写不了就算了 */ }
+  }, 60_000);
+}
 // 行情列表满了会淘汰最老的币：持有中（本程序记录 + 持仓快照）和收藏的币不能被淘汰，否则持仓页会少掉它们
 market.keepSet = () => new Set([
   ...[...(trader.positions?.values?.() || [])].filter((p) => p.amount > 0).map((p) => String(p.token).toLowerCase()),
@@ -97,9 +114,11 @@ app.post('/api/quote-to-bnb/preview', async (req, res) => { if (!LIVE) return re
 app.post('/api/quote-to-bnb', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' }); res.json(await trader.quoteToBnb({ token: String(req.body.token || ''), slippage: Number(req.body.slippage) || 1 })); });
 app.get('/api/trades/:token', async (req, res) => { try { const v = LIVE ? await market.tradesPage(req.params.token, Number(req.query.before) || 0, Math.min(500, Number(req.query.limit) || 100)) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/trader/:token/:addr', async (req, res) => { try { const v = LIVE ? await market.traderStats(req.params.token, req.params.addr) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get('/api/rpc-usage', (req, res) => res.json(rpcUsageLog));
 app.get('/api/lookup/:a', async (req, res) => {
-  const t = LIVE ? await market.lookup(req.params.a) : (market.get(req.params.a) ? market.summary(market.get(req.params.a)) : null);
-  t ? res.json(t) : res.status(404).json({ error: '未找到该代币' });
+  // 搜索：最多等 1.5 秒（链上查 Four 盘）；查不到 = 不是本终端跟踪的内盘（外盘 / 已毕业 / 其他平台），页面改为打开 GMGN
+  const t = LIVE ? await Promise.race([market.lookup(req.params.a).catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]) : (market.get(req.params.a) ? market.summary(market.get(req.params.a)) : null);
+  t ? res.json(t) : res.status(404).json({ error: '未找到该代币', external: true });
 });
 app.get('/api/token/:a', async (req, res) => {
   if (LIVE) await market.refresh(req.params.a);

@@ -21,7 +21,7 @@ export function recordApproval({ token, spender, symbol, amount, kind }) {
 }
 export function listApprovals() { return load(); }
 
-const call = async (to, fn, args) => erc20.decodeFunctionResult(fn, await ctx.market.provider.call({ to, data: erc20.encodeFunctionData(fn, args) }))[0];
+const call = async (to, fn, args) => erc20.decodeFunctionResult(fn, await (ctx.market.tradeProvider || ctx.market.provider).call({ to, data: erc20.encodeFunctionData(fn, args) }))[0];
 
 // 这次授权该授多少（原始整数单位）。kind = 'quote'（报价币，按 BNB 价值）或 'sell'（卖出的代币，按全部余额）
 export async function capFor({ token, wallet, amount, kind }) {

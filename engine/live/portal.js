@@ -27,8 +27,8 @@ export const isBnbQuote = (a) => !a || a === ZERO || a.toLowerCase() === BNB_NAT
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class Portal {
-  constructor(provider) {
-    this.provider = provider;
+  constructor(provider, readProvider = provider) {
+    this.provider = provider; this.read = readProvider;   // read：定时扫描用的只读调用（领取前模拟、份额），走公共节点
     this.portal = new ethers.Contract(PORTAL, PORTAL_ABI, provider);
     this.factory = new ethers.Contract(FACTORY, ['function marketOfToken(address token) view returns (address)'], provider);
   }
@@ -43,12 +43,12 @@ export class Portal {
   minShares(shares, slippagePct) { const bps = BigInt(Math.min(9999, Math.round(slippagePct * 100))); return (shares * (10000n - bps)) / 10000n; }
 
   async sharesOf(market, wallet) {
-    return mIface.decodeFunctionResult('sharesOf', await this.provider.call({ to: market, data: mIface.encodeFunctionData('sharesOf', [wallet]) }))[0];
+    return mIface.decodeFunctionResult('sharesOf', await this.read.call({ to: market, data: mIface.encodeFunctionData('sharesOf', [wallet]) }))[0];
   }
 
   // 迁移（发射）后把曲线份额领成真正的代币：Portal.claim(market)，返回领到的代币数量
   async previewClaim(market, wallet) {
-    const r = await this.provider.call({ from: wallet, to: PORTAL, data: pIface.encodeFunctionData('claim', [market]) });
+    const r = await this.read.call({ from: wallet, to: PORTAL, data: pIface.encodeFunctionData('claim', [market]) });
     return pIface.decodeFunctionResult('claim', r)[0];
   }
   async claim({ wallet, market, step }) {

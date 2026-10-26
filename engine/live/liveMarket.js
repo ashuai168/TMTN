@@ -2,7 +2,7 @@
 import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
 import { RPC_URL, RPC_LIST, BNB_PRICE_URL } from './config.js';
-import { FailoverProvider, nodeName } from './rpc.js';
+import { FailoverProvider, nodeName, PUBLIC_RPC } from './rpc.js';
 import { AgentCurve } from './agentCurve.js';
 import { FourMeme, AGENT_ID_TEMPLATE } from './fourMeme.js';
 import { MetaFetcher, ipfsUrl } from './meta.js';
@@ -26,7 +26,9 @@ export class LiveMarket extends EventEmitter {
   quoteUsd(t) { const q = String(t?.quote || 'BNB').toUpperCase(); if (q === 'BNB' || q === 'WBNB') return this.bnbUsd; if (['USDT','USDC','USD1'].includes(q)) return 1; return this.qUsd[String(t.quoteAddress || '').toLowerCase()] || 0; }
   constructor() {
     super();
-    this.provider = new FailoverProvider(RPC_LIST);   // 主节点（NodeReal，如果配置了）+ 公共节点自动备用
+    // 两套节点：行情 / 持仓 / 监控这类不赶时间的读取走公共节点优先（省 NodeReal 额度）；下单、确认、卖前余额这条交易链路走 NodeReal 优先
+    this.provider = new FailoverProvider([PUBLIC_RPC, 'https://bsc-dataseed.bnbchain.org', ...RPC_LIST], '行情读取');   // 两个公共节点都不行时才用 NodeReal
+    this.tradeProvider = new FailoverProvider(RPC_LIST, '交易');
     this.curve = new AgentCurve(this.provider);
     this.four = new FourMeme();
     this.gang = new GangFun();
@@ -520,6 +522,6 @@ export class LiveMarket extends EventEmitter {
 
   netStatus() {
     const l = this.feeds.status.launch;
-    return { wss: l.connected ? l.rttMs ?? 0 : null, rpc: this.rpcError ? null : this.rpcMs, rpcError: this.rpcError, rpcNode: { ...this.provider.info, four: nodeName(this.four.status?.rpcActive || this.four.status?.rpc), curve: nodeName(this.curve.status?.rpc) }, shrine: this.feeds.status, curve: this.curve.status, four: this.four.status, gang: this.gang.status, gangChain: { ...this.gangChain.status, recent: (this.gangLat || []).slice(0, 8) } };
+    return { wss: l.connected ? l.rttMs ?? 0 : null, rpc: this.rpcError ? null : this.rpcMs, rpcError: this.rpcError, rpcNode: { ...this.tradeProvider.info, read: nodeName(this.provider.lastUrl || this.provider.urls[0]), gangWs: this.gangChain.status.wss || null, fourWs: this.four.ws?.wss || null, four: nodeName(this.four.status?.rpcActive || this.four.status?.rpc), curve: nodeName(this.curve.status?.rpc) }, shrine: this.feeds.status, curve: this.curve.status, four: this.four.status, gang: this.gang.status, gangChain: { ...this.gangChain.status, recent: (this.gangLat || []).slice(0, 8) } };
   }
 }

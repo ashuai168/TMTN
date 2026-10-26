@@ -304,7 +304,7 @@ function renderTop() {
   const rn = S.net.rpcNode;
   if (LIVE() && rn) {
     $('#rpcName').innerHTML = rn.fallback ? `<span class="y">备用: ${esc(rn.active)}</span>` : esc(rn.active);
-    $('#rpcName').closest('.pill').title = `读链 / 查确认：${rn.active}${rn.fallback ? `（主节点 ${rn.primary} 出错，30 秒后重试${rn.primaryErr ? '：' + rn.primaryErr : ''}）` : '（主节点）'}\n扫 Four 事件：${rn.four || '—'}\nFlap 曲线数据：${rn.curve || '—'}`;
+    $('#rpcName').closest('.pill').title = `交易 / 查确认：${rn.active}${rn.fallback ? `（NodeReal 不可用，暂用备用节点${rn.primaryErr ? '：' + rn.primaryErr : ''}）` : ''}${(rn.keys || []).length > 1 ? '\nNodeReal key：' + rn.keys.map((k) => `${k.name}${k.cooling ? '（冷却中）' : ' 正常'}`).join('，') : ''}\n行情 / 持仓读取：${rn.read || '—'}\n新盘订阅：Four ${rn.fourWs || '—'}，Gang ${rn.gangWs || '—'}\nFlap 曲线数据：${rn.curve || '—'}`;
   } else $('#rpcName').textContent = LIVE() ? '…' : '48 Club';
   const mb = $('#modeBadge');
   mb.textContent = REAL() ? '实盘 · 真实下单' : LIVE() ? '实盘行情 · 只报价' : '模拟盘';
@@ -1137,8 +1137,15 @@ async function openFromSearch(addr) {
   $('#searchResults').classList.add('hidden'); sIn.value = ''; sIn.blur();
   let t = S.tokens.get(addr) || S.tokens.get(addr.toLowerCase());
   if (!t) {
-    try { t = await api(`/api/lookup/${addr}`); S.tokens.set(t.address, t); }
-    catch { return toast({ status: 'failed', symbol: short(addr), reason: '未找到该代币' }); }
+    // 不在列表里：先查是不是内盘（服务器最多 1.5 秒）；不是就去 GMGN 看。新标签要在点击 / 回车的这一刻先开好，否则会被浏览器拦截
+    const isAddr = /^0x[0-9a-fA-F]{40}$/.test(addr), w = isAddr ? window.open('about:blank', '_blank') : null;
+    try { t = await api(`/api/lookup/${addr}`); S.tokens.set(t.address, t); w?.close(); }
+    catch {
+      if (!isAddr) return toast({ status: 'failed', symbol: short(addr), reason: '未找到该代币' });
+      const url = `https://gmgn.ai/bsc/token/${addr.toLowerCase()}`;
+      if (w) { w.opener = null; w.location.href = url; } else window.open(url, '_blank', 'noopener');
+      return note('不是本终端跟踪的内盘，已在 GMGN 打开', 'info');
+    }
   }
   histAdd(t);
   // 在战壕 / 持仓页搜索时先切回交易页，否则选中了也看不到

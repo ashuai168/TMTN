@@ -23,10 +23,10 @@ export class LiveTrader extends EventEmitter {
   constructor(market) {
     super();
     this.market = market;
-    this.portal = new Portal(market.provider);
+    this.portal = new Portal(market.tradeProvider || market.provider, market.provider);   // 交易走 NodeReal 优先；领取前的模拟（定时扫描）走公共节点
     setApprovalCtx({ trader: this, market });
-    this.gangTrade = new GangTrade(market.provider, (o) => this.portal.send(o));
-    this.gangV2 = new GangV2(market.provider, (o) => this.portal.send(o));
+    this.gangTrade = new GangTrade(market.tradeProvider || market.provider, (o) => this.portal.send(o));
+    this.gangV2 = new GangV2(market.tradeProvider || market.provider, (o) => this.portal.send(o));
     this.wallets = [];
     this.positions = new Map();
     this.orders = [];
@@ -347,7 +347,7 @@ export class LiveTrader extends EventEmitter {
   // 尾数会被舍入得比实际余额大一点点（例如 0.931044697706272163 变成 …184），卖 100% 时 baw 报「余额不足」
   async exactBal(w, token) {
     const i = new ethers.Interface(['function balanceOf(address) view returns (uint256)', 'function decimals() view returns (uint8)']);
-    const call = async (fn, args) => i.decodeFunctionResult(fn, await this.market.provider.call({ to: token, data: i.encodeFunctionData(fn, args) }))[0];
+    const call = async (fn, args) => i.decodeFunctionResult(fn, await (this.market.tradeProvider || this.market.provider).call({ to: token, data: i.encodeFunctionData(fn, args) }))[0];
     const [raw, dec] = await Promise.all([call('balanceOf', [w.address]), call('decimals', []).catch(() => 18n)]);
     return { raw, dec: Number(dec), str: ethers.formatUnits(raw, Number(dec)) };
   }
@@ -524,7 +524,7 @@ export class LiveTrader extends EventEmitter {
         step(`当前余额 ${ex.str} ${symbol}（链上精确值）`, 0);
         let r;
         if (token.toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase()) {
-          const bal = await this.market.provider.call({ to: token, data: new ethers.Interface(['function balanceOf(address) view returns (uint256)']).encodeFunctionData('balanceOf', [w.address]) }).then((x) => BigInt(x));
+          const bal = await (this.market.tradeProvider || this.market.provider).call({ to: token, data: new ethers.Interface(['function balanceOf(address) view returns (uint256)']).encodeFunctionData('balanceOf', [w.address]) }).then((x) => BigInt(x));
           const hash = await this.portal.send({ wallet: w.address, to: token, inputData: new ethers.Interface(['function withdraw(uint256)']).encodeFunctionData('withdraw', [bal]), label: 'WBNB→BNB 解包', step });
           r = { venue: 'WBNB.withdraw', expected: Number(ethers.formatEther(bal)), txHash: hash, hashes: [hash] };
         } else r = await this.swapReal({ from: token, to: BNB_NATIVE, qty: ex.str, slippage, step, label: `${symbol}→BNB` });
@@ -549,7 +549,7 @@ export class LiveTrader extends EventEmitter {
     const done = (status, reason, tx) => { Object.assign(order, { status, reason, tx: tx || order.tx, stage: null }); this.quoteCache.clear(); this.refreshBalance(); this.syncAt = 0; this.emit('order', order); };
     if (e.tx || order.pendingTx) {
       const tx = e.tx || order.pendingTx;
-      while (Date.now() < end) { const rc = await this.market.provider.getTransactionReceipt(tx).catch(() => null); if (rc) return done(rc.status === 1 ? 'filled' : 'failed', rc.status === 1 ? '已上链确认' : `链上执行失败：${tx}`, tx); await sleep(3000); }
+      while (Date.now() < end) { const rc = await (this.market.tradeProvider || this.market.provider).getTransactionReceipt(tx).catch(() => null); if (rc) return done(rc.status === 1 ? 'filled' : 'failed', rc.status === 1 ? '已上链确认' : `链上执行失败：${tx}`, tx); await sleep(3000); }
       return done('unknown', `10 分钟内没等到确认，请在钱包记录里查看：${tx}`, tx);
     }
     while (Date.now() < end) { if ((await baw.walletLock().catch(() => 'UNKNOWN')) !== 'LOCKED') break; await sleep(10_000); }

@@ -1,5 +1,6 @@
 // 实盘配置。合约地址 / 数据源来自参考版 agent-curve-terminal（Flap Agent Curve + shrine + fsi + 币安 Agentic Wallet）。
 import { readFileSync } from 'node:fs';
+import { setNodeRealSlots } from './rpc.js';
 // 启动时读项目根目录的 .env（KEY=VALUE，# 开头是注释）；已经在环境变量里的不覆盖。.env 在 .gitignore 里，放私有的 RPC key 等
 try {
   for (const line of readFileSync(new URL('../../.env', import.meta.url), 'utf8').split('\n')) {
@@ -17,10 +18,15 @@ export const AUTH_SIMULATE_LOGGED_OUT = env('AUTH_SIMULATE_LOGGED_OUT', '0') ===
 // 单笔真实买入上限（BNB）的初始值；页面「交易设置」里改过之后以 data/live-settings.json 为准。0 = 不限
 export const MAX_TRADE_BNB = Number(env('MAX_TRADE_BNB', '0.5'));
 export const LIVE_SETTINGS_FILE = new URL('../../data/live-settings.json', import.meta.url);
-export const NODEREAL_RPC = env('NODEREAL_RPC', '');   // 私有节点（含 key，只放 .env）
-// 读链 / 查确认 / 余额：有 NodeReal 就用它当主节点，公共节点做备用（见 rpc.js）
+// 私有节点 NodeReal（含 key，只放 .env）：NODEREAL_RPC 填一个完整地址，或 NODEREAL_KEYS 填多个 key（逗号分隔），多个 key 会轮流用、被限流时自动换
+const NR_KEYS = env('NODEREAL_KEYS', '').split(',').map((k) => k.trim()).filter(Boolean);
+export const NODEREAL_URLS = [env('NODEREAL_RPC', ''), ...NR_KEYS.map((k) => `https://bsc-mainnet.nodereal.io/v1/${k}`)].filter((u, i, a) => u && a.indexOf(u) === i);
+export const NODEREAL_RPC = NODEREAL_URLS[0] || '';
+export const NODEREAL_WSS = NODEREAL_URLS.map((u) => u.replace(/^https:/, 'wss:').replace('/v1/', '/ws/v1/'));
+setNodeRealSlots(NODEREAL_URLS);
+// 读链 / 查确认 / 余额：有 NodeReal 就用它当主节点（多个 key 轮流），公共节点做备用（见 rpc.js）
 export const RPC_URL = env('RPC_URL', NODEREAL_RPC || 'https://bsc-dataseed.bnbchain.org');
-export const RPC_LIST = [RPC_URL, 'https://bsc-dataseed.bnbchain.org', 'https://bsc-rpc.publicnode.com'].filter((u, i, a) => u && a.indexOf(u) === i);
+export const RPC_LIST = [...NODEREAL_URLS, RPC_URL, 'https://bsc-dataseed.bnbchain.org', 'https://bsc-rpc.publicnode.com'].filter((u, i, a) => u && a.indexOf(u) === i);
 export const BAW_BIN = env('BAW_BIN', 'baw');
 export const BINANCE_CHAIN_ID = Number(env('BINANCE_CHAIN_ID', 56));
 export const BAW_SLIPPAGE_UNIT = env('BAW_SLIPPAGE_UNIT', 'percent'); // percent: 传 20 表示 20%；fraction: 传 0.2
