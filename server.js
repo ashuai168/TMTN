@@ -112,7 +112,7 @@ async function walletsView() {
   const out = [{ ...selfInfo(), self: true, reachable: true, on: walletOn(WALLET_SLOT) }];
   for (const p of WALLET_PEERS) {
     let info = null, err = null; try { info = await peerFetch(p, '/api/wallet-info'); } catch (e) { err = e.message; }
-    out.push({ slot: p.slot, label: p.label || info?.label || `钱包 ${p.slot}`, address: info?.address || null, bnb: info?.bnb ?? null, auth: info ? info.auth : 'offline', bawDir: p.bawDir || info?.bawDir || null, signin: signinCmd(p.bawDir || info?.bawDir, p.instanceId), reachable: !!info, error: err, on: walletOn(p.slot) });
+    out.push({ slot: p.slot, label: p.label || info?.label || `钱包 ${p.slot}`, address: info?.address || null, bnb: info?.bnb ?? null, auth: info ? info.auth : 'offline', bawDir: p.bawDir || info?.bawDir || null, signin: p.signin || signinCmd(p.bawDir || info?.bawDir, p.instanceId),   /* WALLET_PEERS 里可以直接写登录命令（比如钱包 2 跑在 Docker 里） */ reachable: !!info, error: err, on: walletOn(p.slot) });
   }
   return out;
 }
@@ -391,7 +391,8 @@ setInterval(() => {
   }
 }, 500);
 
-server.listen(PORT, '127.0.0.1', () => {
+// 默认只监听本机。HOST 只给 Docker 容器用（容器里要监听 0.0.0.0，端口再只映射到宿主机的 127.0.0.1）
+server.listen(PORT, process.env.HOST || '127.0.0.1', () => {
   console.log(`\n  TMTN（${!LIVE ? '模拟盘' : LIVE_TRADE ? `实盘 · 手动订单真实下单 · 单笔上限 ${trader.status.maxTradeBnb || '不限'} BNB` : '实盘行情 · 只报价不下单'}）`);
   if (LIVE) console.log(`  baw：${trader.status.connected ? `已连接 ${trader.wallets[0].address}` : `未连接（${trader.status.error}）`}`);
   console.log(`  ➜  http://localhost:${PORT}\n`);

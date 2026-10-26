@@ -79,6 +79,8 @@ export class LiveTrader extends EventEmitter {
     if (state === 'ok' || this.authFails >= 2) { a.state = state; a.message = message; }
     else if (a.state === 'ok') a.message = `检查失败一次，稍后再确认：${message}`;
     if (state !== 'ok' && this.authFails === 1) setTimeout(() => this.checkAuth(), 3_000);   // 第一次失败 3 秒后马上再确认
+    // 在终端重新登录后：钱包地址还没读到（启动时是未登录）就重新初始化一次，否则余额 / 持仓 / 下单都没有钱包
+    if (a.state === 'ok' && !this.wallets?.length && !this.reIniting) { this.reIniting = true; this.init().catch(() => {}).finally(() => { this.reIniting = false; }); }
     if (a.state === 'ok' && !a.agentId) { try { const id = await baw.agentId(); a.agentId = id.claimed ? id.agentId : null; if (a.agentId) this.market.names?.set(this.wallets[0]?.address, a.agentId); } catch { /* 域名拿不到不影响登录状态 */ } }
     a.address = this.wallets[0]?.address || a.address;
     a.checkedAt = Date.now();
