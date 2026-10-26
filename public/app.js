@@ -67,10 +67,13 @@ const traderHtml = (r, a = 6, b = 4) => !r.trader || !LIVE() ? short(r.trader, a
 // （列表每秒重画，直接放 <img> 的话加载失败的会一直闪空白方块）
 const imgState = new Map();   // 原始地址 → 'ok' | 'bad' | 'loading'
 const proxied = (src) => (/^https?:/i.test(src) ? '/api/img?u=' + encodeURIComponent(src) : src);
+// 追踪栏 / 追踪页不走 scheduleRender：头像加载完后合并成一次重画，否则先画出来的卡片一直是文字占位
+let imgTrkT = 0;
+function imgRerenderTrk() { if (imgTrkT) return; imgTrkT = setTimeout(() => { imgTrkT = 0; try { if (typeof TP !== 'undefined' && TP.open && !document.querySelector('#trkPanel input.trk-ed')) renderTrkPanel(); if (S.view === 'track' && TRK.tab === 'feed' && !document.querySelector('#track input.trk-ed')) renderTrkFeed(); } catch { /* 还没初始化 */ } }, 300); }
 function probeImg(src) {
   imgState.set(src, 'loading');
   const i = new Image(); i.referrerPolicy = 'no-referrer';
-  i.onload = () => { imgState.set(src, i.naturalWidth ? 'ok' : 'bad'); lastList = 0; scheduleRender(); };
+  i.onload = () => { imgState.set(src, i.naturalWidth ? 'ok' : 'bad'); lastList = 0; scheduleRender(); imgRerenderTrk(); };
   i.onerror = () => imgState.set(src, 'bad');
   i.src = proxied(src);
 }
@@ -2393,11 +2396,11 @@ function renderTrkFeed() {
   const rows = TRK.feed.filter(trkPass);
   $('#trkCount').textContent = `${rows.length} 条`;
   $('#trkFeed').innerHTML = rows.length ? `<table class="trk-tbl"><tr><th class="l">时间</th><th class="l">目标</th><th class="l">动作</th><th>金额</th><th class="l">代币</th><th>币龄</th><th>市值</th></tr>
-    ${rows.map((e) => `<tr><td class="l dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}前</td>
+    ${rows.map((e) => `<tr data-a="${e.token}"><td class="l dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}前</td>
       <td class="l"><a href="#" data-trkwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || e.target)}">${esc(trkName(e.target))}</a></td>
       <td class="l"><b class="${ACT_CLS[e.action] || ''}">${e.action}</b>${e.pct != null && e.side === 'sell' ? ` <span class="dim">${e.pct.toFixed(0)}%</span>` : ''}</td>
       <td><b>${e.bnb ? bnb(e.bnb, 4) + ' BNB' : '—'}</b>${e.quote !== 'BNB' ? `<div class="hsub">${K(e.quoteAmt)} ${esc(e.quote)}</div>` : ''}</td>
-      <td class="l"><span class="side" data-a="${e.token}" style="cursor:pointer">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b>${e.quote !== 'BNB' ? ` <i class="tag">${esc(e.quote)}</i>` : ''}</span></td>
+      <td class="l"><span class="side">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b>${e.quote !== 'BNB' ? ` <i class="tag">${esc(e.quote)}</i>` : ''}</span></td>
       <td class="dim">${e.createdAt ? trkAgo(e.createdAt) : '—'}</td><td>${usd(e.mcapUsd)}</td></tr>`).join('')}</table>`
     : '<div class="empty">还没有动态。追踪的地址在 Flap / Four / Gang V2 内盘上买卖时会出现在这里</div>';
 }
@@ -2537,7 +2540,7 @@ function renderTrkPanel() {
   $('#trkpCount').textContent = TRK.targets.length;
   $('#trkpList').innerHTML = !TRK.targets.length ? '<div class="trkp-empty">还没有追踪的地址。<br>可以在交易者盈亏抽屉里点「追踪」，或者到追踪页添加 .ai / .bnb 域名、0x 地址。<br><button data-tpgo>去添加</button></div>'
     : !rows.length ? '<div class="trkp-empty">追踪的地址在 Flap / Four / Gang V2 内盘上买卖时，会实时出现在这里。</div>'
-    : rows.map((e) => `<div class="trkp-e"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) : K(e.quoteAmt)}<small class="dim"> ${e.bnb ? 'BNB' : esc(e.quote)}</small></span></div>
+    : rows.map((e) => `<div class="trkp-e" data-a="${e.token}" title="点击进入 ${esc(e.symbol)} 详情"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) : K(e.quoteAmt)}<small class="dim"> ${e.bnb ? 'BNB' : esc(e.quote)}</small></span></div>
       <div class="trkp-r2"><span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="dim">MC ${usd(e.mcapUsd)}</span><span class="spacer"></span><span class="dim" title="${new Date(e.ts).toLocaleString('zh-CN', { hour12: false })}">${trkAgo(e.ts)}</span></div></div>`).join('');
 }
 function setTrkPanel(on) { TP.open = on; try { localStorage.trkPanel = on ? '1' : '0'; } catch { /* ignore */ } tpSaveServer(); if (on && !TRK.loaded) loadTrack().then(renderTrkPanel); renderTrkPanel(); }
@@ -2545,9 +2548,16 @@ $('#bbTrack')?.addEventListener('click', () => setTrkPanel(!TP.open));
 $('#trkpClose')?.addEventListener('click', () => setTrkPanel(false));
 $('#trkpGo')?.addEventListener('click', () => { TRK.tab = 'feed'; setView('track'); });
 $('#trkPanel')?.addEventListener('click', (e) => {
+  if (e.target.closest('input, [data-trkedit]')) return;   // 编辑备注时点输入框不跳转
   if (e.target.closest('[data-tpgo]')) { TRK.tab = 'feed'; return setView('track'); }
   const w = e.target.closest('[data-tpwho]'); if (w) { const [who, tok] = w.dataset.tpwho.split(':'); if (S.tokens.has(tok)) { if (S.view !== 'trade') setView('trade'); select(tok); setTimeout(() => openTrader(who), 400); } else window.open(`https://gmgn.ai/bsc/address/${who}`, '_blank', 'noopener'); return; }
-  const t = e.target.closest('[data-a]'); if (t) { e.preventDefault(); e.stopPropagation(); if (S.tokens.has(t.dataset.a)) { if (S.view !== 'trade') setView('trade'); select(t.dataset.a); } else window.open(`https://gmgn.ai/bsc/token/${t.dataset.a}`, '_blank', 'noopener'); }
+  const t = e.target.closest('[data-a]'); if (t) { e.preventDefault(); e.stopPropagation(); trkOpenTok(t.dataset.a); }
+}, true);
+// 追踪动态：点整行（除了目标名字 / ✎ / 按钮）都进代币详情；不在列表里的币去 GMGN
+function trkOpenTok(a) { if (S.tokens.has(a)) { if (S.view !== 'trade') setView('trade'); select(a); } else window.open(`https://gmgn.ai/bsc/token/${a}`, '_blank', 'noopener'); }
+$('#trkFeed')?.addEventListener('click', (e) => {
+  if (e.target.closest('input, button, [data-trkwho], [data-trkedit]')) return;
+  const r = e.target.closest('tr[data-a]'); if (!r) return; e.preventDefault(); e.stopPropagation(); trkOpenTok(r.dataset.a);
 }, true);
 $('#trkpDrag')?.addEventListener('mousedown', (e) => {
   e.preventDefault(); const x0 = e.clientX, w0 = TP.w;
