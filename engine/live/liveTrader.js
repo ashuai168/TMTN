@@ -18,9 +18,10 @@ import { V3_TRADE } from './gangV3.js';
 import { FlapNft } from './flapNft.js';
 import { DexDirect } from './dexDirect.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
-import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt, assertLiquid, isQuoteToken } from './quoteRoutes.js';
+import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt, assertLiquid, isQuoteToken, routeTokens, dexPrice } from './quoteRoutes.js';
 // 一键全部换回 BNB：价值低于这个美元数的零头跳过（不值 gas）。QUOTE_SWEEP_MIN_USD 可调
 const SWEEP_MIN_USD = Number(process.env.QUOTE_SWEEP_MIN_USD || 1);
+const NOT_SWEEP = new Set(['USDT', 'USDC', 'USD1', 'U', 'BUSD', 'FDUSD', 'BTCB', 'ETH', 'SOL', 'BNB']);   // 路线表里的这些不算计价币余额（BNB 那行是 WBNB，本来就在计价币里）
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -581,11 +582,37 @@ export class LiveTrader extends EventEmitter {
 
   // 计价币余额：钱包里作为别的盘报价币的 BNCB / GANG / NVDAB / WBNB 等（Flap、Gang V2 买卖中间换出来的），按 baw 实时余额列出
   quoteSet() { return new Set([...Object.values(QUOTE_TOKENS), ...Object.keys(this.market.qUsd || {})].map((a) => a.toLowerCase())); }
+  // 计价币余额框 / 一键换回 BNB 用的范围：上面的计价币 + 路线表里记过的币（重启后行情还没见过的报价币也在），但不含稳定币和 BTC / ETH / SOL（那些不是中间换出来的，不能被一键换掉）
+  sweepSet() { const s = this.quoteSet(); for (const r of routeTokens()) if (!NOT_SWEEP.has(String(r.symbol || '').toUpperCase())) s.add(r.token); return s; }
+  // 链上余额（公共 RPC 并发读 balanceOf，15 秒缓存）：baw 的余额列表时有时无（钱包 1 的 FXIon 会突然不在列表里），以链上为准
+  async chainQuoteBals(addr, tokens) {
+    const k = `qbal:${addr}`, c = this.quoteCache.get(k); if (c && Date.now() - c.at < 15_000) return c.v;
+    const I = new ethers.Interface(['function balanceOf(address) view returns (uint256)', 'function decimals() view returns (uint8)', 'function symbol() view returns (string)']), prov = this.market.provider || this.market.tradeProvider;
+    const call = async (to, fn, args = []) => I.decodeFunctionResult(fn, await prov.call({ to, data: I.encodeFunctionData(fn, args) }))[0];
+    const meta = (this.tokMeta ||= new Map()), v = new Map();
+    await Promise.all([...tokens].map(async (t) => {
+      try {
+        const raw = await call(t, 'balanceOf', [addr]);
+        if (!meta.has(t)) meta.set(t, { dec: Number(await call(t, 'decimals').catch(() => 18n)), symbol: await call(t, 'symbol').catch(() => null) });
+        v.set(t, { raw, ...meta.get(t), str: ethers.formatUnits(raw, meta.get(t).dec) });
+      } catch { /* 读不到的币就按 baw 的 */ }
+    }));
+    this.quoteCache.set(k, { at: Date.now(), v }); return v;
+  }
   async quoteBalances() {
-    const rows = await baw.walletBalance(); const set = this.quoteSet(); const bnbUsd = this.market.bnbUsd || 0;
-    return rows.filter((r) => r.address && set.has(String(r.address).toLowerCase()) && Number(r.balance) > 0).map((r) => {
-      const usd = Number(r.value || 0) || Number(r.balance) * (this.market.qUsd?.[String(r.address).toLowerCase()] || 0);
-      return { token: r.address, symbol: r.symbol, balance: r.balance, priceUsd: Number(r.price || 0) || null, valueUsd: usd, valueBnb: bnbUsd ? usd / bnbUsd : null, wbnb: String(r.address).toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase() };
+    const w = this.wallets[0] || (EXPECT_WALLET ? { address: EXPECT_WALLET } : null), set = this.sweepSet(), bnbUsd = this.market.bnbUsd || 0, lc = (a) => String(a || '').toLowerCase();   // 未登录时用配置里的钱包地址读链上余额（读余额不需要登录）
+    const [rows, chain] = await Promise.all([baw.walletBalance().catch((e) => { if (!w?.address) throw e; return []; }), w?.address ? this.chainQuoteBals(w.address, set).catch(() => new Map()) : new Map()]);
+    const by = new Map(rows.filter((r) => r.address && set.has(lc(r.address))).map((r) => [lc(r.address), r]));
+    const route = new Map(routeTokens().map((r) => [r.token, r.symbol]));
+    for (const [t, c] of chain) {   // 链上有读数的以链上为准；价格用 baw 的，没有就用行情里的报价币价格
+      if (!(c.raw > 0n)) { by.delete(t); continue; }
+      const r = by.get(t), price = Number(r?.price || 0) || this.market.qUsd?.[t] || this.qPrice?.get(t) || await dexPrice(t) || 0;
+      if (price) (this.qPrice ||= new Map()).set(t, price);   // 记住最近的价格：baw 下次漏掉这个币时还能算价值
+      by.set(t, { address: r?.address || ethers.getAddress(t), symbol: r?.symbol || c.symbol || route.get(t) || '?', balance: c.str, price, value: Number(c.str) * price });
+    }
+    return [...by.values()].filter((r) => Number(r.balance) > 0).map((r) => {
+      const usd = Number(r.value || 0) || Number(r.balance) * (this.market.qUsd?.[lc(r.address)] || 0);
+      return { token: r.address, symbol: r.symbol, balance: r.balance, priceUsd: Number(r.price || 0) || null, valueUsd: usd, valueBnb: bnbUsd ? usd / bnbUsd : null, wbnb: lc(r.address) === QUOTE_TOKENS.WBNB.toLowerCase() };
     }).sort((a, b) => b.valueUsd - a.valueUsd);
   }
 
@@ -624,11 +651,15 @@ export class LiveTrader extends EventEmitter {
     return { mode: 'swap', token: pick.token, symbol: pick.symbol, qty, needBnb: need, bnb: w.bnb || 0, note: `BNB 不够（${(w.bnb || 0).toFixed(4)}），先用约 ${fmtQ(qty)} ${pick.symbol} 换出 ${need.toFixed(4)} BNB 再买（多 1～2 笔交易）` };
   }
 
-  async quoteBal(token) { const r = (await baw.walletBalance({ tokenAddress: token })).find((x) => String(x.address || '').toLowerCase() === token.toLowerCase()); return { balance: Number(r?.balance || 0), symbol: r?.symbol || '?' }; }
+  async quoteBal(token) {   // 余额以链上为准（baw 列表会漏币）；名字用 baw 的，没有就用链上 symbol()
+    const w = this.wallets[0], [r, ex] = await Promise.all([baw.walletBalance({ tokenAddress: token }).then((l) => l.find((x) => String(x.address || '').toLowerCase() === token.toLowerCase())).catch(() => null), w?.address ? this.exactBal(w, token).catch(() => null) : null]);
+    const sym = r?.symbol || this.tokMeta?.get(token.toLowerCase())?.symbol || routeTokens().find((x) => x.token === token.toLowerCase())?.symbol || '?';
+    return { balance: ex ? Number(ex.str) : Number(r?.balance || 0), symbol: sym };
+  }
 
   // 换回 BNB 前的报价（按此刻余额）：WBNB 解包 1:1；其他走 baw market-order quote
   async quoteToBnbPreview(token, slippage = 1) {
-    if (!this.quoteSet().has(String(token).toLowerCase())) throw new Error('不是计价币');
+    if (!this.sweepSet().has(String(token).toLowerCase())) throw new Error('不是计价币');
     const { balance, symbol } = await this.quoteBal(token); if (!(balance > 0)) throw new Error(`钱包里没有 ${symbol}`);
     if (token.toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase()) return { token, symbol, balance, out: balance, minOut: balance, route: 'WBNB.withdraw 解包（1:1，只付 gas）', slippage: 0 };
     const two = async () => {   // Ondo 类：报价两步，代币→USDT→BNB
@@ -652,7 +683,7 @@ export class LiveTrader extends EventEmitter {
     const step = (name, ms, x) => { order.steps.push({ name, ms: Math.round(ms) }); if (x?.tx) { order.pendingTx = x.tx; order.stage = x.stage || 'broadcast'; } this.emit('order', order); };
     try {
       if (!w) throw new Error('没有钱包');
-      if (!this.quoteSet().has(String(token).toLowerCase())) throw new Error('不是计价币');
+      if (!this.sweepSet().has(String(token).toLowerCase())) throw new Error('不是计价币');
       if (DRY_RUN) throw new Error('当前是 DRY_RUN 模式，不会发出交易');
       if (this.status.auth.state !== 'ok') throw new Error('币安钱包未登录，请先登录');
       if (this.inflight.has(token)) throw Object.assign(new Error('这个币有一笔订单还在处理中，请勿重复下单'), { code: 'BUSY' });
@@ -702,7 +733,7 @@ export class LiveTrader extends EventEmitter {
   }
   // 按计划逐个执行（同一个钱包按顺序：baw 每个钱包一次只处理一笔，钱包锁 / 在 App 里待确认时后面的会冲突）。每个币仍走 quoteToBnb（点击时读余额、同币在途检查）
   async quoteSweep({ tokens = [], slippage = 1 }) {
-    const set = this.quoteSet(), out = [];
+    const set = this.sweepSet(), out = [];
     for (const token of [...new Set(tokens.map(String))].filter((t) => set.has(t.toLowerCase()))) {
       const prev = out.at(-1);
       if (prev?.status === 'pending') { out.push({ token, symbol: '?', side: 'sell', status: 'failed', reason: '上一笔还在等确认（可能要在币安 App 里确认），这个币没有执行，请稍后再点' }); continue; }

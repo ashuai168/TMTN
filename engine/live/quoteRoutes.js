@@ -7,6 +7,7 @@ const FILE = dataFile('quote-routes.json');
 let table = null;
 const load = () => { if (table) return table; try { table = JSON.parse(readFileSync(FILE, 'utf8')) || {}; } catch { table = {}; } return table; };
 export function getRoute(addr) { return load()[String(addr).toLowerCase()] || null; }
+export const routeTokens = () => Object.entries(load()).map(([k, v]) => ({ token: k, symbol: v?.symbol || null }));   // 路线表里记过的所有币（计价币余额从链上读余额时用）
 // 哪些地址算「计价币」：config 里固定的几个 + 路线表里有兑换路线记录的 + 运行时登记的（liveTrader 用行情里各盘的报价币登记）。
 // 只有计价币才做下面的流动性检查；普通 meme 代币（内盘发射到外盘后的币）不检查：那是用户自己的持仓，池子再小也要能卖出
 let quoteLookup = () => false;
@@ -37,6 +38,18 @@ async function deepestLiq(addr) {
     setRoute(k, pools.length ? { liqUsd: pools[0].liq || 0, bestPool: pools[0], liqAt: Date.now() } : { liqUsd: null, bestPool: null, liqAt: Date.now() });
   } catch { return r; }   // 查不到就按已有记录（没有记录则不拦）
   return getRoute(k);
+}
+// 计价币美元价兜底（baw 余额列表没列出这个币、行情里也还没有价格时）：DexScreener 上这个币作为 base 的最深池子的价格，10 分钟缓存
+const pxCache = new Map();
+export async function dexPrice(addr) {
+  const k = String(addr).toLowerCase(), c = pxCache.get(k); if (c && Date.now() - c.at < 10 * 60_000) return c.v;
+  let v = null;
+  try {
+    const j = await (await fetch('https://api.dexscreener.com/latest/dex/tokens/' + k, { signal: AbortSignal.timeout(6000) })).json();
+    const p = (j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === k && Number(x.priceUsd) > 0).sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+    v = p ? Number(p.priceUsd) : null;
+  } catch { return c?.v ?? null; }
+  pxCache.set(k, { at: Date.now(), v }); return v;
 }
 export async function assertLiquid(addr, symbol) {
   const r = await deepestLiq(addr); symbol ||= r?.symbol || r?.bestPool && null || `计价币 ${String(addr).slice(0, 6)}…${String(addr).slice(-4)}`;
