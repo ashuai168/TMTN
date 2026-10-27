@@ -996,7 +996,7 @@ function renderRight() {
   btn.textContent = !t ? '选择代币' : REAL() ? `${buy ? '买入' : '卖出'} ${t.symbol}（真实上链）` : LIVE() ? `${buy ? '报价买入' : '报价卖出'} ${t.symbol}（只报价，不上链）` : n > 1 ? (buy ? `买入 ${t.symbol} · ${n} 个钱包各一份` : `卖出 ${t.symbol} · ${n} 个钱包`) : `${buy ? '买入' : '卖出'} ${t.symbol}`;
   const gangOnly = false;   // Gang V2 报价币盘也能下单了（BNB→报价币→buy，非原子）
   btn.disabled = !t || !n || t.stage === 'rugged' || (REAL() && !AUTH_OK()) || gangOnly;
-  if (REAL() && !AUTH_OK() && t) btn.textContent = '币安钱包未登录，不能下单';
+  if (REAL() && !AUTH_OK() && t) btn.textContent = MW() && !onWallets().length ? '没有钱包参与下单，不能下单' : '币安钱包未登录，不能下单';
   else if (REAL() && t && MW()) {   // 多钱包：按钮上写明几个钱包一起下单；买入时写总金额
     const k = onWallets().filter((w) => w.auth === 'ok').length, a = buy && S.amtMode !== 'pct' ? parseFloat($('#amount')?.value) : NaN;
     if (k > 1) btn.textContent += buy && a > 0 ? ` · ${a} BNB ×${k} = ${+(a * k).toFixed(6)} BNB` : ` · ${k} 个钱包`;
