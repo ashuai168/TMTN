@@ -652,7 +652,7 @@ export class LiveMarket extends EventEmitter {
     let list = [], complete = true;
     if (t.source === 'gang') { const k = this.qScale(t); list = (await this.gang.history(t.address, 20000)).map((x) => (k === 1 ? x : { ...x, price: x.price * k, bnb: x.bnb * k })); }
     else if (t.source === 'four-agent') list = await this.four.tokenTrades(t.address);
-    else if (t.source === 'flap-nft') list = (await this.flapNft.history(t.address)).map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx }));   // 门槛盘：Portal 内盘成交（从创建起）
+    else if (t.source === 'flap-nft') list = (await this.flapNft.history(t.address).catch(() => this.flapNft.trades(t.address))).map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx }));   // 门槛盘：Portal 内盘成交（从创建起）
     else if (t.market) { list = await fsi.fetchTrades(t.market, 5000); complete = list.length < 9000; }
     list = [...new Map(list.map((x) => [`${x.tx}:${x.side}:${x.tokens}`, x])).values()].sort((a, b) => b.ts - a.ts).slice(0, 20000);
     for (const x of list) { x.name ||= this.names.peek(x.trader); x.usd = (x.bnb || 0) * this.quoteUsd(t); }
