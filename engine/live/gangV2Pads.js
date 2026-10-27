@@ -7,7 +7,7 @@ import { ethers } from 'ethers';
 import * as baw from './baw.js';
 import { capFor, capLabel, sendApproval } from './approvals.js';
 import { BNB_NATIVE } from './config.js';
-import { getRoute, setRoute } from './quoteRoutes.js';
+import { getRoute, setRoute, waitReceived } from './quoteRoutes.js';
 
 export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
 const USDT = '0x55d398326f99059fF775485246999027B3197955';   // BSC USDT（18 位小数）
@@ -238,8 +238,9 @@ export class GangV2 {
     catch (e) {
       // 卖出那笔要在币安 App 里确认（或已提交、结果未知）：报价币要等确认后才到账。交给上层 followUp 在确认后接着换回 BNB；
       // 以前这里直接抛出，换回 BNB 那一步就被跳过了，GANG / WBNB / BNCB 留在钱包里
+      const fromBlock = toBnb ? await this.provider.getBlockNumber().then((b) => b - 2).catch(() => undefined) : null;
       if (toBnb && ['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) e.afterConfirm = async (log) => {
-        let got = 0n; for (const end = Date.now() + 5 * 60_000; Date.now() < end; await sleep(2000)) { got = (await this.balanceOf(q, wallet).catch(() => before)) - before; if (got > 0n) break; }
+        const got = await waitReceived({ provider: this.provider, token: q, wallet, senders: [p], fromBlock });
         if (got <= 0n) return { note: '5 分钟内没收到报价币（可能在 App 里拒绝了），没有换回 BNB' };
         log(`收到报价币 ${ethers.formatUnits(got, await this.decimals(q))}，接着换回 BNB`, 0);
         return this.swapBack({ wallet, q, got, slippage, step: log, hashes: [] });

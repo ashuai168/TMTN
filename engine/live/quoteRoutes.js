@@ -43,3 +43,17 @@ export async function assertLiquid(addr, symbol) {
   if (r?.liqUsd != null && r.liqUsd < MIN_LIQ_USD) throw new Error(`${symbol} 最深的池子流动性只有 $${Math.round(r.liqUsd).toLocaleString('en-US')}（低于 $${MIN_LIQ_USD.toLocaleString('en-US')}），为避免在小池子里吃大滑点，拒绝兑换`);
   return r;
 }
+
+// 等卖出到账的报价币：按 Transfer 日志（from = 卖出合约，to = 钱包）累加，不看余额差。
+// 余额差会被同时进行的另一笔换回 BNB 抵掉（13:36 连卖两次 BEM，第二笔就一直等不到到账）
+const T_TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+const pad32 = (a) => '0x' + String(a).toLowerCase().replace(/^0x/, '').padStart(64, '0');
+export async function waitReceived({ provider, token, wallet, senders, fromBlock, ms = 5 * 60_000 }) {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 2000))) {
+    try {
+      const logs = await provider.getLogs({ address: token, fromBlock, toBlock: 'latest', topics: [T_TRANSFER, senders.map(pad32), pad32(wallet)] });
+      const got = logs.reduce((s, l) => s + BigInt(l.data), 0n); if (got > 0n) return got;
+    } catch { /* 节点报错就下一轮再查 */ }
+  }
+  return 0n;
+}

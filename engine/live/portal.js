@@ -3,7 +3,7 @@
 import { ethers } from 'ethers';
 import { PORTAL, FACTORY, ZERO, BNB_NATIVE } from './config.js';
 import * as baw from './baw.js';
-import { USDT, ONDO_RE, viaUsdt, markViaUsdt } from './quoteRoutes.js';
+import { USDT, ONDO_RE, viaUsdt, markViaUsdt, waitReceived } from './quoteRoutes.js';
 import { capFor, capLabel, sendApproval } from './approvals.js';
 
 const PORTAL_ABI = [
@@ -165,8 +165,9 @@ export class Portal {
     try { hashes = [await this.send({ wallet, to: PORTAL, inputData, label: p >= 100 ? 'Portal.sellAll' : `Portal.sell ${p}%`, step })]; }
     catch (e) {
       // 卖出那笔要在币安 App 里确认（或结果未知）：报价币确认后才到账，交给上层 followUp 确认后接着换回 BNB（以前这一步被跳过，报价币留在钱包）
+      const fromBlock = !bnbQuote && toBnb ? await this.provider.getBlockNumber().then((b) => b - 2).catch(() => undefined) : null;
       if (!bnbQuote && toBnb && ['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) e.afterConfirm = async (log) => {
-        let got = 0n; for (const end = Date.now() + 5 * 60_000; Date.now() < end; await sleep(2000)) { got = (await qc.balanceOf(wallet).catch(() => before)) - before; if (got > 0n) break; }
+        const got = await waitReceived({ provider: this.provider, token: quoteAddress, wallet, senders: [PORTAL, market], fromBlock });
         if (got <= 0n) return { note: `5 分钟内没收到 ${quoteSym}（可能在 App 里拒绝了），没有换回 BNB` };
         log(`收到 ${ethers.formatUnits(got, dec)} ${quoteSym}，接着换回 BNB`, 0);
         return this.swapBack({ wallet, quoteAddress, quoteSym, dec, got, slippage, step: log, hashes: [] });
