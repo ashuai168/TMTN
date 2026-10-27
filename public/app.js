@@ -204,8 +204,8 @@ function onMsg({ type, data, full }) {
       { const known = S.tokens.has(data.address); S.tokens.set(data.address, data); S.newTokens.add(data.address); setTimeout(() => S.newTokens.delete(data.address), 2000);
         if (!known && S.view === 'pulse') { lastPulse = 0; scheduleRender(); }   // 新币立刻上战壕，不等每秒一次的重画（平均省 0.5 秒）
         // 顶栏🔊的新币提示：在战壕页由各列自己的声音负责；其他页面只对当前平台页签的新币响
-        if (!known && data.stage !== 'dex' && Date.now() - (data.createdAt || 0) < 120_000 && S.view !== 'pulse' && data.platform === S.platform && !isBlocked(data)) newTokenChime(); }
-      if (data.platform === S.platform && !isBlocked(data)) { if (S.config?.notify && document.hidden && Notification?.permission === 'granted') new Notification(`新内盘 ${data.symbol}`); }
+        if (!known && data.stage !== 'dex' && Date.now() - (data.createdAt || 0) < 120_000 && S.view !== 'pulse' && listWants(data) && !isBlocked(data)) newTokenChime(); }
+      if (listWants(data) && !isBlocked(data)) { if (S.config?.notify && document.hidden && Notification?.permission === 'granted') new Notification(`新内盘 ${data.symbol}`); }
       break;
     case 'trade':
       S.flow.unshift(data); if (S.flow.length > 150) S.flow.length = 150;
@@ -334,6 +334,7 @@ function autoInterval() {
   if (iv !== S.interval) { S.interval = iv; $$('#intervals button').forEach((x) => x.classList.toggle('active', +x.dataset.i === iv)); resetView(); }
 }
 function select(addr) {
+  const st0 = S.tokens.get(addr); if (st0?.platform) S.platform = platOf(st0);   // 平台跟着选中的币走（网址、设置、模拟白名单用）
   S.selected = addr; S.detail = null; S.hover = null; resetView(); syncUrl(); S.ivAutoUntil = Date.now() + 15_000;
   renderQB();   // 一键买卖浮窗和详情页同一帧出现（预设、位置都在本地，余额 / 持仓之后再补）
   ws?.readyState === 1 && ws.send(JSON.stringify({ type: 'sub', token: addr }));
@@ -571,13 +572,13 @@ function renderWalletMenu() {
 }
 
 /* ---------- 左栏 ---------- */
+// 左栏不再分平台页签：三个平台合在一个列表里，平台在筛选窗口的「平台」里选（和战壕一样）。
 // 左栏的 内盘中 / 即将发射 / 已迁移 和战壕的三列一一对应，用同一套筛选（tcMatch：平台、市值、持有人、进度、报价币、社交、税率、关键词），结果和战壕一致
 const LIST_COL = { curve: 'new', soon: 'soon', dex: 'dex' };
 function filtered() {
   const col = LIST_COL[S.listTab];
   const mine = new Set(S.positions.filter((p) => p.amount > 0).map((p) => p.token));
   return [...S.tokens.values()].filter((t) => {
-    if (S.listTab !== 'mine' && t.platform !== S.platform) return false;
     if (S.listTab !== 'mine' && isBlocked(t)) return false;   // 屏蔽的币不进列表（「我的」里持有的照常显示）
     if (S.listTab === 'curve' && t.stage === 'dex') return false;
     if (S.listTab === 'soon' && !(t.stage === 'curve' && t.progress > 0)) return false;
@@ -591,6 +592,8 @@ function filtered() {
     return true;
   }).sort((a, b) => (S.listTab === 'soon' ? (trSort() === 'mc' ? (b.mcapUsd || 0) - (a.mcapUsd || 0) : b.progress - a.progress) : b.createdAt - a.createdAt || (a.address < b.address ? -1 : 1)));
 }
+// 新币提示音 / 通知：按「新创建」列的筛选（含平台）判断是不是左栏会显示的币
+function listWants(t) { try { return tcMatch('new', t); } catch { return true; } }
 function trSort() { try { return TR.cols.soon.sort; } catch { return 'pct'; } }
 // 左栏漏斗：打开对应战壕列的筛选窗口；有条件生效时高亮
 function renderListFunnel() {
@@ -624,20 +627,18 @@ function renderList() {
     for (const el of old.values()) el.remove();
     if (anchor) { const x = body.querySelector(`:scope > [data-pa="${anchor}"]`); if (x) body.scrollTop = x.offsetTop - anchorTop; }
   }
-  const cnt = (p) => [...S.tokens.values()].filter((t) => t.platform === p && t.stage === 'curve').length;
-  $('#agentCnt').textContent = cnt('four');
-  const fresh = (p) => [...S.tokens.values()].filter((t) => t.platform === p && Date.now() - t.createdAt < 60_000).length || '';
-  $('[data-n="four"]').textContent = fresh('four'); $('[data-n="flap"]').textContent = fresh('flap');
+  $('#agentCnt').textContent = [...S.tokens.values()].filter((t) => t.stage === 'curve').length;   // 三个平台合计的内盘数
 }
 
 function renderStatus() {
   const w = wallet(S.activeWallet); const t = S.tokens.get(S.selected);
   const el = eligible(w, t);
-  const n = [...S.tokens.values()].filter((x) => x.platform === S.platform && x.stage === 'curve').length;
+  const nc = { flap: 0, four: 0, gang: 0 }; for (const x of S.tokens.values()) if (x.stage === 'curve') nc[platOf(x)]++;
+  const n = nc.flap + nc.four + nc.gang, tp = t?.platform || S.platform;
   const ago = (Date.now() - (S.net.detectAt || 0)) / 1000;
   $('#agentStatus').innerHTML = `
-    <div class="l1"><span class="muted">${S.platform === 'four' ? 'Agent 专属' : S.platform === 'gang' ? 'Gang' : 'Agent 曲线'} <b class="mono" style="color:var(--text)">${n}</b></span>
-      ${LIVE() ? `<span class="muted">${S.baw?.connected ? '<b class="g">baw 已连接</b>' : '<b class="r">baw 未连接</b>'} · 白名单以合约为准</span>` : S.platform === 'four' ? `<b class="${w.agentId ? 'g' : 'r'}">Agent ID ${w.agentId ? '✓' : '✗'}</b><b class="${el.ok ? 'g' : 'r'}">${el.ok ? '已在白名单' : el.why}</b>` : '<b class="g">无需白名单</b>'}</div>
+    <div class="l1"><span class="muted" title="Flap ${nc.flap} · Four ${nc.four} · Gang ${nc.gang}（内盘中）">全部 <b class="mono" style="color:var(--text)">${n}</b> · Flap ${nc.flap} · Four ${nc.four} · Gang ${nc.gang}</span>
+      ${LIVE() ? `<span class="muted">${S.baw?.connected ? '<b class="g">baw 已连接</b>' : '<b class="r">baw 未连接</b>'} · 白名单以合约为准</span>` : tp === 'four' ? `<b class="${w.agentId ? 'g' : 'r'}">Agent ID ${w.agentId ? '✓' : '✗'}</b><b class="${el.ok ? 'g' : 'r'}">${el.ok ? '已在白名单' : el.why}</b>` : '<b class="g">无需白名单</b>'}</div>
     ${LIVE() ? `<div class="l2" style="color:var(--muted)">Reader ${S.net.curve?.connected ? `<span class="g">✓ ${S.net.curve.total} 个市场</span>` : `<span class="r">✗ ${esc(S.net.curve?.lastError || '连接中')}</span>`} · Four ${S.net.four?.connected ? `<span class="g">✓ ${S.net.four.total}</span>` : `<span class="r">${S.net.four?.lastError ? '✗' : '回补中…'}</span>`} · Gang ${S.net.gang?.connected ? `<span class="g">✓ ${S.net.gang.total}</span>` : `<span class="r">${S.net.gang?.lastError ? '✗' : '连接中…'}</span>`} · shrine ${S.net.shrine?.launch?.connected ? '<span class="g">✓</span>' : '<span class="r">✗</span>'} · baw ${S.baw?.connected ? '<span class="g">✓</span>' : '<span class="r">✗</span>'}</div>` : ''}
     <div class="l2"><span class="spin">⟳</span> 链上检测中 · ${ago < 5 ? '刚刚' : Math.floor(ago) + 's 前'} · ${S.net.detect || 0}ms</div>`;
 }
@@ -1295,9 +1296,8 @@ document.addEventListener('click', async (e) => {
     return;
   }
   if (el.closest('#wchips') && d.w) { S.selWallets.has(d.w) ? S.selWallets.delete(d.w) : S.selWallets.add(d.w); renderRight(); return refreshQuote(); }
-  if (d.a && !el.closest('#platTabs, #amtMode')) { e.preventDefault(); return select(d.a); }
+  if (d.a && !el.closest('#amtMode')) { e.preventDefault(); return select(d.a); }
   if (el.closest('#presets') && d.p) { $('#amount').value = d.p; return refreshQuote(); }
-  if (el.closest('#platTabs') && d.p) { S.platform = d.p; $$('#platTabs button').forEach((b) => b.classList.toggle('active', b === el)); syncUrl(); lastList = 0; scheduleRender(); const f = filtered()[0]; if (f && S.tokens.get(S.selected)?.platform !== d.p) select(f.address); return; }
   if (el.closest('#sideTabs')) { S.side = d.s; $$('#sideTabs button').forEach((b) => b.classList.toggle('active', b === el)); $('#amount').value = ''; renderRight(); return refreshQuote(); }
   if (d.copy) { navigator.clipboard?.writeText(d.copy); return toast({ status: 'filled', side: 'buy', symbol: '已复制', wallet: short(d.copy), latencyMs: 0, amountIn: 0, out: 0, steps: [] }); }
   if (d.claim) { e.stopPropagation(); el.disabled = true; el.textContent = '领取中…'; try { await api('/api/claim', { market: d.claim }); } catch (err) { toast({ status: 'failed', symbol: '领取', reason: err.message }); } return; }
@@ -1469,7 +1469,7 @@ async function openFromSearch(addr) {
   // 在战壕 / 持仓页搜索时先切回交易页，否则选中了也看不到
   if (S.view !== 'trade') setView('trade');
   // 代币在另一个平台页签时先切过去
-  if (t.platform && t.platform !== S.platform) { S.platform = t.platform; $$('#platTabs button').forEach((b) => b.classList.toggle('active', b.dataset.p === t.platform)); lastList = 0; }
+  lastList = 0;
   select(t.address);
   setTimeout(() => document.querySelector(`#tokenList [data-a="${t.address}"], .tcard[data-a="${t.address}"]`)?.scrollIntoView({ block: 'nearest' }), 300);
 }
@@ -2549,7 +2549,7 @@ function openToken(t) {
   if (S.view === 'pulse') $$('.tcb').forEach((b) => { pulseScroll[b.id] = b.scrollTop; });
   if (S.view === 'hold') pulseScroll.hold = $('#hold')?.scrollTop || 0;
   // 左栏当前标签（即将发射 / 我的 等）能显示这个币就保持不变，不跳回「内盘中」
-  const fits = S.listTab === 'mine' || t.platform === S.platform && ({ curve: t.stage !== 'dex', soon: t.stage === 'curve' && t.progress > 0, dex: t.stage === 'dex' }[S.listTab]);
+  const fits = S.listTab === 'mine' || ({ curve: t.stage !== 'dex', soon: t.stage === 'curve' && t.progress > 0, dex: t.stage === 'dex' }[S.listTab]);
   location.hash = `#/${t.platform}/${fits ? S.listTab : t.stage === 'dex' ? 'dex' : 'curve'}/${t.address}`;
 }
 setInterval(() => { if (S.view === 'pulse' && Date.now() - lastPulse > 1000) { renderPulse(); lastPulse = Date.now(); } }, 1000);
