@@ -868,10 +868,13 @@ export class LiveTrader extends EventEmitter {
     for (const p of this.positions.values()) {
       if (p.amount <= 0 && !p.boughtBnb) continue;
       const t = this.market.get(p.token); if (!t) continue;
-      const value = p.amount * (t.price || 0);
+      // t.price 以报价币计（GANG、BNCB…），折成 BNB 再算价值和盈亏，否则 GANG 盘会把 GANG 数量当 BNB（和 holdings.js 同一换算）
+      const bnbUsd = this.market.bnbUsd, isBnbQuote = !t.quote || ['BNB', 'WBNB'].includes(String(t.quote).toUpperCase());
+      const rate = isBnbQuote ? 1 : (bnbUsd ? (this.market.quoteUsd?.(t) || 0) / bnbUsd : 0);
+      const value = p.amount * (t.price || 0) * rate;
       if (p.amount > 0) p.peak = Math.max(p.peak, t.price || 0);
-      out.push({ ...p, symbol: t.symbol, platform: t.platform, image: t.image || null, stage: t.stage, price: t.price, valueBnb: value, valueUsd: value * this.market.bnbUsd,
-        pnlBnb: value + p.soldBnb - p.boughtBnb, pnlPct: p.costBnb > 0 && t.price ? ((value - p.costBnb) / p.costBnb) * 100 : 0,
+      out.push({ ...p, symbol: t.symbol, platform: t.platform, image: t.image || null, stage: t.stage, price: t.price, valueBnb: value, valueUsd: value * bnbUsd,
+        pnlBnb: value + p.soldBnb - p.boughtBnb, pnlPct: p.costBnb > 0 && t.price && rate ? ((value - p.costBnb) / p.costBnb) * 100 : 0,
         drawdownPct: p.peak ? ((t.price - p.peak) / p.peak) * 100 : 0, wallet: this.wallets.find((w) => w.id === p.walletId)?.label || 'baw' });
     }
     return out.sort((a, b) => b.openedAt - a.openedAt);
