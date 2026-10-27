@@ -219,6 +219,7 @@ export class LiveMarket extends EventEmitter {
     if (existed && this.get(k).source !== 'flap-nft') return;
     // 先同步登记进列表（门槛 + 来源），名字 / 状态 / NFT 信息随后补上：搜索、钱包 2 收到订单时不用等这些读取
     const t = this.base(k);
+    if (g.meta) Object.assign(t, { symbol: t.symbol === '?' ? g.meta.symbol || '?' : t.symbol, name: t.name || g.meta.name || '' });   // 上次读到的名字先用上：节点限流时也不显示「?」
     Object.assign(t, { source: 'flap-nft', platform: 'flap', agentExclusive: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f', quote: t.quote || 'BNB', createdAt: g.at || g.seenAt, maxSupply: 1e9,
       nftGate: { capPct: 2, ...t.nftGate, nft: g.nft, removed: !!g.removed, known: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f' } });
     {
@@ -239,7 +240,11 @@ export class LiveMarket extends EventEmitter {
     const rd = (fn) => this.provider.call({ to: t.address, data: i.encodeFunctionData(fn) }).then((r) => i.decodeFunctionResult(fn, r)[0]).catch(() => '');
     const [name, symbol, meta] = await Promise.all([rd('name'), rd('symbol'), rd('metaURI')]);
     Object.assign(t, { symbol: symbol || t.symbol, name: name || t.name });
-    this.loadMeta(t, ipfsUrl(meta));
+    if (name || symbol) this.emit('detail', t.address);
+    // 读到的名字 / 代号 / 图标地址存进门槛盘登记表（data/flapNftGated.json），重启后直接用，不再依赖这一次读取成功
+    const g = this.flapNft.reg?.tokens?.[t.address];
+    this.loadMeta(t, ipfsUrl(meta) || g?.meta?.uri);
+    if (g && (name || symbol || meta)) { const m = { ...g.meta, ...(name && { name }), ...(symbol && { symbol }), ...(meta && { uri: ipfsUrl(meta) }) }; if (JSON.stringify(m) !== JSON.stringify(g.meta || {})) { g.meta = m; this.flapNft.save(); } }
   }
   async applyFlapNftState(t, st) {
     if (st.quote !== ethers.ZeroAddress && t.quoteAddress?.toLowerCase() !== st.quote.toLowerCase()) {
@@ -269,8 +274,9 @@ export class LiveMarket extends EventEmitter {
   async flapNftTick() {
     if (this.nftBusy) return; this.nftBusy = true;
     try {
-      for (const t of [...this.tokens.values()].filter((x) => x.source === 'flap-nft' && x.stage === 'curve')) {
-        try { await this.applyFlapNftState(t, await this.flapNft.state(t.address)); await this.flapNftTax(t); } catch { /* 下一轮 */ }
+      for (const t of [...this.tokens.values()].filter((x) => x.source === 'flap-nft')) {
+        if (t.stage === 'curve') try { await this.applyFlapNftState(t, await this.flapNft.state(t.address)); await this.flapNftTax(t); } catch { /* 下一轮 */ }
+        // 名字没读到就重试（已迁移的也要：以前只重试内盘，迁移盘读失败一次就一直显示「?」）
         if ((!t.name || t.symbol === '?' || !t.metaUrl) && Date.now() - (t.metaTryAt || 0) > 30_000) await this.flapNftMeta(t).catch(() => {});
       }
     } finally { this.nftBusy = false; }
