@@ -17,7 +17,7 @@ const T_OLD = '0xe57a519fe6a031fac5d360f4b8ce246c86dd280b40dc37b68c0a7cc7394ef9c
 const T_V2 = '0xd23a447045c377a966a79f59983bae21db7b92fead61df8ace4aea5628043791';
 const FILTER = { address: [GANG_OLD_PAD, GANG_V2_LAUNCHPAD], topics: [[T_OLD, T_V2]] };
 const coder = ethers.AbiCoder.defaultAbiCoder();
-const KNOWN_QUOTES = { '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c': 'BNB', '0x0c6302401aa5325c2e36f170f52c00b1d220b405': 'GANG', '0x4902c5ebc598265ed2212b559b042de8a5eeec3f': 'BNCB' };
+const KNOWN_QUOTES = { '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c': 'BNB', '0x0c6302401aa5325c2e36f170f52c00b1d220b405': 'GANG', '0x4902c5ebc598265ed2212b559b042de8a5eeec3f': 'BNCB', '0x21caef8a43163eea865baee23b9c2e327696a3bf': 'XAUt' };
 const addr = (topic) => ethers.getAddress('0x' + topic.slice(26));
 
 export class GangChain extends EventEmitter {
@@ -63,15 +63,20 @@ export class GangChain extends EventEmitter {
       if (v2) { const d = coder.decode(['string', 'string', 'string'], log.data); [name, symbol, logo] = [d[0], d[1], d[2] || null]; quoteAddress = addr(log.topics[3]).toLowerCase(); }
       else { const d = coder.decode(['string', 'string'], log.data); [name, symbol] = [d[0], d[1]]; }
     } catch { /* 解析失败时名称留空，等 gang.fun 接口补上 */ }
-    let createdAt = Math.floor(seenAt / 1000);
-    try { createdAt = await this.blockTime(log.blockNumber); } catch { /* 用发现时间 */ }
-    const quoteSymbol = !v2 ? 'BNB' : await this.symbolOf(quoteAddress);
+    // 先推送、后补区块时间（狙击要快：不等 getBlock 那一次查询，约 0.1～0.3 秒）。区块时间在缓存里就直接用；
+    // 否则先按「发现时间 − 0.5 秒」估，查到真实区块时间后改掉同一个对象的 createdAt，timeP 给要用真实时间的地方 await
+    const cached = this.blockTs.get(log.blockNumber);
+    const timeP = cached != null ? Promise.resolve(cached) : this.blockTime(log.blockNumber).catch(() => null);
+    let createdAt = cached ?? Math.floor((seenAt - 500) / 1000);
+    const quoteSymbol = !v2 ? 'BNB' : this.quoteSym.get(quoteAddress) || await this.symbolOf(quoteAddress);   // 已知报价币同步取，不等
     this.status.found++; this.status.lastAt = seenAt; this.status.lastBlock = Math.max(this.status.lastBlock, log.blockNumber);
-    this.emit('token', {
+    const it = {
       address: token, name, symbol, creator: addr(log.topics[2]).toLowerCase(), createdAt, graduated: false, raisedQuote: 0, progressPct: 0,
       quoteSymbol, quoteAddress: v2 ? quoteAddress : null, logo: logo ? new URL(logo, 'https://gang.fun').href : null, track: v2 ? 'v2' : 'v1',
-      fromChain: true, block: log.blockNumber, tx: log.transactionHash, seenAt,
-    });
+      fromChain: true, block: log.blockNumber, tx: log.transactionHash, seenAt, timeP,
+    };
+    this.emit('token', it);
+    timeP.then((ts) => { if (ts != null && ts !== it.createdAt) { it.createdAt = ts; this.emit('tokenTime', it); } });
   }
 
   async blockTime(n) {

@@ -233,9 +233,14 @@ export class LiveMarket extends EventEmitter {
 
   // 链上发现的 Gang 新盘：先上列表（名称、符号、创建者、计价币都来自事件），市值 / 头像等等接口轮询补上
   onGangChainToken(it) {
-    const lat = it.seenAt - it.createdAt * 1000;
-    (this.gangLat ||= []).unshift({ symbol: it.symbol, address: it.address, block: it.block, createdAt: it.createdAt * 1000, seenAt: it.seenAt, latencyMs: lat, viaApiFirst: this.tokens.has(this.key(it.address)) }); this.gangLat.length = Math.min(this.gangLat.length, 20);
-    console.log(`[Gang 链上] 新盘 ${it.symbol}（${it.track === 'v2' ? 'V2 · ' + it.quoteSymbol : '老盘 · BNB'}）区块 ${it.block}，出块后 ${lat}ms 发现${this.tokens.has(this.key(it.address)) ? '（接口已先收录）' : ''}`);
+    // 链上订阅先推送、后补区块时间（it.timeP）：延迟统计和日志等真实区块时间到了再记，币的创建时间也随之改正
+    const apiFirst = this.tokens.has(this.key(it.address));
+    Promise.resolve(it.timeP).then((ts) => {
+      if (ts != null) { it.createdAt = ts; const t = this.get(it.address); if (t && it.fromChain && !apiFirst) t.createdAt = ts * 1000; }
+      const lat = it.seenAt - it.createdAt * 1000;
+      (this.gangLat ||= []).unshift({ symbol: it.symbol, address: it.address, block: it.block, createdAt: it.createdAt * 1000, seenAt: it.seenAt, latencyMs: lat, viaApiFirst: apiFirst }); this.gangLat.length = Math.min(this.gangLat.length, 20);
+      console.log(`[Gang 链上] 新盘 ${it.symbol}（${it.track === 'v2' ? 'V2 · ' + it.quoteSymbol : '老盘 · BNB'}）区块 ${it.block}，出块后 ${lat}ms 发现${apiFirst ? '（接口已先收录）' : ''}`);
+    });
     if (this.tokens.has(this.key(it.address))) return;
     this.gang.seen.set(it.address, -1);
     this.upsertGang(it, true);

@@ -188,13 +188,15 @@ export class GangV2 {
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
   async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
     const { pad: p, c } = await this.curve(token); const q = this.quoteToken(c); const hashes = [];
-    const [dec, have0] = await Promise.all([isWbnb(q) ? 18 : this.decimals(q), this.balanceOf(q, wallet)]); const qSym = isWbnb(q) ? 'WBNB' : '报价币';   // 并行读，狙击要快
+    // 并行读（狙击要快）：小数位、报价币余额、授权额度、剩余额度一次读完；钱包里报价币够用时后面不再重读曲线
+    const [dec, have0, alw0, room0] = await Promise.all([isWbnb(q) ? 18 : this.decimals(q), this.balanceOf(q, wallet), this.call(q, erc20, 'allowance', [wallet, p]).then((x) => x[0]).catch(() => 0n), this.call(p, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null)]);
+    const qSym = isWbnb(q) ? 'WBNB' : '报价币'; let fresh = true;
     // 只用来判断钱包里现有报价币够不够（够就直接用这么多）；不够时下面按实际到账数量买。用 30 秒内的汇率，省掉 1～2 次 baw 报价
     let need = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * await this.quoteRate(q, { stale: 30_000 })).toFixed(Math.min(12, dec)), dec);
     const have = have0;
     if (payQuote != null) { const want = ethers.parseUnits(Number(payQuote).toFixed(Math.min(12, dec)), dec); need = want < have ? want : have; if (need <= 0n) throw new Error('钱包里没有这个盘的报价币'); }
     if (have < need) {
-      const before = have; const t0 = Date.now();
+      const before = have; const t0 = Date.now(); fresh = false;
       if (isWbnb(q)) hashes.push(await this.send({ wallet, to: WBNB, valueWei: ethers.parseEther(String(amountBnb)), inputData: erc20.encodeFunctionData('deposit', []), label: 'BNB→WBNB 包装', step }));
       else if (await this.needsUsdt(q)) {   // Ondo 类报价币：BNB→USDT→报价币
         const a = await this.swapWait({ wallet, from: BNB_NATIVE, to: USDT, qty: amountBnb, slippage, step, label: 'BNB→USDT' }); if (a.o.txHash) hashes.push(a.o.txHash);
@@ -210,8 +212,10 @@ export class GangV2 {
       if (got <= 0n) throw new Error('报价币没有到账，停止后续步骤');
       need = got; step(`收到 ${ethers.formatUnits(got, dec)} ${qSym}`, Date.now() - t0);
     } else step(`钱包里已有足够${qSym}，直接使用 ${ethers.formatUnits(need, dec)}`, 0);
-    const ap = await this.ensureAllowance({ wallet, token: q, spender: p, amount: need, label: `授权${qSym}`, step, kind: 'quote', symbol: qSym }); if (ap) hashes.push(ap);
-    const [{ c: c2 }, room] = await Promise.all([this.curve(token), this.call(p, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null)]);
+    if (fresh && alw0 >= need) step('授权额度够用，跳过授权', 0);
+    else { const ap = await this.ensureAllowance({ wallet, token: q, spender: p, amount: need, label: `授权${qSym}`, step, kind: 'quote', symbol: qSym }); if (ap) hashes.push(ap); fresh = false; }
+    // 没有包装 / 换币 / 授权（几百毫秒内）就直接用开头读的曲线和额度；否则重读。数量偏差由滑点保护兜底，下面还有链上模拟
+    const [{ c: c2 }, room] = fresh ? [{ c }, room0] : await Promise.all([this.curve(token), this.call(p, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null)]);
     const r = this.buyQuote(c2, need, room);
     if (r.tokens <= 0n) throw new Error('报价为 0：可能已到每个钱包 1% 上限，或盘已毕业');
     const data = pad.encodeFunctionData('buy', [token, need, minOut(r.tokens, slippage)]);
