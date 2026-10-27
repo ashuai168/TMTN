@@ -76,7 +76,7 @@ export class GangFun extends EventEmitter {
     return { address: x.address, name: x.name, symbol: x.symbol, creator: x.creator, creatorHandle: x.creatorHandle, createdAt: x.createdAt, graduated: x.graduated, graduatedAt: x.graduatedAt || null, pair: x.pair,
       raisedQuote: Number(x.raisedQuote) || 0, gradAmtQuote: Number(x.gradAmtQuote) || 0, quoteSymbol: x.quoteSymbol || 'BNB', quoteAddress: x.quoteAddress,
       progressPct: x.progressPct, priceBnb: (Number(x.priceUsd) || 0) / bUsd, priceQuote: Number(x.priceQuote) || null, quoteUsd: qUsd, fdvUsd: x.fdvUsd, holders: x.holders, trades: x.trades, lastTradeAt: x.lastTradeAt,
-      volume24hBnb: (Number(x.volume24hUsd) || 0) / bUsd, logo: x.logoUrl ? new URL(x.logoUrl, 'https://gang.fun').href : null, track: 'v2',
+      volume24hBnb: (Number(x.volume24hUsd) || 0) / bUsd, volume24hUsd: Number(x.volume24hUsd) || 0, logo: x.logoUrl ? new URL(x.logoUrl, 'https://gang.fun').href : null, track: 'v2',
       taxed: x.taxed ?? null, taxBps: x.taxBps ?? null, dividends: x.dividends || null, dividendVault: x.dividends?.vault || x.v2DividendVault || null };   // logoThumbUrl 是相对路径且实际返回网页，不能用
   }
 
