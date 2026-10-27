@@ -98,7 +98,19 @@ export class FlapNft extends EventEmitter {
     for (const b of blocks) { const r = ranges.at(-1); if (r && b - r[1] <= 20 && b - r[0] < 500) r[1] = b; else ranges.push([b, b]); }
     const got = [];
     for (const [a, b] of ranges) for (const l of await this.provider.getLogs({ address: FLAP_PORTAL, topics: [[T_BUY, T_SELL]], fromBlock: a, toBlock: b })) { const tr = this.parseTrade(l); if (tr) got.push(tr); }
+    await this.realTraders(got);
     return got;
+  }
+  // 事件里的 trader 是直接调 Portal 的地址：走 baw 市价单 / 聚合器时是路由合约（如 0x9e69…f364，代币再转给钱包），不是真正的人。
+  // trader 是合约就改记成交易发起人（tx.from = tx.origin，门槛也是按它检查的），原地址留在 via。合约判断、tx.from 都缓存
+  async realTraders(list) {
+    this.isCode ||= new Map(); this.txFrom ||= new Map();
+    const lim = async (xs, fn) => { const q = [...xs]; await Promise.all(Array.from({ length: Math.min(6, q.length) }, async () => { while (q.length) await fn(q.shift()); })); };
+    await lim(new Set(list.map((x) => x.trader).filter((a) => !this.isCode.has(a))), async (a) => { try { const c = await this.provider.getCode(a); this.isCode.set(a, c !== '0x' && !c.startsWith('0xef0100'));   /* 0xef0100… = 7702 委托的普通钱包，不算合约 */ } catch { /* 下次再查 */ } });
+    const routed = list.filter((x) => this.isCode.get(x.trader));
+    await lim(new Set(routed.map((x) => x.tx).filter((h) => !this.txFrom.has(h))), async (h) => { try { const tx = await this.provider.getTransaction(h); if (tx?.from) this.txFrom.set(h, tx.from.toLowerCase()); } catch { /* 留原地址 */ } });
+    for (const x of routed) { const f = this.txFrom.get(x.tx); if (f) { x.via = x.trader; x.trader = f; } }
+    if (this.txFrom.size > 20_000) this.txFrom = new Map([...this.txFrom].slice(-10_000));
   }
   // 一个门槛盘从创建起的全部内盘成交（补过的接着补，排队一个一个来，启动时几十个币不会一起打节点）
   history(token) {
