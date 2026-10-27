@@ -194,6 +194,7 @@ tr:hover td { background: #11161d; }
 td .side { display: inline-flex; align-items: center; gap: 6px; font-family: var(--sans); font-weight: var(--fw-strong); }
 td a { color: var(--text); text-decoration: none; }
 td.addr { color: var(--muted); }
+.wn { color: #fff; }   /* 没备注的钱包：白色（备注过的用 .y 黄色，自己的 .me 绿色） */
 .log-line { display: flex; gap: 10px; padding: 4px 12px; font-size: 12px; border-top: 1px solid #12171d; }
 .log-line .t { color: var(--dim); font-family: var(--mono); flex: none; }
 .log-line.ok { color: var(--g); } .log-line.error { color: var(--r); } .log-line.warn { color: var(--y); } .log-line.dim { color: var(--muted); }
@@ -1035,7 +1036,7 @@ body { --favH: 26px; } body.fav-on { --favH: 60px; }
 .trkp-list { flex: 1; overflow: auto; }
 .trkp-e { padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; } .trkp-e:hover { background: rgba(255, 255, 255, .03); }
 .trkp-r1, .trkp-r2 { display: flex; align-items: center; gap: 6px; } .trkp-r2 { margin-top: 4px; }
-.trkp-who { color: var(--y); font-weight: var(--fw-strong); cursor: pointer; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .trkp-who:hover { text-decoration: underline; }
+.trkp-who { font-weight: var(--fw-strong); cursor: pointer; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .trkp-who:hover { text-decoration: underline; }
 .trkp-act { font-weight: var(--fw-strong); padding: 0 5px; border: 1px solid currentColor; font-size: 11px; } .trkp-amt { font-weight: var(--fw-strong); }
 .trkp-tok { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; } .trkp-tok:hover b { text-decoration: underline; }
 .trkp-empty { padding: 24px 14px; color: var(--muted); font-size: 13px; line-height: 1.7; } .trkp-empty button { margin-top: 8px; padding: 4px 12px; background: var(--y); color: #1a1400; font-weight: var(--fw-strong); }
