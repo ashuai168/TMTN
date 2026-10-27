@@ -893,7 +893,6 @@ body.fav-on .favbar { display: flex; }
 .flowt td { overflow: hidden; text-overflow: ellipsis; }   /* 代币、地址两列平分剩下的宽度 */
 .flowt th, .flowt td { padding-left: 8px; padding-right: 8px; white-space: nowrap; }
 .flowt td .hsub { font-size: 10px; }
-.wallet-sel .handle:empty { display: none; }
 
 /* 打赏作者 */
 .donate-qr { display: grid; place-items: center; margin: 6px auto 10px; padding: 12px; width: fit-content; background: #fff; border-radius: 14px; }
@@ -1169,20 +1168,18 @@ h1, h2, h3, h4, .lh b, .tch b, .trkp-h b { font-weight: var(--fw-head); }
 body.trkp-on #snipe { margin-left: calc(var(--trkpW, 340px) + 8px); }
 @media (max-width: 760px) { body.trkp-on #snipe { margin-left: 0; } }
 
-/* 持仓页右侧 Gang 新币战壕：持仓表在左，战壕列贴在右边，各自滚动 */
+/* 持仓页左侧 Gang 新币战壕（和交易页左栏同样式）：战壕在左、持仓表在右，各自滚动；钱包追踪栏打开时排在它右边 */
 #hold.hg-on { display: flex; align-items: flex-start; gap: 12px; }
 #hold.hg-on.hidden { display: none; }
-#hold.hg-on > .hold-in { flex: 1; min-width: 0; }
-.hold-gang { flex: none; width: 380px; position: sticky; top: 0; height: calc(100vh - 46px - var(--favH, 0px) - 46px); background: #0b0b0f; border: 1px solid var(--line); border-right: 1px solid var(--line) !important; }
+#hold.hg-on > .hold-in { flex: 1; min-width: 0; margin: 0; }
+.hold-gang { flex: none; width: 400px; position: sticky; top: 0; height: calc(100vh - 46px - var(--favH, 0px) - 46px); display: flex; flex-direction: column; container-type: inline-size; border: 1px solid var(--line); }
 .hold-gang.hidden { display: none; }
-.hold-gang .tch-r { margin-left: auto; display: flex; align-items: center; gap: 6px; }
-.hold-gang .hg-st { font-size: 11px; }
-.hold-gang .tcard.gang { background: var(--card-gang); border-color: var(--card-gang-line); }
-.hold-gang .tcard:hover { filter: brightness(1.15); }
+.hold-gang .lctrl { margin-left: auto; }
+.hold-gang .tlist { flex: 1; min-height: 0; overflow-y: auto; gap: 4px; padding: 4px 6px; background: #0b0b0f; overflow-anchor: none; }
 #holdGang *, #holdGang *::before, #holdGang *::after { border-radius: 0 !important; }
-.hg-open { position: fixed; right: 10px; bottom: 34px; z-index: 30; padding: 6px 10px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--line2); cursor: pointer; }
+.hg-open { position: fixed; left: 10px; bottom: 34px; z-index: 30; padding: 6px 10px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--line2); cursor: pointer; }
+body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .hg-open.hidden { display: none; }
-#hold.hidden ~ .hg-open, #hold.hidden .hg-open { display: none; }
-@media (max-width: 1100px) { .hold-gang { width: 320px; } }
+@media (max-width: 1100px) { .hold-gang { width: 340px; } }
 @media (max-width: 860px) { #hold.hg-on { display: block; } .hold-gang { position: static; width: auto; height: 60vh; margin-top: 12px; } }
 .snp-top .trk-new.snp-real { background: var(--r); color: #fff; border-color: var(--r); margin-right: 8px; }
