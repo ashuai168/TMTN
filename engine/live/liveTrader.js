@@ -594,7 +594,7 @@ export class LiveTrader extends EventEmitter {
         step(`当前余额 ${ex.str} ${symbol}（链上精确值）${sellStr !== ex.str ? `，这次换 ${sellStr}` : ''}`, 0);
         let r;
         if (token.toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase()) {
-          const bal = await (this.market.tradeProvider || this.market.provider).call({ to: token, data: new ethers.Interface(['function balanceOf(address) view returns (uint256)']).encodeFunctionData('balanceOf', [w.address]) }).then((x) => BigInt(x));
+          const bal = await (this.market.tradeProvider || this.market.provider).call({ to: token, data: new ethers.Interface(['function balanceOf(address) view returns (uint256)']).encodeFunctionData('balanceOf', [w.address]) }).then((x) => BigInt(x)) - (sellStr !== ex.str ? ex.raw - ethers.parseUnits(sellStr, ex.dec) : 0n);   // 定时任务给了数量：只解包这部分
           const hash = await this.portal.send({ wallet: w.address, to: token, inputData: new ethers.Interface(['function withdraw(uint256)']).encodeFunctionData('withdraw', [bal]), label: 'WBNB→BNB 解包', step });
           r = { venue: 'WBNB.withdraw', expected: Number(ethers.formatEther(bal)), txHash: hash, hashes: [hash] };
         } else r = await this.swapReal({ from: token, to: BNB_NATIVE, qty: sellStr, slippage, step, label: `${symbol}→BNB` });
@@ -633,7 +633,7 @@ export class LiveTrader extends EventEmitter {
           const ex = await this.exactBal(w, addr), keep = ethers.parseUnits(Number(c.keep[sym] || 0).toFixed(ex.dec), ex.dec);
           const raw = ex.raw > keep ? ex.raw - keep : 0n, qty = ethers.formatUnits(raw, ex.dec);
           if (raw === 0n) { lines.push(`${sym} 余额 ${fmtQ(Number(ex.str))}，不超过保留 ${c.keep[sym] || 0}，不换`); continue; }
-          let bnb = (this.market.qUsd?.[addr.toLowerCase()] || 0) * Number(qty) / (this.market.bnbUsd || NaN);
+          let bnb = sym === 'WBNB' ? Number(qty) : (this.market.qUsd?.[addr.toLowerCase()] || 0) * Number(qty) / (this.market.bnbUsd || NaN);
           if (!(bnb > 0)) bnb = Number((await baw.marketQuote({ fromTokenQty: qty, fromToken: addr, toToken: BNB_NATIVE, slippage: c.slippage }))?.toCoinAmount || 0);
           if (bnb < c.minBnb) { lines.push(`${sym} 可换 ${fmtQ(Number(qty))}（约 ${bnb.toFixed(4)} BNB），低于门槛 ${c.minBnb} BNB，不换`); continue; }
           const o = await this.quoteToBnb({ token: addr, slippage: c.slippage, qty, source: '定时换 BNB', via: '定时换回 BNB' });
@@ -926,12 +926,14 @@ LiveTrader.prototype.setMaxTrade = function (v) {
 };
 
 // 定时换 BNB 的币和设置：校验不过直接报错（页面显示）；读旧文件时 loose = true，坏值换成默认
-const Q2B_TOKENS = { BNCB: QUOTE_TOKENS.BNCB, GANG: '0x0C6302401Aa5325C2e36f170F52C00b1D220B405' };
+// WBNB 默认不勾：Gang 狙击买入时多包的 WBNB 会留着下次直接用（jak 2026-10-27 加上 WBNB，配合保留量用）
+const Q2B_TOKENS = { BNCB: QUOTE_TOKENS.BNCB, GANG: '0x0C6302401Aa5325C2e36f170F52C00b1D220B405', WBNB: QUOTE_TOKENS.WBNB };
+const Q2B_DEFAULT_OFF = new Set(['WBNB']);
 function normQ2b(x, loose = false) {
   x = x && typeof x === 'object' ? x : {};
   const num = (v, d, lo, hi, name) => { if (v === undefined || v === null || v === '') return d; const n = Number(v); if (Number.isFinite(n) && n >= lo && n <= hi) return n; if (loose) return d; throw new Error(`${name}要在 ${lo}～${hi} 之间`); };
   const keep = {}, tokens = {};
-  for (const s of Object.keys(Q2B_TOKENS)) { keep[s] = num(x.keep?.[s], 0, 0, 1e15, `${s} 保留量`); tokens[s] = x.tokens?.[s] !== false; }
+  for (const s of Object.keys(Q2B_TOKENS)) { keep[s] = num(x.keep?.[s], 0, 0, 1e15, `${s} 保留量`); tokens[s] = x.tokens?.[s] === undefined ? !Q2B_DEFAULT_OFF.has(s) : x.tokens[s] !== false; }
   return { on: x.on === true, mins: Math.round(num(x.mins, 60, 5, 1440, '间隔（分钟）')), minBnb: num(x.minBnb, 0.01, 0, 100, '最小金额（BNB）'), slippage: num(x.slippage, 1, 0.1, 5, '滑点（%）'), keep, tokens };
 }
 

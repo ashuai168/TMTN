@@ -1273,7 +1273,8 @@ function openAutoSend() {
     sw.disabled = false; renderAutoSend();
   });
 }
-// 定时换 BNB：BNCB / GANG 定时换回 BNB。默认关，打开要确认；钱包 1 页面上的设置同时发给钱包 2
+const Q2B_SYMS = ['BNCB', 'GANG', 'WBNB'];
+// 定时换 BNB：BNCB / GANG / WBNB 定时换回 BNB。默认关，打开要确认；钱包 1 页面上的设置同时发给钱包 2
 function renderQ2bSum() { const c = S.settings?.autoQ2b, el = $('#q2bSum'); $('#q2bLink')?.classList.toggle('hidden', !LIVE()); if (el && c) el.textContent = c.on ? `每 ${c.mins} 分钟 · ≥${c.minBnb} BNB` : '关'; }
 async function loadQ2b() {
   const box = $('.q2b-dlg .q2b-st'); if (!box) return;
@@ -1283,17 +1284,17 @@ async function loadQ2b() {
     <div class="ui-note">上一轮 ${t(x.last?.at)}：${esc((x.last?.lines || ['还没执行过']).join('；'))}</div>`}</div>`).join('');
   const c = v[0]?.cfg; if (c && !box.dataset.filled) { box.dataset.filled = 1; const f = $('.q2b-dlg');
     f.querySelector('[name=mins]').value = c.mins; f.querySelector('[name=minBnb]').value = c.minBnb; f.querySelector('[name=slippage]').value = c.slippage;
-    for (const s of ['BNCB', 'GANG']) { f.querySelector(`[name=keep${s}]`).value = c.keep[s] || 0; f.querySelector(`[name=tok${s}]`).checked = c.tokens[s] !== false; }
+    for (const s of Q2B_SYMS) { f.querySelector(`[name=keep${s}]`).value = c.keep[s] || 0; f.querySelector(`[name=tok${s}]`).checked = c.tokens[s] !== false; }
     f.querySelector('.as-sw').classList.toggle('on', !!c.on); }
 }
 function openQ2b() {
   const wrap = document.createElement('div'); wrap.className = 'ui-dlg-back';
   const inp = (n, w = 90) => `<input class="mono q2b-in" name="${n}" inputmode="decimal" style="width:${w}px" />`;
-  wrap.innerHTML = `<div class="ui-dlg q2b-dlg" role="dialog" aria-modal="true"><div class="ui-h">⟲ 定时换 BNB（BNCB / GANG）</div>
-    <div class="ui-b"><div class="as-row"><div><b>定时把 BNCB / GANG 换成 BNB</b><div class="ui-note">两个钱包同时生效，各按自己的余额换</div></div><button class="as-sw" data-q2b-on role="switch"><i></i></button></div>
+  wrap.innerHTML = `<div class="ui-dlg q2b-dlg" role="dialog" aria-modal="true"><div class="ui-h">⟲ 定时换 BNB（BNCB / GANG / WBNB）</div>
+    <div class="ui-b"><div class="as-row"><div><b>定时把 BNCB / GANG / WBNB 换成 BNB</b><div class="ui-note">两个钱包同时生效，各按自己的余额换</div></div><button class="as-sw" data-q2b-on role="switch"><i></i></button></div>
     <div class="q2b-grid"><label>每隔 ${inp('mins', 70)} 分钟</label><label>可换价值 ≥ ${inp('minBnb')} BNB 才换</label><label>滑点 ${inp('slippage', 60)} %</label>
-    <label><input type="checkbox" name="tokBNCB" /> BNCB，保留 ${inp('keepBNCB', 110)} 个</label><label><input type="checkbox" name="tokGANG" /> GANG，保留 ${inp('keepGANG', 110)} 个</label></div>
-    <p class="ui-note">保留量不会被换掉：「BNB 不够就用 BNCB / GANG 买」和 Gang 报价币盘（用 GANG 计价）都要用到这些币，全换光的话这两样就只能用 BNB。</p>
+    ${Q2B_SYMS.map((s) => `<label><input type="checkbox" name="tok${s}" /> ${s}，保留 ${inp('keep' + s, 110)} 个</label>`).join('')}</div>
+    <p class="ui-note">保留量不会被换掉：「BNB 不够就用 BNCB / GANG 买」和 Gang 报价币盘（用 GANG 计价）都要用到这些币，全换光的话这两样就只能用 BNB。WBNB 默认不勾：Gang 狙击买入多包的 WBNB 会留着下次直接用，要换的话建议填保留量（比如一笔狙击的金额）。WBNB 是 1:1 解包，只付 gas。</p>
     <div class="q2b-st"></div></div>
     <div class="ui-f"><button class="ui-btn" data-q2b-run>立即执行一轮</button><button class="ui-btn" data-q2b-save>保存</button><button class="ui-btn" data-close-q2b>关闭</button></div></div>`;
   document.body.appendChild(wrap); requestAnimationFrame(() => wrap.classList.add('in')); loadQ2b();
@@ -1302,7 +1303,7 @@ function openQ2b() {
   document.addEventListener('keydown', key, true);
   wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
   const form = () => { const f = wrap.querySelector('.q2b-dlg'), g = (n) => f.querySelector(`[name=${n}]`);
-    return { mins: g('mins').value, minBnb: g('minBnb').value, slippage: g('slippage').value, keep: { BNCB: g('keepBNCB').value, GANG: g('keepGANG').value }, tokens: { BNCB: g('tokBNCB').checked, GANG: g('tokGANG').checked } }; };
+    return { mins: g('mins').value, minBnb: g('minBnb').value, slippage: g('slippage').value, keep: Object.fromEntries(Q2B_SYMS.map((s) => [s, g('keep' + s).value])), tokens: Object.fromEntries(Q2B_SYMS.map((s) => [s, g('tok' + s).checked])) }; };
   const send = async (body, ok) => { try { const r = await api('/api/auto-q2b', body); const bad = r.filter((x) => x.error); if (bad.length) toast({ status: 'failed', symbol: '定时换 BNB', reason: bad.map((x) => `${x.wallet || x.slot}：${x.error}`).join('；') }); else note(ok); S.settings.autoQ2b = r[0].cfg; renderQ2bSum(); } catch (err) { toast({ status: 'failed', symbol: '定时换 BNB', reason: err.message }); } loadQ2b(); };
   wrap.addEventListener('click', async (e) => {
     if (e.target.closest('[data-close-q2b]')) return close();
@@ -1311,7 +1312,7 @@ function openQ2b() {
     else if (b.matches('[data-q2b-on]')) {
       const on = !b.classList.contains('on'), f = form();
       if (on && !(await ui.confirm({ title: '打开「定时换 BNB」？', danger: true, confirmText: '打开',
-        body: `<p>以后每 <b>${esc(f.mins)}</b> 分钟，两个钱包都会把 ${['BNCB', 'GANG'].filter((s) => f.tokens[s]).map((s) => `<b>${s}</b>（保留 ${esc(f.keep[s] || 0)}）`).join('、') || '（没勾选币）'} 超出保留量、价值 ≥ ${esc(f.minBnb)} BNB 的部分真实换成 BNB。</p>`,
+        body: `<p>以后每 <b>${esc(f.mins)}</b> 分钟，两个钱包都会把 ${Q2B_SYMS.filter((s) => f.tokens[s]).map((s) => `<b>${s}</b>（保留 ${esc(f.keep[s] || 0)}）`).join('、') || '（没勾选币）'} 超出保留量、价值 ≥ ${esc(f.minBnb)} BNB 的部分真实换成 BNB。</p>`,
         after: '<p class="ui-note">真实兑换，不会再逐笔问你；随时可以在这里关掉。</p>' }))) return;
       b.disabled = true; await send({ ...f, on }, on ? '已打开定时换 BNB（两个钱包）' : '已关闭定时换 BNB'); b.disabled = false;
       b.classList.toggle('on', !!S.settings.autoQ2b?.on);
