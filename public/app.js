@@ -800,6 +800,15 @@ $('#bottomBody').addEventListener('click', (e) => {
   if (multi && !S.orderSlots) return note('后端还是旧版本，不能只卖一个钱包：重启后端后再点（现在点会让所有钱包一起卖）', 'info');
   submitOrder({ token: tk, side: 'sell', wallets: [w], amountFor: () => +pct, ...(multi && +slot ? { slots: [+slot], label: lbl } : {}) });
 });
+// 「我的持仓」的成交列表：标出是哪个钱包的；市值 = 成交单价（美元，按当时 BNB 价）× 总量
+function posTradesHtml(hr, t) {
+  const ws = HOLD.data?.wallets?.length > 1 ? HOLD.data.wallets : null, lc = String(hr.token).toLowerCase();
+  const list = ws ? ws.flatMap((w) => (w.rows || []).filter((r) => String(r.token).toLowerCase() === lc).flatMap((r) => (r.trades || []).map((x) => ({ ...x, wl: w.label })))).sort((a, b) => b.ts - a.ts) : hr.trades || [];
+  if (!list.length) return '';
+  const supply = t?.maxSupply || (hr.amount > 0 && hr.supplyPct > 0 ? (hr.amount * 100) / hr.supplyPct : 1e9);
+  const mc = (x) => (x.tokens > 0 && x.bnb > 0 ? ((x.usd ?? x.bnb * S.bnbUsd) / x.tokens) * supply : null);
+  return `<table class="ttable"><tr><th>时间</th><th class="l">方向</th><th>数量</th><th>金额 (BNB)</th><th title="成交时的市值：成交单价 × 总量">市值</th>${ws ? '<th class="l">钱包</th>' : ''}<th class="l">交易</th></tr>${list.map((x) => `<tr><td class="dim">${new Date(x.ts).toLocaleString('zh-CN', { hour12: false })}</td><td class="l ${x.side === 'buy' ? 'g' : 'r'}">${x.side === 'buy' ? '买入' : '卖出'}</td><td>${K(x.tokens)}</td><td>${bnb(x.bnb, 5)}</td><td>${mc(x) != null ? usd(mc(x)) : '—'}</td>${ws ? `<td class="l"><b class="me">${esc(x.wl || '')}</b></td>` : ''}<td class="l">${txLink(x.tx)}</td></tr>`).join('')}</table>`;
+}
 function renderBottom() {
   const b = $('#bottomBody'); const t = S.tokens.get(S.selected);
   const mineSet = new Set(S.wallets.map((w) => 'user:' + w.id));
@@ -840,7 +849,7 @@ function renderBottom() {
           <div title="${usdTip(hr)}"><span>已卖出</span><b>$${(hr.soldUsd || 0).toFixed(2)}</b><small>${bnb(hr.soldBnb)} BNB</small></div>
           <div title="${usdTip(hr)}"><span>盈亏</span><b class="${(hr.pnlUsd ?? hr.pnlBnb ?? 0) >= 0 ? 'g' : 'r'}">${usdSigned(hr.pnlUsd)}</b><small>${hr.pnlPct != null ? (hr.pnlPct >= 0 ? '+' : '') + hr.pnlPct.toFixed(1) + '%' : ''}</small></div>
           ${hr.amount > 0 ? `<div class="acts"><button class="qb" data-hsell="${hr.walletId}:${hr.token}:50">卖 50%</button> <button class="qb" style="color:var(--r)" data-hsell="${hr.walletId}:${hr.token}:100">清仓</button></div>` : ''}
-        </div>${hr.trades?.length ? `<table class="ttable"><tr><th>时间</th><th class="l">方向</th><th>数量</th><th>金额 (BNB)</th><th class="l">交易</th></tr>${hr.trades.map((x) => `<tr><td class="dim">${new Date(x.ts).toLocaleString('zh-CN', { hour12: false })}</td><td class="l ${x.side === 'buy' ? 'g' : 'r'}">${x.side === 'buy' ? '买入' : '卖出'}</td><td>${K(x.tokens)}</td><td>${bnb(x.bnb, 5)}</td><td class="l">${txLink(x.tx)}</td></tr>`).join('')}</table>` : ''}`;
+        </div>${posTradesHtml(hr, t)}`;
         holdRow(t); break;
       }
       const rows = S.positions; cnt = rows.filter((p) => p.amount > 0).length + ' 个持仓';

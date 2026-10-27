@@ -81,12 +81,12 @@ export class Holdings {
               const o = other(out); let v = o.bnb;
               if (!v && qs.has(tok) && Object.keys(out).length) v = got * this.rateAt(tok, ts);   // 卖别的币换回报价币：按当时汇率记成本；单纯转入不算成本
               r.buys++; r.boughtBnb += v; r.boughtUsd += v * px; r.boughtQty += got; if (o.qAmt) { r.boughtQuote += o.qAmt; r.quote = o.qAddr; }
-              r.trades.push({ side: 'buy', ts, tokens: got, bnb: v, quoteAmt: o.qAmt || null, quote: o.qAddr, tx: h.txHash });
+              r.trades.push({ side: 'buy', ts, tokens: got, bnb: v, usd: v * px, quoteAmt: o.qAmt || null, quote: o.qAddr, tx: h.txHash });
             } else if (sent > 0) {
               const o = other(inn); let v = o.bnb;
               if (!v && qs.has(tok)) v = sent * this.rateAt(tok, ts);   // 报价币拿去买了别的币：按当时汇率记作转出价值
               r.sells++; r.soldBnb += v; r.soldUsd += v * px;
-              r.trades.push({ side: 'sell', ts, tokens: sent, bnb: v, quoteAmt: o.qAmt || null, quote: o.qAddr, tx: h.txHash });
+              r.trades.push({ side: 'sell', ts, tokens: sent, bnb: v, usd: v * px, quoteAmt: o.qAmt || null, quote: o.qAddr, tx: h.txHash });
             } else continue;
             r.fees += fee; r.feesUsd += fee * px; r.firstAt = Math.min(r.firstAt, ts); m.set(tok, r);
           }
