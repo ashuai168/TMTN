@@ -196,17 +196,23 @@ export class LiveMarket extends EventEmitter {
     Object.assign(t, { source: 'flap-nft', platform: 'flap', agentExclusive: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f', quote: t.quote || 'BNB', createdAt: g.at || g.seenAt, maxSupply: 1e9,
       nftGate: { capPct: 2, ...t.nftGate, nft: g.nft, removed: !!g.removed, known: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f' } });
     {
-      const i = new ethers.Interface(['function name() view returns (string)', 'function symbol() view returns (string)', 'function metaURI() view returns (string)']);
-      const rd = (fn) => this.provider.call({ to: k, data: i.encodeFunctionData(fn) }).then((r) => i.decodeFunctionResult(fn, r)[0]).catch(() => '');
-      const [name, symbol, meta, st, info] = await Promise.all([rd('name'), rd('symbol'), rd('metaURI'), this.flapNft.state(k).catch(() => null), this.flapNft.nftInfo(g.nft).catch(() => null)]);
+      const [st, info] = await Promise.all([this.flapNftMeta(t).catch(() => {}), this.flapNft.state(k).catch(() => null), this.flapNft.nftInfo(g.nft).catch(() => null)]).then((r) => r.slice(1));
       if (!g.at && g.block) { try { g.at = (await this.provider.getBlock(g.block)).timestamp * 1000; this.flapNft.save(); } catch { /* 用发现时间 */ } }
-      Object.assign(t, { symbol: symbol || t.symbol, name: name || t.name, createdAt: g.at || g.seenAt });
+      Object.assign(t, { createdAt: g.at || g.seenAt });
       if (info) Object.assign(t.nftGate, { name: info.name, symbol: info.symbol, image: info.image, known: info.known });
       if (st) await this.applyFlapNftState(t, st);
       await this.flapNftTax(t).catch(() => {});
-      this.loadMeta(t, ipfsUrl(meta));
       if (!existed && !restore && t.stage === 'curve') this.emit('launch', { ...this.summary(t), detectMs: Math.max(0, Date.now() - (t.createdAt || Date.now())) });
     }
+  }
+  // 名字 / 代号 / 图标：读失败（节点限流等）时为空，代号留着「?」；flapNftTick 每 30 秒重试一次，直到读到为止
+  async flapNftMeta(t) {
+    t.metaTryAt = Date.now();
+    const i = new ethers.Interface(['function name() view returns (string)', 'function symbol() view returns (string)', 'function metaURI() view returns (string)']);
+    const rd = (fn) => this.provider.call({ to: t.address, data: i.encodeFunctionData(fn) }).then((r) => i.decodeFunctionResult(fn, r)[0]).catch(() => '');
+    const [name, symbol, meta] = await Promise.all([rd('name'), rd('symbol'), rd('metaURI')]);
+    Object.assign(t, { symbol: symbol || t.symbol, name: name || t.name });
+    this.loadMeta(t, ipfsUrl(meta));
   }
   async applyFlapNftState(t, st) {
     if (st.quote !== ethers.ZeroAddress && t.quoteAddress?.toLowerCase() !== st.quote.toLowerCase()) {
@@ -237,6 +243,7 @@ export class LiveMarket extends EventEmitter {
     try {
       for (const t of [...this.tokens.values()].filter((x) => x.source === 'flap-nft' && x.stage === 'curve')) {
         try { await this.applyFlapNftState(t, await this.flapNft.state(t.address)); await this.flapNftTax(t); } catch { /* 下一轮 */ }
+        if ((!t.name || t.symbol === '?' || !t.metaUrl) && Date.now() - (t.metaTryAt || 0) > 30_000) await this.flapNftMeta(t).catch(() => {});
       }
     } finally { this.nftBusy = false; }
   }
