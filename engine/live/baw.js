@@ -17,7 +17,30 @@ function formatErr(parsed, fallback) {
   return e ? `${e.name || e.code || 'baw_error'}: ${e.message || ''}`.trim() : fallback;
 }
 
-export function runBaw(args, { timeoutMs = 90_000, onChild } = {}) {
+// 不同版本的 baw 支持的参数不一样（比如 1.11.0 的 wallet balance 没有 --hideLowValue，1.12.0 才有）。
+// baw 报「unknown option '--X'」时去掉这个参数（连同它的值）重试一次，并记住，之后不再传。参数解析失败时 baw 什么都没做，重试是安全的。
+const unsupportedFlags = new Set();
+const stripFlags = (args) => {
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (unsupportedFlags.has(args[i])) { if (i + 1 < args.length && !String(args[i + 1]).startsWith('--')) i++; continue; }
+    out.push(args[i]);
+  }
+  return out;
+};
+
+export async function runBaw(args, opts = {}) {
+  try { return await runBawOnce(stripFlags(args), opts); }
+  catch (e) {
+    const flag = /unknown option '(--[A-Za-z][\w-]*)'/.exec(e.message)?.[1];
+    if (!flag || unsupportedFlags.has(flag) || !args.includes(flag)) throw e;
+    unsupportedFlags.add(flag);
+    console.warn(`[baw] 当前 baw 不支持 ${flag}，已去掉这个参数重试`);
+    return runBawOnce(stripFlags(args), opts);
+  }
+}
+
+function runBawOnce(args, { timeoutMs = 90_000, onChild } = {}) {
   return new Promise((resolve, reject) => {
     const child = execFile(BAW_BIN, ['--json', ...args], { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: process.env }, (err, stdout, stderr) => {
       const text = String(stdout || '').trim();
