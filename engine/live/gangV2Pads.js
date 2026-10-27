@@ -276,8 +276,8 @@ export class GangV2 {
       try {
         if (await this.needsUsdt(q)) {   // Ondo 类：报价币→USDT→BNB
           if (usdtGot == null) { const a = await this.swapWait({ wallet, from: q, to: USDT, qty: ethers.formatUnits(got, dec), slippage, step, label: '报价币→USDT' }); if (a.o.txHash) hashes.push(a.o.txHash); usdtGot = a.got; }   // 只换一次，重试时只重试 USDT→BNB
-          const sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(usdtGot, 18), fromToken: USDT, toToken: BNB_NATIVE, slippage }); o = sw.orderId ? await baw.pollOrder(sw.orderId) : null;
-        } else { const sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(got, dec), fromToken: q, toToken: BNB_NATIVE, slippage }); o = sw.orderId ? await baw.pollOrder(sw.orderId) : null; }
+          const t1 = Date.now(), sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(usdtGot, 18), fromToken: USDT, toToken: BNB_NATIVE, slippage }); if (sw.orderId) step(`USDT→BNB 已提交 ${sw.orderId}`, Date.now() - t1); o = sw.orderId ? await baw.pollOrder(sw.orderId) : null; if (o?.status === 'FINISHED') step('USDT→BNB 完成', Date.now() - t1);
+        } else { const t1 = Date.now(), sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(got, dec), fromToken: q, toToken: BNB_NATIVE, slippage }); if (sw.orderId) step(`报价币→BNB 已提交 ${sw.orderId}`, Date.now() - t1); o = sw.orderId ? await baw.pollOrder(sw.orderId) : null; if (o?.status === 'FINISHED') step('报价币→BNB 完成', Date.now() - t1); }   // 换回 BNB 这笔也记时间点（只记录）
       } catch (e) { o = { status: 'FAILED', err: e.message }; }
       if (o?.status === 'FINISHED' || (o && o.status !== 'FAILED')) break;
       step(`报价币→BNB 第 ${k + 1} 次没成功${o?.err ? '：' + o.err.slice(0, 60) : ''}，重试`, 0); await sleep(2000 * (k + 1));

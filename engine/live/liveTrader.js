@@ -769,7 +769,7 @@ export class LiveTrader extends EventEmitter {
   async followUp(order, e) {
     order.steps?.push({ name: e.code === 'APP_CONFIRM' ? '转入后台等待：币安 App 确认' : e.tx ? '转入后台等待：上链确认' : '转入后台等待：结果未知', ms: 0, at: Date.now() - order.ts });   // 只记时间点（「下单耗时」页面用来区分 App 确认等待）
     const end = Date.now() + 10 * 60_000;
-    const fin = (status, reason, tx) => { Object.assign(order, { status, reason, tx: tx || order.tx, stage: null }); this.quoteCache.clear(); this.refreshBalance(); this.syncAt = 0; this.emit('order', order); };
+    const fin = (status, reason, tx) => { Object.assign(order, { status, reason, tx: tx || order.tx, stage: null, doneMs: Date.now() - order.ts });   /* doneMs：后台等待完成的时刻（下单耗时页用） */ this.quoteCache.clear(); this.refreshBalance(); this.syncAt = 0; this.emit('order', order); };
     // 卖出那笔确认后，接着把到账的报价币换回 BNB（e.afterConfirm 由 Gang V2 / Portal 卖出挂上）
     const done = async (status, reason, tx) => {
       if (!e.afterConfirm || status === 'failed') return fin(status, reason, tx);

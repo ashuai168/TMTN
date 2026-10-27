@@ -36,7 +36,7 @@ export function record(o, extra = {}) {
   if (seen.has(o.id) || (o.tx && seen.has(o.tx))) return false;
   seen.add(o.id); if (o.tx) seen.add(o.tx);
   const row = { id: o.id, ts: o.ts, wallet: o.wallet || null, symbol: o.symbol, token: o.token, platform: o.platform || null, side: o.side, source: sourceOf(o), status: o.status,
-    latencyMs: o.latencyMs ?? null, clickToServerMs: o.clientTs ? Math.max(0, o.ts - o.clientTs) : null, preMs: o.preMs ?? null, route: o.route || null, venue: o.venue || null,
+    latencyMs: o.latencyMs ?? null, doneMs: o.doneMs ?? null, clickToServerMs: o.clientTs ? Math.max(0, o.ts - o.clientTs) : null, preMs: o.preMs ?? null, route: o.route || null, venue: o.venue || null,
     steps: (o.steps || []).map((s) => ({ name: normStep(s.name), ms: s.ms, at: s.at ?? null, raw: s.name })),
     rpc: extra.rpc || null, gasLevel: extra.gasLevel || null, amountIn: o.amountIn ?? o.amount ?? null, out: o.out ?? null, tx: o.tx || null, error: o.status === 'failed' ? (o.reason || null) : null };
   try { mkdirSync(dataFile(''), { recursive: true }); appendFileSync(LAT_FILE, redactSecrets(JSON.stringify(row)) + '\n'); } catch {}   // RPC 地址含 key：写盘前打码
@@ -107,7 +107,7 @@ export function breakdown(r) {
     st[stage] += d; first ||= { stage, d };
     return { name: name.slice(0, 120), stage, ms: d, at: prev };
   });
-  const end = Math.max(r.latencyMs || 0, prev);
+  const end = Math.max(r.latencyMs || 0, prev, r.doneMs || 0);   // doneMs：转入后台等待的订单真正结束的时刻
   st[waiting ? 'wait' : 'other'] += end - prev;   // 最后一步之后到订单结束（读回执、记账；还在后台等待的话算 wait）
   const pre = Math.min(r.preMs || 0, first ? first.d : end - prev);   // 开头的下单前检查（钱包锁、在途）从第一段里分出来
   if (pre > 0) { st[first ? first.stage : 'other'] -= pre; st.pre += pre; }
