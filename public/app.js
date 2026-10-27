@@ -2719,12 +2719,13 @@ $('#donateBtn')?.addEventListener('click', openDonate);
 const ACT_CLS = { 建仓: 'g', 加仓: 'g', 减仓: 'r', 清仓: 'r' };
 const trkAgo = (ts) => { const s = Math.max(0, (Date.now() - ts) / 1000); return s < 60 ? Math.floor(s) + '秒' : s < 3600 ? Math.floor(s / 60) + '分' : s < 86400 ? Math.floor(s / 3600) + '时' : Math.floor(s / 86400) + '天'; };
 // 最小金额（BNB）：追踪抽屉和追踪页共用，记在浏览器里；没有 BNB 金额的成交（非 BNB 计价）不按金额过滤
-try { TRK.fMin = Number(localStorage.trkMin) || 0; } catch { /* ignore */ }
+// 最小金额按美元算（老版本存的是 BNB：trkMin，第一次按默认 BNB 价折成美元）
+try { TRK.fMin = localStorage.trkMinUsd != null ? Number(localStorage.trkMinUsd) || 0 : Math.round((Number(localStorage.trkMin) || 0) * S.bnbUsd); } catch { /* ignore */ }
 // 追踪动态的美元金额：事件自带 usd 就用，否则 BNB 金额 × 现价（报价币已在服务器折成 BNB）
 const trkUsd = (e) => (e.usd > 0 ? e.usd : e.bnb > 0 && S.bnbUsd ? e.bnb * S.bnbUsd : 0);
 const trkUsdS = (v) => '$' + (v >= 1000 ? K(v) : v.toFixed(v < 1 ? 3 : 2));
-function trkMinPass(e) { return !(TRK.fMin > 0) || !(e.bnb > 0) || e.bnb >= TRK.fMin; }
-function setTrkMin(v) { TRK.fMin = Math.max(0, Number(v) || 0); try { localStorage.trkMin = String(TRK.fMin); } catch { /* ignore */ } for (const id of ['trkFMin', 'trkpMin']) { const el = $('#' + id); if (el && document.activeElement !== el) el.value = TRK.fMin || ''; } if (S.view === 'track') renderTrack(); renderTrkPanel(); }
+function trkMinPass(e) { const u = trkUsd(e); return !(TRK.fMin > 0) || !(u > 0) || u >= TRK.fMin; }
+function setTrkMin(v) { TRK.fMin = Math.max(0, Number(v) || 0); try { localStorage.trkMinUsd = String(TRK.fMin); } catch { /* ignore */ } for (const id of ['trkFMin', 'trkpMin']) { const el = $('#' + id); if (el && document.activeElement !== el) el.value = TRK.fMin || ''; } if (S.view === 'track') renderTrack(); renderTrkPanel(); }
 function trkPass(e) { const tg = TRK.targets.find((x) => x.address === e.target); return (!TRK.fGroup || (tg?.group || '默认') === TRK.fGroup) && trkMinPass(e); }
 // 追踪地址的显示名：备注名 > 域名 > 短地址（备注存服务器的追踪数据里，和钱包无关）
 function trkT(addr) { return TRK.targets.find((x) => x.address === String(addr || '').toLowerCase()) || null; }
@@ -3034,7 +3035,7 @@ function renderTrkPanel() {
   const rows = TRK.feed.filter(trkMinPass);
   $('#trkpCount').textContent = TRK.targets.length;
   $('#trkpList').innerHTML = !TRK.targets.length ? '<div class="trkp-empty">还没有追踪的地址。<br>可以在交易者盈亏抽屉里点「追踪」，或者到追踪页添加 .ai / .bnb 域名、0x 地址。<br><button data-tpgo>去添加</button></div>'
-    : !rows.length && TRK.feed.length ? `<div class="trkp-empty">没有 ≥ ${TRK.fMin} BNB 的成交（最小金额过滤）</div>`
+    : !rows.length && TRK.feed.length ? `<div class="trkp-empty">没有 ≥ $${TRK.fMin} 的成交（最小金额过滤）</div>`
     : !rows.length ? '<div class="trkp-empty">追踪的地址在 Flap / Four / Gang V2 内盘上买卖时，会实时出现在这里。</div>'
     : rows.map((e) => `<div class="trkp-e" data-a="${e.token}" title="点击进入 ${esc(e.symbol)} 详情"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who ${trkRemark(e.target) ? 'y' : 'wn'}" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}" title="${e.bnb ? bnb(e.bnb, 4) + ' BNB' : ''}${e.quote !== 'BNB' ? ' · ' + K(e.quoteAmt) + ' ' + esc(e.quote) : ''}">${trkUsd(e) ? trkUsdS(trkUsd(e)) : `${K(e.quoteAmt)}<small class="dim"> ${esc(e.quote)}</small>`}</span></div>
       <div class="trkp-r2"><span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="dim">MC ${usd(e.mcapUsd)}</span><span class="spacer"></span><span class="dim" title="${fullTime(e.ts)}">${e.bnb && trkUsd(e) ? bnb(e.bnb, 3) + ' BNB · ' : ''}${trkAgo(e.ts)}</span></div></div>`).join('');
