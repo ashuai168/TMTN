@@ -956,10 +956,26 @@ export class LiveTrader extends EventEmitter {
     let t0 = Date.now();
     const i = await openFour.info(t.address, w.address);
     if (i.route !== 'contract-call') throw new Error(`这个盘现在不能走内盘买入（route=${i.route}，${i.curve?.phase?.name || ''}）`);
-    const q = openFour.checkQuote(await openFour.quoteBuy(t.address, w.address, trim(amt), Math.round(slippage * 100)));
+    // 计价币盘（非 WBNB）：钱包里的计价币够这笔就直接用它付，不够就用 BNB 付、Core 在同一笔里换（jak 2026-10-27：Gang / Flap / Four 同一个逻辑）
+    const bps = Math.round(slippage * 100), qa = i.quote?.address && !i.quote.isWrappedNative ? i.quote.address : null;
+    let pay = null;
+    if (qa) {
+      const [raw, rate] = await Promise.all([this.gangV2.balanceOf(qa, w.address), this.gangV2.quoteRate(qa, { stale: 30_000 })]).catch(() => [0n, 0]);
+      const dec = Number(i.quote.decimals ?? 18), have = Number(ethers.formatUnits(raw, dec)), need = amt * rate;
+      if (rate > 0 && need > 0 && have >= need) pay = { qty: need.toFixed(Math.min(8, dec)), sym: i.quote.symbol || '计价币' };
+    }
+    const quote = () => openFour.quoteBuy(t.address, w.address, pay ? pay.qty : trim(amt), bps, pay ? qa : null);
+    let q = await quote();
+    if (pay) step(`直接用钱包里的 ${pay.qty} ${pay.sym} 付款，不用 BNB`, 0);
+    if (q.approveTx) {   // 用计价币付要先授权给 Core（按设置：预先授权较大固定额度，或只授权本次数量），授权上链后重新报价
+      const ai = new ethers.Interface(['function approve(address,uint256)']); const [spender, amt0] = ai.decodeFunctionData('approve', q.approveTx.inputData);
+      const cap = await capFor({ token: qa, wallet: w.address, amount: amt0, kind: 'quote' });
+      await sendApproval({ send: (o) => this.portal.send(o), wallet: w.address, token: qa, spender, amount: amt0, cap, label: `授权 ${pay.sym}（${capLabel('quote')}）`, symbol: pay.sym, kind: 'quote', step });
+      q = await quote(); if (q.approveTx) throw new Error(`授权 ${pay.sym} 后额度仍不够，没有买入`);
+    }
+    openFour.checkQuote(q);
     step(`OpenFour 报价 ${Number(q.estimate.tokenAmount).toFixed(0)} ${t.symbol}（至少 ${Number(q.minTokenOut).toFixed(0)}）`, Date.now() - t0);
-    if (q.estimate.budgetNotFullyUsed) step('接近 1% 持仓上限，只花掉部分 BNB，多余的同笔退回', 0);
-    if (q.approveTx) throw new Error('需要先授权报价币，本版只支持用 BNB 买');
+    if (q.estimate.budgetNotFullyUsed) step(`接近 1% 持仓上限，只花掉部分${pay ? ` ${pay.sym}` : ' BNB'}，多余的${pay ? '留在钱包' : '同笔退回'}`, 0);
     const hash = await this.portal.send({ wallet: w.address, to: q.tx.to, valueWei: q.tx.value, inputData: q.tx.inputData, label: 'OpenFour Core.buy', step });
     return { venue: 'OpenFour Core.buy（内盘）', expected: Number(q.estimate.tokenAmount), txHash: hash, hashes: [hash] };
   }
