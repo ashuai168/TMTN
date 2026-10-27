@@ -2,7 +2,7 @@
 // 地址里含 key，显示到页面 / 日志时一律用 maskRpc() 隐藏
 import { ethers } from 'ethers';
 
-export const maskRpc = (u) => String(u || '').replace(/(nodereal\.io\/(?:ws\/)?v1\/)[A-Za-z0-9]+/ig, '$1***').replace(/([?&](api[-_]?key|key|token)=)[^&\s"']+/ig, '$1***');
+export const maskRpc = (u) => String(u || '').replace(/(nodereal\.io\/(?:ws\/)?v1\/)[A-Za-z0-9]+/ig, '$1***').replace(/(\.dwellir\.com\/)[A-Za-z0-9-]+/ig, '$1***').replace(/([?&](api[-_]?key|key|token)=)[^&\s"']+/ig, '$1***');
 // 任意文本（日志、错误信息、记录文件）里的 RPC key 一律打码：NodeReal 地址 + .env 里 NODEREAL_KEYS 的 key 原文（用到时再读，.env 在 config.js 里才加载）
 export const redactSecrets = (s) => { let t = maskRpc(s); for (const k of (process.env.NODEREAL_KEYS || '').split(',').map((x) => x.trim()).filter((x) => x.length >= 16)) t = t.split(k).join('***'); return t; };
 
@@ -11,7 +11,7 @@ export const redactSecrets = (s) => { let t = maskRpc(s); for (const k of (proce
 const NR_SLOTS = [];
 export const setNodeRealSlots = (urls) => { NR_SLOTS.length = 0; for (const u of urls) NR_SLOTS.push(String(u).replace(/^wss:/, 'https:').replace('/ws/v1/', '/v1/')); };
 const nrName = (h) => { const i = NR_SLOTS.indexOf(String(h).replace(/^wss:/, 'https:').replace('/ws/v1/', '/v1/')); return NR_SLOTS.length > 1 && i >= 0 ? `NodeReal #${i + 1}` : 'NodeReal'; };
-export const nodeName = (u) => { const h = String(u || ''); return /nodereal/i.test(h) ? nrName(h) : /publicnode/i.test(h) ? 'PublicNode' : /dataseed|bnbchain/i.test(h) ? 'BNB Chain' : /48\.club/i.test(h) ? '48 Club' : h ? (h.match(/\/\/([^/:]+)/)?.[1] || '自定义') : '—'; };
+export const nodeName = (u) => { const h = String(u || ''); return /nodereal/i.test(h) ? nrName(h) : /publicnode/i.test(h) ? 'PublicNode' : /dataseed|bnbchain/i.test(h) ? 'BNB Chain' : /48\.club/i.test(h) ? '48 Club' : /dwellir/i.test(h) ? 'Dwellir' : h ? (h.match(/\/\/([^/:]+)/)?.[1] || '自定义') : '—'; };
 
 // 用量统计：每个节点、每个用途（label）、每个方法各请求了多少次（NodeReal 有额度，要盯着）
 export const RPC_USAGE = new Map();
@@ -21,11 +21,13 @@ export const CU = { eth_blockNumber: 5, eth_chainId: 5, eth_call: 20, eth_getLog
 export const cuOf = (method, n) => (method === 'ws_bytes' ? n * 0.04 : n * (CU[method] ?? 20));
 export function takeUsage() { const out = {}; for (const [k, n] of RPC_USAGE) out[k] = n; RPC_USAGE.clear(); return out; }
 export const PUBLIC_RPC = 'https://bsc-rpc.publicnode.com', PUBLIC_WSS = 'wss://bsc-rpc.publicnode.com';
+// .env 的 WSS_URL（可填多个，逗号分隔，如 Dwellir 的 wss 地址）：排在 NodeReal 之后、PublicNode 之前，NodeReal 冷却 / PublicNode 限流时订阅不至于断。用到时再读（.env 在 config.js 里加载）
+const customWss = () => (process.env.WSS_URL || '').split(',').map((x) => x.trim()).filter((x) => /^wss?:\/\//.test(x));
 
 // 订阅链上事件（WebSocket）：按顺序用 urls（一般是 NodeReal → publicnode）。断线 / 被拒（如 429）5 秒后换下一个；
 // 用的不是第一个时，10 分钟后再试回第一个。status.connected 表示订阅正常
 export class WsLogs {
-  constructor({ label, urls, filters, onLog, status }) { Object.assign(this, { label, urls: urls.filter(Boolean), filters, onLog, status }); this.ws = null; }
+  constructor({ label, urls, filters, onLog, status }) { Object.assign(this, { label, urls: urls.filter(Boolean).flatMap((u) => (u === PUBLIC_WSS ? [...customWss(), u] : [u])), filters, onLog, status }); this.ws = null; }
   start() { this.connect(0); return this; }
   get live() { return !!this.ws && !!this.status.connected; }
   connect(i) {

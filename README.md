@@ -115,6 +115,7 @@ scripts/add-wallet.sh --peers --write-env         # 写进 .env 的 WALLET_PEERS
 | `NODEREAL_RPC` | （空） | 私有 RPC（例如 NodeReal，含 key，只放 `.env`）。填了就作为主节点：读链、查确认、扫 Four 事件（一次约 5 万块），并通过它的 WSS 订阅 Gang 新盘创建事件；公共节点自动备用 |
 | `NODEREAL_KEYS` | （空） | 多个 NodeReal key，逗号分隔（如 `key1,key2`，只放 `.env`）。轮流使用，被限流 / 额度用完的 key 冷却 5 分钟；页面只显示「NodeReal #1 / #2」，不显示 key |
 | `RPC_URL` | 有 `NODEREAL_RPC` 用它，否则 `https://bsc-dataseed.bnbchain.org` | 读链用的 BSC RPC |
+| `WSS_URL` | （空） | 链上订阅（新盘、成交推送）的备用 WebSocket 节点，可填多个（逗号分隔），排在 NodeReal 之后、PublicNode 之前；例如 Dwellir 免费档（只能订阅，不支持 eth_getLogs）。key 在页面和日志里打码 |
 | `FOUR_LOG_RPC` | 有 `NODEREAL_RPC` 用它，否则 `https://bsc-rpc.publicnode.com` | 扫 Four 事件用的 RPC（getLogs） |
 | `FOUR_LOG_STEP` | NodeReal `49000` / 公共节点 `5000` | 每次 getLogs 查多少块 |
 | `FOUR_BACKFILL_BLOCKS` | `150000` | 启动时往回扫多少个区块的 Four 新盘 |
