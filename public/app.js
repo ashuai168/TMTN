@@ -368,12 +368,14 @@ function renderAuth() {
       }
       return;
     }
-    pill.classList.add('bad'); pill.querySelector('span').textContent = '币安钱包都未登录';
+    // 所有钱包都关了「参与下单」（不是没登录）：提示原因，已登录的钱包给一个「参与下单」按钮直接打开
+    const noneOn = !on.length && (S.walletsInfo || []).some((w) => w.auth === 'ok');
+    pill.classList.add('bad'); pill.querySelector('span').textContent = noneOn ? '没有钱包参与下单' : '币安钱包都未登录';
     modal.classList.remove('hidden'); loadNetCheck();
-    const k = 'mw|' + on.map((w) => w.slot + w.auth).join(','); if (modal.dataset.k === k) return; modal.dataset.k = k;
+    const k = 'mw|' + (S.walletsInfo || []).map((w) => w.slot + w.auth + (w.on ? 1 : 0)).join(','); if (modal.dataset.k === k) return; modal.dataset.k = k;
     const cmd = (c) => `<div class="ag-cmd"><code>${esc(c)}</code><button class="ui-copy" data-agcopy="${esc(c)}">复制</button></div>`;
-    $('#loginLead').innerHTML = '参与下单的币安钱包<b class="r">都没有登录</b>（或登录已过期）。至少登录一个才能使用。';
-    $('#loginBody').innerHTML = `<div class="ag-ws">${(S.walletsInfo || []).map((w) => `<div class="ag-w ${w.auth === 'ok' ? 'ok' : 'bad'}"><b>${w.auth === 'ok' ? '✓' : '✗'} ${esc(w.label)}</b><span>${w.auth === 'ok' ? '已登录' + (w.address ? ' ' + short(w.address, 6, 4) : '') : w.auth === 'wrong_account' ? '登录的账号不对' : w.auth === 'offline' ? '后端没有运行' : '未登录'}${w.on ? '' : '（不参与下单）'}</span>${w.auth !== 'ok' ? wLoginBtn(w) + cmd(w.signin) : ''}</div>`).join('')}</div>`
+    $('#loginLead').innerHTML = noneOn ? '所有钱包的<b class="r">「参与下单」都关掉了</b>，所以没有钱包可以下单。点下面钱包旁边的「参与下单」打开（顶栏钱包菜单 / 下单区的钱包按钮也能开关）。' : '参与下单的币安钱包<b class="r">都没有登录</b>（或登录已过期）。至少登录一个才能使用。';
+    $('#loginBody').innerHTML = `<div class="ag-ws">${(S.walletsInfo || []).map((w) => `<div class="ag-w ${w.auth === 'ok' ? 'ok' : 'bad'}"><b>${w.auth === 'ok' ? '✓' : '✗'} ${esc(w.label)}</b><span>${w.auth === 'ok' ? '已登录' + (w.address ? ' ' + short(w.address, 6, 4) : '') : w.auth === 'wrong_account' ? '登录的账号不对' : w.auth === 'offline' ? '后端没有运行' : '未登录'}${w.on ? '' : '（不参与下单）'}</span>${w.auth !== 'ok' ? wLoginBtn(w) + cmd(w.signin) : !w.on ? `<button class="ui-copy" data-mwonbtn="${w.slot}">参与下单</button>` : ''}</div>`).join('')}</div>`
       + '<li>在终端运行对应钱包的登录命令，打开终端里给出的链接，<b>用这个钱包自己的币安账号</b>在 App 中确认（核对配对码）</li><li>回到这里点「我已登录，重新检测」（每 10 秒也会自动检测）</li>';
     $('#loginNote').textContent = '';
     return;
@@ -1443,6 +1445,7 @@ function openSettings() { S.settingsPlat = S.platform; renderSettings(); $('#set
 $('#btnSound').addEventListener('click', () => patchCfg('sound', !S.config.sound));
 $('#btnBell').addEventListener('click', () => { if (!S.config.notify && window.Notification) Notification.requestPermission(); patchCfg('notify', !S.config.notify); });
 $('#quickBuy').addEventListener('change', (e) => { const v = +e.target.value; if (v > 0) patchCfg('quickBuy', v); lastList = 0; });
+$('#loginBody').addEventListener('click', async (e) => { const b = e.target.closest('[data-mwonbtn]'); if (!b) return; b.disabled = true; try { S.walletsInfo = await api('/api/wallets', { slot: Number(b.dataset.mwonbtn), on: true }); renderAuth(); scheduleRender(); renderRight(); renderQB(); } catch (err) { b.disabled = false; toast({ status: 'failed', symbol: '钱包', reason: err.message }); } });   // 登录遮罩里的「参与下单」按钮
 $('#walletMenu').addEventListener('change', async (e) => { const c = e.target.closest('[data-mwon]'); if (!c) return; try { S.walletsInfo = await api('/api/wallets', { slot: Number(c.dataset.mwon), on: c.checked }); renderWalletMenu(); renderAuth(); scheduleRender(); renderQB(); } catch (err) { toast({ status: 'failed', symbol: '钱包', reason: err.message }); } });
 $('#walletMenu').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; e.stopPropagation(); try { await copyOrThrow(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } });
 $('#walletSel').addEventListener('click', (e) => { if (e.target.closest('#walletMenu')) return; renderWalletMenu(); $('#walletMenu').classList.toggle('hidden'); });
