@@ -21,10 +21,12 @@ const day = (ts = Date.now()) => new Date(ts).toISOString().slice(0, 10);
 const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
 const VT = 1066666666666666666666666667n, BPS = 10000n, FEE = 100n, SUPPLY = 10n ** 27n;   // LaunchpadV2：虚拟代币储备、1% 平台费、总量 10 亿
 const ceil = (a, b) => (a + b - 1n) / b;
+// 已知的非 BNB 报价币（符号大写 → 地址）：开着狙击时后台每 20 秒刷新一次 BNB 汇率，新盘出现时不用冷等 baw 报价（约 1.8 秒）
+const QUOTE_ADDR = { XAUT: '0x21caef8a43163eea865baee23b9c2e327696a3bf', GANG: '0x0c6302401aa5325c2e36f170f52c00b1d220b405', BNCB: '0x4902c5ebc598265ed2212b559b042de8a5eeec3f' };
 export const HARD_MAX_BUY = 0.3;   // 无论参数怎么填，每个钱包单笔不超过 0.3 BNB
 
 export const SNIPE_DEFAULTS = {
-  pct: 1, wallets: [1, 2], quotes: ['BNB'], maxBnbPerBuy: 0.08, dailyCapBnb: 0.5, maxTokensPerDay: 5,
+  pct: 1, wallets: [1, 2], quotes: ['BNB', 'XAUT'], maxBnbPerBuy: 0.08, dailyCapBnb: 0.5, maxTokensPerDay: 5,
   maxDelaySec: 8, maxSoldPct: 15, partial: true, slippage: 15, buffer: 5, dryRun: true,
 };
 
@@ -51,13 +53,15 @@ export class Sniper extends EventEmitter {
     if (this.enabled) this.logFn(`[狙击] 启动时已开启（${this.params.dryRun ? '模拟' : '真实下单'}）`);
     // 开着的时候每 10 秒碰一下交易节点：连接保持热的，新盘出现时第一次读曲线约 0.13 秒（冷连接要 0.7～1 秒）
     setInterval(() => { if (this.enabled) this.trader.gangV2?.provider?.getBlockNumber?.().catch(() => {}); }, 10_000).unref?.();
+    const warmRates = () => { if (!this.enabled) return; for (const q of this.params.quotes) if (QUOTE_ADDR[q]) this.trader.gangV2?.quoteRate(QUOTE_ADDR[q], { stale: 120_000 }).catch(() => {}); };
+    setInterval(warmRates, 20_000).unref?.(); setTimeout(warmRates, 3000);
   }
 
   clean(p) {
     const n = (v, d, lo = 0, hi = 1e9) => { const x = Number(v); return Number.isFinite(x) ? Math.min(hi, Math.max(lo, x)) : d; };
     return {
       pct: n(p.pct, 1, 0.01, 1), wallets: (Array.isArray(p.wallets) ? p.wallets : [1]).map(Number).filter((x) => x > 0),
-      quotes: (Array.isArray(p.quotes) ? p.quotes : ['BNB']).map((x) => String(x).toUpperCase().slice(0, 12)).filter(Boolean),   // 报价币符号；'*' = 全部（非 BNB 盘要先用 baw 换报价币，慢几秒）
+      quotes: (Array.isArray(p.quotes) ? p.quotes : ['BNB', 'XAUT']).map((x) => String(x).toUpperCase().slice(0, 12)).filter(Boolean),   // 报价币符号；'*' = 全部（非 BNB 盘要先用 baw 换报价币，慢几秒）
       maxBnbPerBuy: n(p.maxBnbPerBuy, 0.08, 0, HARD_MAX_BUY), dailyCapBnb: n(p.dailyCapBnb, 0.5, 0, 20), maxTokensPerDay: Math.round(n(p.maxTokensPerDay, 5, 0, 200)),
       maxDelaySec: n(p.maxDelaySec, 8, 1, 120), maxSoldPct: n(p.maxSoldPct, 15, 0, 80), partial: p.partial !== false, slippage: n(p.slippage, 15, 1, 50), buffer: n(p.buffer, 5, 0, 30), dryRun: p.dryRun !== false,
     };
@@ -102,7 +106,7 @@ export class Sniper extends EventEmitter {
     const tokens = (SUPPLY * BigInt(Math.round(p.pct * 100))) / 10000n;
     const qCost = costFor(c, tokens); if (qCost == null) return this.record(it, 'skip', '曲线上剩余不够');
     const wb = String(c.quote).toLowerCase() === WBNB || c.quote === ethers.ZeroAddress;
-    const rate = wb ? 1 : await gv.quoteRate(c.quote);   // 1 BNB = rate 个报价币
+    const rate = wb ? 1 : await gv.quoteRate(c.quote, { stale: 120_000 });   // 后台已在刷新，这里一般直接用缓存   // 1 BNB = rate 个报价币
     const dec = wb ? 18 : await gv.decimals(c.quote);
     const cost = Number(ethers.formatUnits(qCost, dec)) / (rate || Infinity);
     this.recent.unshift({ ts: Date.now(), token: it.address, symbol: it.symbol, quote: it.quoteSymbol, costBnb: +cost.toFixed(5), soldPct }); if (this.recent.length > 20) this.recent.length = 20;

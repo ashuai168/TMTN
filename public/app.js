@@ -2599,7 +2599,7 @@ function renderSnipe() {
       ${num('pct', '每个钱包买总量的 %', '0.1', 'Gang V2 合约限制每个钱包最多 1%')}${num('maxBnbPerBuy', '每个钱包单笔最多（BNB）', '0.001')}${num('dailyCapBnb', '每天合计最多（BNB，所有钱包加起来）')}${num('maxTokensPerDay', '每天最多狙几个币', '1', '0 = 不限')}
       ${chk('partial', '超过单笔上限时按上限买一部分', '关掉 = 直接跳过')}${num('buffer', '金额缓冲 %', '1', '多付的合约会退回')}</div>
       <div class="cp-grp"><b>条件</b>${num('maxDelaySec', '出块后最多几秒', '1', '发现得比这晚就不买')}${num('maxSoldPct', '发现时已被买走最多 %', '1', '超过说明已经被别人抢了')}${num('slippage', '滑点 %', '1')}
-        <label class="cp-f"><span>报价币</span><input data-sp="quotes" value="${esc(p.quotes.join(','))}"/><i>逗号分隔，如 BNB,GANG；* = 全部（非 BNB 盘要先用 baw 换报价币，慢几秒）</i></label>
+        <label class="cp-f"><span>报价币</span><input data-sp="quotes" value="${esc(p.quotes.join(','))}"/><i>逗号分隔，如 BNB,XAUT（黄金盘）；* = 全部。非 BNB 盘：钱包里有够用的这个报价币时直接用（只发 buy），没有就先用 baw 把 BNB 换成它，慢几秒</i></label>
         <div class="cp-row">用哪些钱包（每个钱包各买一份）：${ws.map((w) => `<label class="cp-c" title="${esc(w.label)} ${w.address || ''}"><input type="checkbox" data-spw="${w.slot}" ${p.wallets.includes(w.slot) ? 'checked' : ''}/> ${esc(w.agentId || w.label)} <i class="${w.auth === 'ok' || !w.auth ? 'g' : 'r'}">${w.auth === 'ok' || !w.auth ? '已登录' : '未登录'}</i></label>`).join('')}</div>
         <div class="cp-row">屏蔽列表里的代币 / 开发者不会被狙。</div></div>
       <div class="cp-grp"><b>运行方式</b>${chk('dryRun', '模拟（只记录会买多少，不真的下单）', '建议先模拟一段时间再关掉')}<span></span><div><button class="ui-btn ok" data-snp="save">保存参数</button> <span class="cp-err r" id="snpErr"></span></div></div>`;
