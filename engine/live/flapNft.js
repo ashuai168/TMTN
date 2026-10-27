@@ -67,6 +67,7 @@ export class FlapNft extends EventEmitter {
           const to = Math.min(head, from + 4999);
           for (const l of await this.provider.getLogs({ address: FLAP_PORTAL, topics: TOPICS, fromBlock: from, toBlock: to })) this.handle(l);
           this.status.lastBlock = to; from = to + 1;
+          if (to % 50_000 < 5000) { this.reg.lastBlock = to; this.save(); }   // 补历史时隔一段记一次进度，中途重启不用从头补
         }
         this.reg.lastBlock = this.status.lastBlock; this.save(); this.status.pollError = null;
       } catch (e) { this.status.pollError = String(e.shortMessage || e.message).slice(0, 160); }

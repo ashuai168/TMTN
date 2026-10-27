@@ -191,19 +191,21 @@ export class LiveMarket extends EventEmitter {
   async upsertFlapNft(g, { restore } = {}) {
     const k = g.token, existed = this.tokens.has(k);
     if (existed && this.get(k).source !== 'flap-nft') return;
-    const job = (async () => {
+    // 先同步登记进列表（门槛 + 来源），名字 / 状态 / NFT 信息随后补上：搜索、钱包 2 收到订单时不用等这些读取
+    const t = this.base(k);
+    Object.assign(t, { source: 'flap-nft', platform: 'flap', agentExclusive: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f', quote: t.quote || 'BNB', createdAt: g.at || g.seenAt, maxSupply: 1e9,
+      nftGate: { capPct: 2, ...t.nftGate, nft: g.nft, removed: !!g.removed, known: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f' } });
+    {
       const i = new ethers.Interface(['function name() view returns (string)', 'function symbol() view returns (string)', 'function metaURI() view returns (string)']);
       const rd = (fn) => this.provider.call({ to: k, data: i.encodeFunctionData(fn) }).then((r) => i.decodeFunctionResult(fn, r)[0]).catch(() => '');
       const [name, symbol, meta, st, info] = await Promise.all([rd('name'), rd('symbol'), rd('metaURI'), this.flapNft.state(k).catch(() => null), this.flapNft.nftInfo(g.nft).catch(() => null)]);
       if (!g.at && g.block) { try { g.at = (await this.provider.getBlock(g.block)).timestamp * 1000; this.flapNft.save(); } catch { /* 用发现时间 */ } }
-      const t = this.base(k);
-      Object.assign(t, { source: 'flap-nft', platform: 'flap', agentExclusive: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f', symbol: symbol || t.symbol, name: name || t.name, quote: 'BNB', quoteAddress: null,
-        createdAt: g.at || g.seenAt, maxSupply: 1e9, nftGate: { nft: g.nft, name: info?.name || '', symbol: info?.symbol || '', image: info?.image || null, known: !!info?.known, removed: !!g.removed, capPct: 2 } });
-      if (st) this.applyFlapNftState(t, st);
+      Object.assign(t, { symbol: symbol || t.symbol, name: name || t.name, createdAt: g.at || g.seenAt });
+      if (info) Object.assign(t.nftGate, { name: info.name, symbol: info.symbol, image: info.image, known: info.known });
+      if (st) await this.applyFlapNftState(t, st);
       this.loadMeta(t, ipfsUrl(meta));
       if (!existed && !restore && t.stage === 'curve') this.emit('launch', { ...this.summary(t), detectMs: Math.max(0, Date.now() - (t.createdAt || Date.now())) });
-    })();
-    (this.flapNftReady ||= new Map()).set(k, job); await job;
+    }
   }
   async applyFlapNftState(t, st) {
     if (st.quote !== ethers.ZeroAddress && t.quoteAddress?.toLowerCase() !== st.quote.toLowerCase()) {
@@ -242,7 +244,7 @@ export class LiveMarket extends EventEmitter {
     let t = this.get(address);
     if (!t && await this.four.lookup(address)) t = this.get(address);
     if (!t) t = await this.lookupGangV2(address).catch(() => null);
-    if (!t && await this.flapNft.check(address).catch(() => null)) { await this.flapNftReady?.get(address.toLowerCase()); t = this.get(address); }
+    if (!t && await this.flapNft.check(address).catch(() => null)) t = this.get(address);
     if (!t) return null;
     t.pinned = true;               // 手动打开的盘不被自动淘汰
     return this.summary(t);
