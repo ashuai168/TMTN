@@ -357,9 +357,9 @@ export class LiveMarket extends EventEmitter {
     if (Date.now() - tr.ts < 60_000) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: tr.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });
   }
   // 从创建起的全部内盘成交重建：买卖笔数、成交量、持有人（净买入 > 0 的地址）、K 线（换掉轮询价格画的点，外盘部分留着）、最近 100 笔
-  async flapNftHistory(t) {
+  async flapNftHistory(t, urgent = false) {
     if (t.nftHistAt && Date.now() - t.nftHistAt < 30_000) return;
-    const list = await this.flapNft.history(t.address);
+    const list = await this.flapNft.history(t.address, urgent);
     Object.assign(t, { nftKeys: new Set(), buys: 0, sells: 0, volume: 0, holdersKnown: true, bal: new Map(), holders: 0, nftHistAt: Date.now() });
     t.candles = (t.candles || []).filter((c) => c.dex); t.trades = (t.trades || []).filter((x) => x.dex);
     const q = this.quoteUsd(t), keep = [];
@@ -580,7 +580,7 @@ export class LiveMarket extends EventEmitter {
         if (t.stage === 'dex') await this.dexRefresh(t);
       } else if (t.source === 'flap-nft') {
         await this.flapNftTax(t).catch(() => {});
-        await Promise.race([this.flapNftHistory(t).then(() => this.emit('detail', t.address)), new Promise((r) => setTimeout(r, 3000))]).catch(() => {});   // 第一次补历史最多等 3 秒，补完再推一次详情
+        await Promise.race([this.flapNftHistory(t, true).then(() => this.emit('detail', t.address)), new Promise((r) => setTimeout(r, 3000))]).catch(() => {});   // 第一次补历史最多等 3 秒，补完再推一次详情
         if (t.stage === 'curve') await this.applyFlapNftState(t, await this.flapNft.state(t.address));
         else await this.dexRefresh(t);
       } else if (t.source === 'gang') {
@@ -690,7 +690,7 @@ export class LiveMarket extends EventEmitter {
     let list = [], complete = true;
     if (t.source === 'gang') { const k = this.qScale(t); list = (await this.gang.history(t.address, 20000)).map((x) => (k === 1 ? x : { ...x, price: x.price * k, bnb: x.bnb * k })); }
     else if (t.source === 'four-agent') list = await this.four.tokenTrades(t.address);
-    else if (t.source === 'flap-nft') list = (await this.flapNft.history(t.address).catch(() => this.flapNft.trades(t.address))).map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx }));   // 门槛盘：Portal 内盘成交（从创建起）
+    else if (t.source === 'flap-nft') list = (await this.flapNft.history(t.address, true).catch(() => this.flapNft.trades(t.address))).map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx }));   // 门槛盘：Portal 内盘成交（从创建起）
     else if (t.market) { list = await this.fsiHistory(t); complete = list.length < 9000; }
     list = [...new Map(list.map((x) => [`${x.tx}:${x.side}:${x.tokens}`, x])).values()].sort((a, b) => b.ts - a.ts).slice(0, 20000);
     for (const x of list) { x.name ||= this.names.peek(x.trader); x.usd = (x.bnb || 0) * this.quoteUsd(t); }

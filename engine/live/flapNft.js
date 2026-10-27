@@ -52,7 +52,7 @@ export class FlapNft extends EventEmitter {
     this.reg = (() => { try { return JSON.parse(readFileSync(REG, 'utf8')); } catch { return {}; } })();
     this.reg.tokens ||= {}; this.reg.nfts ||= {};
     this.holdCache = new Map();
-    this.tr = new Map(); this.hist = new Map(); this.histQ = Promise.resolve();   // 每个门槛盘的成交（tx:logIndex → 成交）、历史补到哪个区块
+    this.tr = new Map(); this.hist = new Map(); this.hq = [];   // 每个门槛盘的成交（tx:logIndex → 成交）、历史补到哪个区块
     this.status = { connected: false, wss: null, lastBlock: this.reg.lastBlock || 0, lastLogAt: 0, gated: 0, lastError: null, pollError: null };
   }
   save() { try { mkdirSync(new URL('.', REG), { recursive: true }); writeFileSync(REG, JSON.stringify(this.reg)); } catch { /* ignore */ } }
@@ -114,20 +114,30 @@ export class FlapNft extends EventEmitter {
     if (this.txFrom.size > 20_000) this.txFrom = new Map([...this.txFrom].slice(-10_000));
   }
   // 一个门槛盘从创建起的全部内盘成交（补过的接着补，排队一个一个来，启动时几十个币不会一起打节点）
-  history(token) {
+  // urgent = 用户正点开的币：插到队首（启动时一百多个门槛盘排队补历史，不插队的话选中的币要等几分钟，K 线只有一根轮询点）
+  history(token, urgent = false) {
     const k = String(token).toLowerCase(), g = this.reg.tokens[k]; if (!g) return Promise.resolve([]);
-    const h = this.hist.get(k) || {}; if (h.p) return h.p;
-    h.p = this.histQ = this.histQ.catch(() => {}).then(async () => {
-      if (!h.to && !h.db) {   // 第一次：先从 MySQL 缓存读出已补过的成交，只补那之后的（往回多查 15 块防重组）
-        const c = await cache.loadTrades('flap-nft', k).catch(() => null); h.db = !!c;
-        if (c?.cursor) { for (const tr of c.rows) this.keep(tr); h.to = Math.max(0, c.cursor - 15); }
-      }
-      const head = await this.provider.getBlockNumber();
-      const from = h.to ? h.to + 1 : g.block || head - BACKFILL, to = g.dexBlock ? Math.min(head, g.dexBlock) : head;
-      if (from <= to) { const got = await this.tradesAt(await this.portalBlocks([k], from, to)); for (const tr of got) this.keep(tr); h.to = to; if (h.db) cache.saveTrades('flap-nft', k, got, to, (x) => `${x.tx}:${x.idx}`).catch(() => {}); }
-      h.at = Date.now(); return this.trades(k);
-    }).finally(() => { h.p = null; });
-    this.hist.set(k, h); return h.p;
+    const h = this.hist.get(k) || {}; this.hist.set(k, h);
+    this.hq ||= [];
+    if (h.p) { if (urgent && h.job && !h.job.started) { this.hq.splice(this.hq.indexOf(h.job), 1); this.hq.unshift(h.job); } return h.p; }
+    const job = { started: false };
+    h.p = new Promise((ok, no) => { job.run = () => this.histRun(k, g, h).then(ok, no); }).finally(() => { h.p = null; h.job = null; });
+    h.job = job; if (urgent) this.hq.unshift(job); else this.hq.push(job);
+    this.histPump(); return h.p;
+  }
+  async histPump() {
+    if (this.hqBusy) return; this.hqBusy = true;
+    try { while (this.hq.length) { const j = this.hq.shift(); j.started = true; await j.run().catch(() => {}); } } finally { this.hqBusy = false; }
+  }
+  async histRun(k, g, h) {
+    if (!h.to && !h.db) {   // 第一次：先从 MySQL 缓存读出已补过的成交，只补那之后的（往回多查 15 块防重组）
+      const c = await cache.loadTrades('flap-nft', k).catch(() => null); h.db = !!c;
+      if (c?.cursor) { for (const tr of c.rows) this.keep(tr); h.to = Math.max(0, c.cursor - 15); }
+    }
+    const head = await this.provider.getBlockNumber();
+    const from = h.to ? h.to + 1 : g.block || head - BACKFILL, to = g.dexBlock ? Math.min(head, g.dexBlock) : head;
+    if (from <= to) { const got = await this.tradesAt(await this.portalBlocks([k], from, to)); for (const tr of got) this.keep(tr); h.to = to; if (h.db) cache.saveTrades('flap-nft', k, got, to, (x) => `${x.tx}:${x.idx}`).catch(() => {}); }
+    h.at = Date.now(); return this.trades(k);
   }
   // 实时：WS 订阅内盘门槛盘的 Transfer（币列表变了就重订），另外每 30 秒（WS 不通时 5 秒）用 getLogs 补一遍，两边按 tx:logIndex 去重
   curveTokens() { return this.list().filter((g) => !g.dex).map((g) => g.token).sort(); }
