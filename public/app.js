@@ -2053,33 +2053,37 @@ async function loadHold(refresh = false) {
 async function loadQuoteBal(force = true) {
   if (!LIVE()) return;
   if (!force && Date.now() - (HOLD.quoteAt || 0) < 30_000) return renderQuoteBal(); HOLD.quoteAt = Date.now();   // baw 余额是 CLI 调用，定时刷新时 30 秒最多一次
-  try { HOLD.quote = await api('/api/quote-balances'); HOLD.quoteErr = null; } catch (e) { HOLD.quoteErr = e.message; }
+  const slot = HOLD.wslot || 0;   // 跟着持仓页选的钱包：全部钱包 = 所有「参与下单」的钱包（每行带钱包名）；某个钱包 = 只看它的
+  try { const v = await api('/api/quote-balances?slot=' + slot); if (slot !== (HOLD.wslot || 0)) return; HOLD.quote = v; HOLD.quoteSlot = slot; HOLD.quoteErr = null; } catch (e) { if (slot !== (HOLD.wslot || 0)) return; HOLD.quoteErr = e.message; }
   renderQuoteBal();
 }
 function renderQuoteBal() {
   const box = $('#holdQuote'); if (!box || S.view !== 'hold') return;
-  const q = (HOLD.quote || []).filter((r) => !(r.valueUsd != null && r.valueUsd < 0.5));   // 价值不到 $0.5 的零头不显示（只是不显示，余额和换回逻辑不变）
+  const sel = HOLD.wslot || 0, q = (HOLD.quote || []).filter((r) => !(r.valueUsd != null && r.valueUsd < 0.5) && (!sel || r.slot === sel));   // 价值不到 $0.5 的零头不显示（只是不显示，余额和换回逻辑不变）；切到某个钱包时先按已有数据筛，新数据回来再刷新
+  const multi = !sel && (HOLD.data?.wallets || []).length > 1;
   if (!q.length && !HOLD.quoteErr) { box.innerHTML = ''; return; }
   const busy = (a) => S.orders?.some((o) => o.status === 'pending' && String(o.token).toLowerCase() === a.toLowerCase());
   box.innerHTML = `<div class="hq-h"><b>计价币余额</b><span class="hsub">Flap / Gang V2 买卖时中间换出来、还没换回 BNB 的币。按钮按点击那一刻的余额全部换回</span><span class="spacer" style="flex:1"></span><button class="qb" data-q2ball title="${(HOLD.data?.wallets || []).length > 1 && !HOLD.wslot ? '所有「参与下单」的钱包' : '当前选中的钱包'}：每个计价币先报价，确认后才发交易">一键全部兑换成 BNB</button></div>
     ${HOLD.quoteErr ? `<div class="hsub r">读取失败：${esc(HOLD.quoteErr)}</div>` : ''}
-    <table><tr><th class="l">币</th><th>余额</th><th>单价</th><th>价值 (BNB)</th><th>价值 (USD)</th><th class="l">操作</th></tr>
-    ${q.map((r) => `<tr><td class="l"><b>${esc(r.symbol)}</b> <span class="hsub mono">${short(r.token, 6, 4)}</span></td><td class="mono">${esc(r.balance)}</td><td>${r.priceUsd ? usd(r.priceUsd) : '—'}</td>
+    <table><tr>${multi ? '<th class="l">钱包</th>' : ''}<th class="l">币</th><th>余额</th><th>单价</th><th>价值 (BNB)</th><th>价值 (USD)</th><th class="l">操作</th></tr>
+    ${q.map((r) => `<tr>${multi ? `<td class="l">${esc(r.label || '')}</td>` : ''}<td class="l"><b>${esc(r.symbol)}</b> <span class="hsub mono">${short(r.token, 6, 4)}</span></td><td class="mono">${esc(r.balance)}</td><td>${r.priceUsd ? usd(r.priceUsd) : '—'}</td>
       <td>${r.valueBnb != null ? bnb(r.valueBnb, 5) : '—'}</td><td>${usd(r.valueUsd || 0)}</td>
-      <td class="l acts">${busy(r.token) ? '<span class="hsub">处理中…</span>' : `<button class="qb" data-q2b="${r.token}">${r.wbnb ? '解包成 BNB' : '全部换回 BNB'}</button>`}</td></tr>`).join('')}</table>`;
+      <td class="l acts">${busy(r.token) ? '<span class="hsub">处理中…</span>' : `<button class="qb" data-q2b="${r.token}" data-q2bslot="${r.slot || ''}">${r.wbnb ? '解包成 BNB' : '全部换回 BNB'}</button>`}</td></tr>`).join('')}</table>`;
 }
-async function quoteToBnb(token) {
-  if (!S.baw?.auth || S.baw.auth.state !== 'ok') { renderAuth(); return note('币安钱包未登录，请先登录', 'info'); }
+async function quoteToBnb(token, slot) {   // slot：这一行属于哪个钱包（其他钱包由主后端转给它自己的后端，登录由那边检查）
+  const own = !slot || slot === (HOLD.data?.wallets || [])[0]?.slot;
+  if (own && (!S.baw?.auth || S.baw.auth.state !== 'ok')) { renderAuth(); return note('币安钱包未登录，请先登录', 'info'); }
   note('正在按当前余额报价…', 'info');
-  let p; try { p = await api('/api/quote-to-bnb/preview', { token, slippage: 1 }); } catch (e) { return toast({ status: 'failed', symbol: '换回 BNB', reason: e.message }); }
+  let p; try { p = await api('/api/quote-to-bnb/preview', { token, slot, slippage: 1 }); } catch (e) { return toast({ status: 'failed', symbol: '换回 BNB', reason: e.message }); }
   const go = async () => {
     topPop({ status: 'pending', side: 'sell', symbol: p.symbol, amountIn: 100 });
-    try { const o = await api('/api/quote-to-bnb', { token, slippage: p.slippage }); if (o.status === 'failed') toast(o); }
+    try { const o = await api('/api/quote-to-bnb', { token, slot, slippage: p.slippage }); if (o.status === 'failed') toast(o); }
     catch (e) { toast({ status: 'failed', symbol: p.symbol, reason: e.message }); }
     setTimeout(() => loadQuoteBal(true), 3000); setTimeout(() => loadHold(true), 8000);
   };
   const diff = p.midBnb ? ((p.out - p.midBnb) / p.midBnb) * 100 : null;
   $('#confirmBody').innerHTML = `
+    ${slot && (HOLD.data?.wallets || []).length > 1 ? `<div class="kv"><span>钱包</span><b class="sans">${esc((HOLD.data.wallets.find((w) => w.slot === slot) || {}).label || `钱包 ${slot}`)}</b></div>` : ''}
     <div class="kv"><span>换出</span><b>${esc(String(p.balance))} ${esc(p.symbol)}（全部）</b></div>
     <div class="kv"><span>预计到手</span><b class="g">${bnb(p.out, 6)} BNB</b></div>
     <div class="kv"><span>最少到手</span><b>${bnb(p.minOut, 6)} BNB${p.slippage ? `（滑点 ${p.slippage}%）` : ''}</b></div>
@@ -2134,7 +2138,7 @@ function renderHold() {
   // 多钱包：全部（合并） / 某一个钱包
   const ws = d0.wallets || [], wsel = ws.find((w) => w.slot === HOLD.wslot);
   const d = wsel ? { ...d0, rows: wsel.rows || [], totals: wsel.totals || {}, bnb: wsel.bnb } : d0;
-  let wf = $('#holdWallets'); if (!wf && ws.length > 1) { wf = document.createElement('div'); wf.id = 'holdWallets'; wf.className = 'hold-wf'; $('#holdTot').before(wf); wf.addEventListener('click', (e) => { const b = e.target.closest('[data-hw]'); if (!b) return; HOLD.wslot = Number(b.dataset.hw) || 0; renderHold(); }); }
+  let wf = $('#holdWallets'); if (!wf && ws.length > 1) { wf = document.createElement('div'); wf.id = 'holdWallets'; wf.className = 'hold-wf'; $('#holdTot').before(wf); wf.addEventListener('click', (e) => { const b = e.target.closest('[data-hw]'); if (!b) return; HOLD.wslot = Number(b.dataset.hw) || 0; renderHold(); renderQuoteBal(); loadQuoteBal(true); }); }
   if (wf) wf.innerHTML = ws.length > 1 ? [{ slot: 0, label: '全部钱包' }, ...ws].map((w) => `<button class="${(HOLD.wslot || 0) === w.slot ? 'on' : ''}" data-hw="${w.slot}">${esc(w.label)}</button>`).join('') : '';
   const dust = $('#holdDust').checked;
   $$('#holdPlats [data-hp]').forEach((c) => c.classList.toggle('off', !HOLD.plats.has(c.dataset.hp)));
@@ -2163,7 +2167,7 @@ document.addEventListener('click', (e) => {
   if (chip) { const p = chip.dataset.hp; if (HOLD.plats.has(p)) { if (HOLD.plats.size > 1) HOLD.plats.delete(p); } else HOLD.plats.add(p); try { localStorage.setItem('holdPlats', JSON.stringify([...HOLD.plats])); } catch { /* ignore */ } return renderHold(); }
   if (e.target.closest('[data-hshow]')) { e.preventDefault(); $('#holdDust').checked = false; return renderHold(); }
   const q2a = e.target.closest('[data-q2ball]'); if (q2a) { e.stopPropagation(); q2a.disabled = true; quoteSweepAll().finally(() => { q2a.disabled = false; }); return; }
-  const q2b = e.target.closest('[data-q2b]'); if (q2b) { e.stopPropagation(); q2b.disabled = true; quoteToBnb(q2b.dataset.q2b).finally(() => { q2b.disabled = false; }); return; }
+  const q2b = e.target.closest('[data-q2b]'); if (q2b) { e.stopPropagation(); q2b.disabled = true; quoteToBnb(q2b.dataset.q2b, Number(q2b.dataset.q2bslot) || 0).finally(() => { q2b.disabled = false; }); return; }
   const sell = e.target.closest('[data-hsell]');
   if (sell) { e.stopPropagation(); const [w, tk, pct] = sell.dataset.hsell.split(':'); return submitOrder({ token: tk, side: 'sell', wallets: [w], amountFor: () => +pct }); }
   if (e.target.closest('[data-claim],.logo')) return;

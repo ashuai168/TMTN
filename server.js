@@ -110,7 +110,7 @@ app.use(express.json());
 // 强制登录：实盘模式下币安钱包未登录时，所有动用资金的接口一律拒绝（买卖、兑换、换回 BNB、领取、撤销授权、单币转出规则）
 const AUTH_GATED = new Set(['/api/order', '/api/swap', '/api/quote-to-bnb', '/api/quote-to-bnb/sweep', '/api/quote-to-bnb/sweep-own', '/api/claim', '/api/approvals/revoke', '/api/token-rules']);
 app.use((req, res, next) => {
-  if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && !((req.path === '/api/order' || req.path === '/api/quote-to-bnb/sweep') && WALLET_PEERS.length) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });   // 多钱包时下单按钱包分别处理（未登录的跳过）
+  if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && !((req.path === '/api/order' || req.path === '/api/quote-to-bnb/sweep') && WALLET_PEERS.length) && !(req.path === '/api/quote-to-bnb' && Number(req.body?.slot) > 0 && Number(req.body.slot) !== WALLET_SLOT) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });   // 多钱包时下单按钱包分别处理（未登录的跳过）
   next();
 });
 // 首页：把 app.js / style.css 的版本号换成文件修改时间（每次改动都是新地址，浏览器不会用旧缓存），首页本身不缓存
@@ -196,9 +196,29 @@ app.get('/api/holdings', async (req, res) => {
   res.json(req.query.own ? holdSnap || await holdings.view() : holdView || holdSnap || await holdings.view());   // own=1：只要本钱包的（其他后端合并时用）
 });
 // 计价币余额与一键换回 BNB（只在点击后执行；先 preview 给确认框看报价）
-app.get('/api/quote-balances', async (req, res) => { if (!LIVE) return res.json([]); try { res.json(await trader.quoteBalances()); } catch (e) { res.status(500).json({ error: e.message }); } });
-app.post('/api/quote-to-bnb/preview', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' }); try { res.json(await trader.quoteToBnbPreview(String(req.body.token || ''), Number(req.body.slippage) || 1)); } catch (e) { res.status(400).json({ error: e.message }); } });
-app.post('/api/quote-to-bnb', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' }); res.json(await trader.quoteToBnb({ token: String(req.body.token || ''), slippage: Number(req.body.slippage) || 1 })); });
+// 按钱包：?slot= / body.slot 是其他钱包时转给它自己的后端；不填 slot = 本钱包（其他后端合并时用）。?slot=0 = 所有「参与下单」的钱包，每行带 slot / label
+const quotePeer = (slot) => (Number(slot) > 0 && Number(slot) !== WALLET_SLOT ? WALLET_PEERS.find((x) => x.slot === Number(slot)) || { missing: true } : null);
+app.get('/api/quote-balances', async (req, res) => {
+  if (!LIVE) return res.json([]);
+  if (req.query.slot === undefined) { try { return res.json(await trader.quoteBalances()); } catch (e) { return res.status(500).json({ error: e.message }); } }
+  const ws = sweepTargets(req.query.slot); const errs = [];
+  const parts = await Promise.all(ws.map(async (w) => { try { return (w.self ? await trader.quoteBalances() : await peerFetch(w.peer, '/api/quote-balances', null, 30_000)).map((r) => ({ ...r, slot: w.slot, label: w.label })); } catch (e) { errs.push(`${w.label}：${e.message}`); return []; } }));
+  if (errs.length && errs.length === ws.length) return res.status(500).json({ error: errs.join('；') });
+  res.json(parts.flat());
+});
+app.post('/api/quote-to-bnb/preview', async (req, res) => {
+  if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' });
+  const p = quotePeer(req.body.slot); if (p?.missing) return res.status(400).json({ error: '没有这个钱包' });
+  try { res.json(p ? await peerFetch(p, '/api/quote-to-bnb/preview', { token: req.body.token, slippage: req.body.slippage }, 60_000) : await trader.quoteToBnbPreview(String(req.body.token || ''), Number(req.body.slippage) || 1)); } catch (e) { res.status(400).json({ error: e.message }); }
+});
+app.post('/api/quote-to-bnb', async (req, res) => {
+  if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' });
+  const p = quotePeer(req.body.slot); if (p?.missing) return res.status(400).json({ error: '没有这个钱包' });
+  if (!p) return res.json(await trader.quoteToBnb({ token: String(req.body.token || ''), slippage: Number(req.body.slippage) || 1 }));
+  const label = p.label || `钱包 ${p.slot}`;
+  try { const o = await peerFetch(p, '/api/quote-to-bnb', { token: req.body.token, slippage: req.body.slippage }, 600_000); const x = { ...o, id: `w${p.slot}-${o.id}`, wallet: label, walletSlot: p.slot }; broadcast({ type: 'order', data: x }); res.json(x); }
+  catch (e) { res.json({ status: 'failed', side: 'sell', wallet: label, walletSlot: p.slot, symbol: '换回 BNB', reason: e.status === 401 ? '币安钱包未登录' : e.name === 'TimeoutError' ? '等结果超时（可能已经在执行，请看订单记录，不要重复点）' : e.message }); }
+});
 // 一键全部换回 BNB：*-own 每个钱包后端都有（只管自己的钱包）；plan / sweep 由主后端分发给各钱包（slot = 只那一个钱包；不填 = 所有「参与下单」的钱包）。
 // plan 只报价不发交易；sweep 只换页面确认框里列出的钱包 × 币（plan 已经按钱包选择过滤），各钱包同时执行、同一个钱包内按顺序
 const sweepTargets = (slot) => { const all = [{ slot: WALLET_SLOT, label: WALLET_LABEL, self: true }, ...WALLET_PEERS.map((p) => ({ slot: p.slot, label: p.label || `钱包 ${p.slot}`, peer: p }))]; return slot === 'any' ? all : Number(slot) > 0 ? all.filter((w) => w.slot === Number(slot)) : all.filter((w) => walletOn(w.slot)); };
