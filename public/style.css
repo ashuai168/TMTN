@@ -1183,3 +1183,5 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 @media (max-width: 1100px) { .hold-gang { width: 340px; } }
 @media (max-width: 860px) { #hold.hg-on { display: block; } .hold-gang { position: static; width: auto; height: 60vh; margin-top: 12px; } }
 .snp-top .trk-new.snp-real { background: var(--r); color: #fff; border-color: var(--r); margin-right: 8px; }
+.tag.div.on, .chip.div.on { background: rgba(14, 203, 129, .16); color: #0ecb81; font-weight: var(--fw-strong); cursor: help; }
+.tag.div.off, .chip.div.off { background: rgba(132, 142, 156, .14); color: #848e9c; cursor: help; }

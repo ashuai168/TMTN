@@ -67,13 +67,16 @@ export class GangFun extends EventEmitter {
   }
 
   // V2 盘统一成和老盘一样的字段；已筹 / 门槛保留报价币单位，价格换成 BNB
+  // 分红：taxed=true 是税币（TaxLaunchToken）：内盘 + 外盘买卖 1% 税，一半按持仓分给持有 ≥1 万枚的地址（报价币发放，经分红金库），另一半 80% 回购销毁 GANG / 20% 进金库；
+  // taxed=false 是普通币（LaunchToken）：内盘 1% 平台费（80% 回购销毁 GANG / 20% 金库），毕业后 0 税、不分红。dividends 里有累计 / 近 7 天 / 每万枚 / 年化
   fromV2(x) {
     const qUsd = Number(x.quoteUsd) || 0, bUsd = this.bnbUsd || 1;
     this.v2.set(x.address, { quoteUsd: qUsd });
     return { address: x.address, name: x.name, symbol: x.symbol, creator: x.creator, creatorHandle: x.creatorHandle, createdAt: x.createdAt, graduated: x.graduated, graduatedAt: x.graduatedAt || null, pair: x.pair,
       raisedQuote: Number(x.raisedQuote) || 0, gradAmtQuote: Number(x.gradAmtQuote) || 0, quoteSymbol: x.quoteSymbol || 'BNB', quoteAddress: x.quoteAddress,
       progressPct: x.progressPct, priceBnb: (Number(x.priceUsd) || 0) / bUsd, priceQuote: Number(x.priceQuote) || null, quoteUsd: qUsd, fdvUsd: x.fdvUsd, holders: x.holders, trades: x.trades, lastTradeAt: x.lastTradeAt,
-      volume24hBnb: (Number(x.volume24hUsd) || 0) / bUsd, logo: x.logoUrl ? new URL(x.logoUrl, 'https://gang.fun').href : null, track: 'v2' };   // logoThumbUrl 是相对路径且实际返回网页，不能用
+      volume24hBnb: (Number(x.volume24hUsd) || 0) / bUsd, logo: x.logoUrl ? new URL(x.logoUrl, 'https://gang.fun').href : null, track: 'v2',
+      taxed: x.taxed ?? null, taxBps: x.taxBps ?? null, dividends: x.dividends || null, dividendVault: x.dividends?.vault || x.v2DividendVault || null };   // logoThumbUrl 是相对路径且实际返回网页，不能用
   }
 
   // 成交：只拉最近有新成交的几个盘，避免频繁请求
