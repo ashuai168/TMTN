@@ -569,6 +569,7 @@ export class LiveTrader extends EventEmitter {
         // 只拦真正的重复下单（同币、同方向、同金额 / 比例，前一单还没结束且在 5 秒内）；
         // 其他同币订单（比如先卖 25% 再卖 50%）排队等前一单结束（确认或失败）再执行，避免同一钱包并发发交易，也不报错
         const tk = t.address.toLowerCase(), dupKey = `${tk}|${side}|${Number(amount)}`, prevDup = this.dupAt.get(dupKey);
+        if (prevDup === 'wait') throw Object.assign(new Error('同一笔订单在等币安 App 里确认授权，确认后会自动接着卖出，不用再点'), { code: 'BUSY' });
         if (prevDup && Date.now() - prevDup < 5_000) throw Object.assign(new Error('同一笔订单（同币、同方向、同比例）刚提交过还在处理中，这次没有重复下单'), { code: 'BUSY' });
         if (lock === 'LOCKED') throw new Error('钱包里有一笔交易在等你在币安 App 里确认或拒绝，处理完之前不能下新单（这次没有发出任何交易）');
         const prev = this.tokenQ.get(tk), at = Date.now(); this.dupAt.set(dupKey, at);
@@ -611,12 +612,18 @@ export class LiveTrader extends EventEmitter {
       // 已经提交 / 广播但结果未知：标「待确认」并继续盯，不报失败，避免重复下单
       if (['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) {
         if (e.code === 'APP_CONFIRM') this.lockState = { v: 'LOCKED', at: Date.now() };
-        Object.assign(order, { status: 'pending', stage: 'unknown', reason: `已提交，正在确认，请勿重复下单：${e.message}`, latencyMs: Date.now() - order.ts });
-        this.emit('order', order); this.followUp(order, e);
+        // 卖出前的授权要在币安 App 里确认（或已发出还没确认）：以前确认后这笔就结束了（「App 里的确认已处理」），要再点一次卖出。
+        // 现在确认后查链上额度，够了就在同一笔订单里接着卖出；额度没变（App 里拒绝了）就不卖
+        const ap = side === 'sell' && t && !e.afterConfirm ? e.approval : null;
+        if (ap) { e.afterLabel = '授权确认后接着卖出…'; e.afterConfirm = () => this.sellAfterApproval(order, e, t, walletId, step); }
+        Object.assign(order, { status: 'pending', stage: 'unknown', reason: ap ? `卖出要先授权，请在币安 App 里确认授权，确认后会自动接着卖出（不用再点）：${e.message}` : `已提交，正在确认，请勿重复下单：${e.message}`, latencyMs: Date.now() - order.ts });
+        this.emit('order', order);
+        const fu = this.followUp(order, e);
+        if (ap) { const dk = `${t.address.toLowerCase()}|${side}|${Number(amount)}`; this.dupAt.set(dk, 'wait'); fu.finally(() => { if (this.dupAt.get(dk) === 'wait') this.dupAt.delete(dk); }); }
         return order;
       }
       // 卖出时这个钱包没有这个币：灰色「无余额」提示，不算失败（多钱包一起卖时常见：另一个钱包没买到）
-      if (side === 'sell' && /没有可卖出的余额/.test(e.message)) Object.assign(order, { status: 'failed', skipped: true, noBalance: true, reason: '无余额：这个钱包没有持有这个币，已跳过（没有发出交易）', latencyMs: Date.now() - order.ts });
+      if (side === 'sell' && /没有可卖出的余额|（实际 0 个）/.test(e.message)) Object.assign(order, { status: 'failed', skipped: true, noBalance: true, reason: '无余额：这个钱包没有持有这个币，已跳过（没有发出交易）', latencyMs: Date.now() - order.ts });
       else Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts });
       this.emit('order', order);
       return order;
@@ -727,6 +734,29 @@ export class LiveTrader extends EventEmitter {
     }
   }
 
+  // 授权确认后接着卖出（同一笔订单）：先等链上额度够（最多约 30 秒），再按当时余额 / 比例重新走一遍卖出
+  async sellAfterApproval(order, e, t, walletId, step) {
+    const a = e.approval, prov = this.market.tradeProvider || this.market.provider;
+    const I = new ethers.Interface(['function allowance(address,address) view returns (uint256)']);
+    let ok = false;
+    for (let i = 0; i < 15 && !ok; i++) {
+      try { ok = BigInt(await prov.call({ to: a.token, data: I.encodeFunctionData('allowance', [a.wallet, a.spender]) })) >= a.amount; } catch { /* 下一次 */ }
+      if (!ok) await sleep(2000);
+    }
+    if (!ok) return { done: true, status: 'failed', reason: '授权没有生效（可能在币安 App 里拒绝了），没有卖出' };
+    step('授权已生效，接着卖出', 0);
+    Object.assign(order, { status: 'pending', stage: null, reason: '授权已确认，正在卖出…' }); this.emit('order', order);
+    try { await this.executeReal(order, t, this.wallet(walletId), step); return { handedOff: true }; }
+    catch (x) {
+      if (['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(x.code)) {   // 卖出那笔也要在 App 里确认：照常继续跟踪
+        if (x.code === 'APP_CONFIRM') this.lockState = { v: 'LOCKED', at: Date.now() };
+        Object.assign(order, { status: 'pending', stage: 'unknown', reason: `已提交，正在确认，请勿重复下单：${x.message}`, latencyMs: Date.now() - order.ts }); this.emit('order', order);
+        this.followUp(order, x); return { handedOff: true };
+      }
+      return { done: true, status: 'failed', reason: `授权已确认，但卖出失败：${x.message}` };
+    }
+  }
+
   // 待确认订单的后续：有 txHash 就等回执（最多 10 分钟）；在等 App 确认的，等钱包解锁后再看结果
   async followUp(order, e) {
     const end = Date.now() + 10 * 60_000;
@@ -734,10 +764,12 @@ export class LiveTrader extends EventEmitter {
     // 卖出那笔确认后，接着把到账的报价币换回 BNB（e.afterConfirm 由 Gang V2 / Portal 卖出挂上）
     const done = async (status, reason, tx) => {
       if (!e.afterConfirm || status === 'failed') return fin(status, reason, tx);
-      Object.assign(order, { reason: `${reason}；正在把报价币换回 BNB…` }); this.emit('order', order);
+      Object.assign(order, { reason: `${reason}；${e.afterLabel || '正在把报价币换回 BNB…'}` }); this.emit('order', order);
       const log = (name, ms = 0) => { order.steps.push({ name, ms: Math.round(ms), at: Date.now() - order.ts }); this.emit('order', order); };
       try {
         const r = await e.afterConfirm(log);
+        if (r?.handedOff) return;   // 授权后接着卖出：那一笔自己会更新订单
+        if (r?.done) return fin(r.status, r.reason, tx);
         if (r.hashes?.length) order.txs = [...(order.txs || []), ...r.hashes];
         if (r.expected) { order.out = r.expected; return fin('filled', `已卖出并换回 ${trim(r.expected)} BNB${r.note ? '；' + r.note : ''}`, tx); }
         return fin(status, `${reason}；${r.note || '没有换回 BNB'}`, tx);

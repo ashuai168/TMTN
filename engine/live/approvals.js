@@ -49,6 +49,8 @@ export const capLabel = (kind) => (enabled() ? (kind === 'sell' ? '预先授权�
 export async function sendApproval({ send, wallet, token, spender, amount, cap, label, symbol, kind, step }) {
   try { const h = await send({ wallet, to: token, inputData: new ethers.Interface(['function approve(address,uint256)']).encodeFunctionData('approve', [spender, cap]), label, step }); recordApproval({ token, spender, symbol, amount: cap, kind }); return h; }
   catch (e) {
+    // 授权要在 App 里确认 / 已发出结果未知：记下要等的额度，上层（liveTrader.execute）确认后查到额度够了就接着卖出，不用再点一次
+    if (['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) e.approval = { token, spender, wallet, amount: BigInt(amount) };
     if (e.code === 'APP_CONFIRM' && cap > BigInt(amount) && ctx.trader) {
       ctx.trader.settings.preApproveCap = false; ctx.trader.saveSetting?.('preApproveCap', false); ctx.trader.emit?.('settings', ctx.trader.settings);
       e.message = `较大额度的授权触发了币安 App 确认，已自动关闭「预先授权」，以后改为只授权本次数量。这一笔请在 App 里处理（同意或拒绝）。${e.message}`;
