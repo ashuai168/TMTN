@@ -2152,9 +2152,9 @@ function tcCard(t, k) {
   const fee = t.buyFeePct != null ? t.buyFeePct : t.buyTax;
   const soc = [t.website && ['🌐', t.website], t.twitter && ['𝕏', t.twitter], t.telegram && ['✈', t.telegram]].filter(Boolean)
     .map(([i, u]) => `<a class="soc" href="${esc(/^https?:/.test(u) ? u : 'https://' + u)}" target="_blank" rel="noopener" data-ext-link>${i}</a>`).join('');
-  // 我的持仓（所有钱包合计）；占总量 % 取持仓页同一份数据
-  const myAmt = (S.positions || []).filter((p) => p.token === t.address && p.amount > 0).reduce((a, p) => a + p.amount, 0);
-  const hp = myAmt > 0 ? { amount: myAmt, pct: holdRow(t)?.supplyPct } : null;
+  // 我的持仓（所有钱包合计，和持仓页同一份数据；还没同步到就用本钱包的订单记录）
+  const hr = holdRow(t), myAmt = hr?.amount > 0 ? hr.amount : (S.positions || []).filter((p) => p.token === t.address && p.amount > 0).reduce((a, p) => a + p.amount, 0);
+  const hp = myAmt > 0 ? { amount: myAmt, pct: hr?.amount > 0 ? hr.supplyPct : null } : null;
   const fb = t.firstBuyer ? (t.firstBuyerName || nameOf({ trader: t.firstBuyer }) || short(t.firstBuyer, 4, 4)) : '';
   const route = curve ? `${esc(t.quote || 'BNB')} | ${amtFmt(t.raised)}/${amtFmt(t.target)} → ${prog.toFixed(1)}%` : `${esc(t.quote || 'BNB')} | 已迁移 DEX`;
   return `<div class="tcard ${plat} ${hp ? 'held' : ''} " data-pa="${t.address}">

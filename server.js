@@ -167,7 +167,7 @@ async function mergeHoldings(own) {
   if (!WALLET_PEERS.length || !own) return own;
   const parts = [{ slot: WALLET_SLOT, label: WALLET_LABEL, snap: own }];
   for (const p of WALLET_PEERS) { try { const s = await peerFetch(p, '/api/holdings?own=1'); if (s?.rows) parts.push({ slot: p.slot, label: p.label || `钱包 ${p.slot}`, snap: s }); } catch { /* 这个钱包暂时连不上就先不算 */ } }
-  const by = new Map(), sumK = ['amount', 'valueBnb', 'valueUsd', 'costBnb', 'soldBnb', 'costUsd', 'soldUsd', 'pnlBnb', 'pnlUsd'];
+  const by = new Map(), sumK = ['amount', 'supplyPct', 'valueBnb', 'valueUsd', 'costBnb', 'soldBnb', 'costUsd', 'soldUsd', 'pnlBnb', 'pnlUsd'];
   for (const part of parts) for (const r of part.snap.rows || []) {
     const k = String(r.token).toLowerCase(), cur = by.get(k);
     const mine = { slot: part.slot, label: part.label, amount: r.amount, valueUsd: r.valueUsd, costUsd: r.costUsd, soldUsd: r.soldUsd, pnlUsd: r.pnlUsd };
