@@ -225,7 +225,7 @@ function onMsg({ type, data, full }) {
     case 'snipeState': { SNP.v = data; renderSnpPill(); if (S.view === 'snipe') renderSnipe(); break; }
     case 'snipeLog': { SNP.log.unshift(data); if (SNP.log.length > 300) SNP.log.length = 300; snpNotice(data); if (S.view === 'snipe') renderSnipe(); break; }
     case 'copyLog': { TRK.log.unshift(data); if (TRK.log.length > 300) TRK.log.length = 300; if (S.view === 'track' && TRK.tab === 'copy') renderTrack(); break; }
-    case 'wallets': { S.walletsInfo = data; renderAuth(); scheduleRender(); break; }
+    case 'wallets': { S.walletsInfo = data; renderAuth(); scheduleRender(); renderQB(); break; }
     case 'order': {
       if (['filled', 'failed', 'unknown'].includes(data.status)) window.dispatchEvent(new Event('order-done'));
       const i = S.orders.findIndex((o) => o.id === data.id); i >= 0 ? (S.orders[i] = data) : S.orders.unshift(data);
@@ -1303,7 +1303,7 @@ document.addEventListener('click', async (e) => {
   if (el.closest('#walletMenu') && d.w) { S.activeWallet = d.w; $('#walletMenu').classList.add('hidden'); return scheduleRender(); }
   if (el.closest('#wchips') && d.mwchip) {   // 多钱包：切换「参与下单」（服务器上的同一个开关）
     const slot = Number(d.mwchip), w = S.walletsInfo.find((x) => x.slot === slot); el.classList.add('busy');
-    api('/api/wallets', { slot, on: !w?.on }).then((v) => { S.walletsInfo = v; note(`${w?.agentId || w?.label || '钱包'} ${!w?.on ? '参与下单' : '不参与下单'}`); renderAuth(); scheduleRender(); renderRight(); }).catch((err) => toast({ status: 'failed', symbol: '钱包', reason: err.message })).finally(() => el.classList.remove('busy'));
+    api('/api/wallets', { slot, on: !w?.on }).then((v) => { S.walletsInfo = v; note(`${w?.agentId || w?.label || '钱包'} ${!w?.on ? '参与下单' : '不参与下单'}`); renderAuth(); scheduleRender(); renderRight(); renderQB(); }).catch((err) => toast({ status: 'failed', symbol: '钱包', reason: err.message })).finally(() => el.classList.remove('busy'));
     return;
   }
   if (el.closest('#wchips') && d.w) { S.selWallets.has(d.w) ? S.selWallets.delete(d.w) : S.selWallets.add(d.w); renderRight(); return refreshQuote(); }
@@ -1443,7 +1443,7 @@ function openSettings() { S.settingsPlat = S.platform; renderSettings(); $('#set
 $('#btnSound').addEventListener('click', () => patchCfg('sound', !S.config.sound));
 $('#btnBell').addEventListener('click', () => { if (!S.config.notify && window.Notification) Notification.requestPermission(); patchCfg('notify', !S.config.notify); });
 $('#quickBuy').addEventListener('change', (e) => { const v = +e.target.value; if (v > 0) patchCfg('quickBuy', v); lastList = 0; });
-$('#walletMenu').addEventListener('change', async (e) => { const c = e.target.closest('[data-mwon]'); if (!c) return; try { S.walletsInfo = await api('/api/wallets', { slot: Number(c.dataset.mwon), on: c.checked }); renderWalletMenu(); renderAuth(); scheduleRender(); } catch (err) { toast({ status: 'failed', symbol: '钱包', reason: err.message }); } });
+$('#walletMenu').addEventListener('change', async (e) => { const c = e.target.closest('[data-mwon]'); if (!c) return; try { S.walletsInfo = await api('/api/wallets', { slot: Number(c.dataset.mwon), on: c.checked }); renderWalletMenu(); renderAuth(); scheduleRender(); renderQB(); } catch (err) { toast({ status: 'failed', symbol: '钱包', reason: err.message }); } });
 $('#walletMenu').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; e.stopPropagation(); try { await copyOrThrow(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } });
 $('#walletSel').addEventListener('click', (e) => { if (e.target.closest('#walletMenu')) return; renderWalletMenu(); $('#walletMenu').classList.toggle('hidden'); });
 /* ---------- 弹层统一「点外部关闭 + Esc」 ---------- */
@@ -1776,14 +1776,24 @@ function renderQB() {
   if (el.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;   // 正在改预设时不重画
   const t = S.tokens.get(S.selected) || { address: S.selected, symbol: '…' };
   const P = qbPresets(), hr = S.tokens.has(S.selected) ? holdRow(t) : null, w = wallet(S.activeWallet) || S.wallets[0];
+  // 多钱包：买入显示所有「参与下单」钱包的 BNB 合计（和顶栏钱包胶囊同一个数），卖出显示这些钱包持仓的合计；悬停看每个钱包
+  const mwOn = MW() ? onWallets() : null;
+  const buyBnb = mwOn ? mwOn.reduce((a, x) => a + (x.bnb || 0), 0) : w?.bnb;
+  const buyTip = mwOn ? (mwOn.length ? mwOn.map((x) => `${x.agentId || x.label}：${x.bnb != null ? x.bnb.toFixed(4) : '—'} BNB${x.auth === 'ok' ? '' : '（未登录，下单时跳过）'}`).join('\n') + (mwOn.length > 1 ? `\n合计 ${buyBnb.toFixed(4)} BNB（买入时每个钱包各花按钮上的金额）` : '') : '没有钱包开启「参与下单」') : '';
+  let sellAmt = hr?.amount || 0, sellUsd = hr?.valueUsd, sellTip = '';
+  if (mwOn && hr?.byWallet?.length) {
+    const onSet = new Set(mwOn.map((x) => x.slot)), mine = hr.byWallet.filter((b) => onSet.has(b.slot));
+    sellAmt = mine.reduce((a, b) => a + (b.amount || 0), 0); sellUsd = mine.some((b) => b.valueUsd != null) ? mine.reduce((a, b) => a + (b.valueUsd || 0), 0) : null;
+    sellTip = hr.byWallet.map((b) => `${(S.walletsInfo || []).find((x) => x.slot === b.slot)?.agentId || b.label}：${K(b.amount || 0)}${b.valueUsd != null ? ' · $' + b.valueUsd.toFixed(2) : ''}${onSet.has(b.slot) ? '' : '（不参与下单，不会卖）'}`).join('\n') + '\n卖出时每个参与下单的钱包卖自己持仓的同样比例';
+  }
   const btns = (side, list) => list.map((v, i) => QBP.edit ? `<input class="qbp-in mono" data-qbi="${side}:${i}" value="${v}" inputmode="decimal" />` : `<button class="qbp-b ${side}" data-qbgo="${side}:${v}">${side === 'buy' ? v : v + '%'}</button>`).join('');
   const tabs = (side, cur) => [0, 1, 2].map((i) => `<button class="${cur === i ? 'on' : ''}" data-qbtab="${side}:${i}">P${i + 1}</button>`).join('');
   const sgnU = (v) => (v == null ? '—' : `<b class="${v >= 0 ? 'g' : 'r'}">${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}</b>`);
   el.innerHTML = `<div class="qbp-h" data-qbdrag><b>一键买卖</b><span class="muted">${esc(t.symbol)}</span><span class="spacer"></span><button class="ca-big sm ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-qb')}<button class="qbp-x" data-qbedit title="${QBP.edit ? '完成（保存预设）' : '编辑预设'}">${QBP.edit ? '✅' : '⚙'}</button><button class="qbp-x" data-qbclose title="关闭">×</button></div>
-    <div class="qbp-sec"><div class="qbp-row"><b class="g">买入</b><span class="qbp-tabs">${tabs('buy', QBP.pb)}</span><span class="spacer"></span><span class="muted mono">${w ? bnb(w.bnb || 0, 4) : '—'} BNB</span></div>
+    <div class="qbp-sec"><div class="qbp-row"><b class="g">买入</b><span class="qbp-tabs">${tabs('buy', QBP.pb)}</span><span class="spacer"></span><span class="muted mono" title="${esc(buyTip)}">${buyBnb != null ? bnb(buyBnb || 0, 4) : '—'} BNB${mwOn?.length > 1 ? ` <small>×${mwOn.length}</small>` : ''}</span></div>
       <div class="qbp-grid">${btns('buy', P.buy[QBP.pb])}</div>
       <div class="qbp-adv"><button data-qbadv>${QBP.adv ? '▾' : '▸'} 高级</button>${QBP.adv ? `<span>滑点 <b class="mono">${S.slippage}%</b>（在右侧下单区修改）</span><span>${S.fast ? '<b class="y">极速模式：点击直接下单</b>' : '每次会弹确认'}</span><span>单笔上限 ${S.baw?.maxTradeBnb || '不限'} BNB</span>` : ''}</div></div>
-    <div class="qbp-sec"><div class="qbp-row"><b class="r">卖出</b><span class="qbp-tabs">${tabs('sell', QBP.ps)}</span><span class="spacer"></span><span class="muted mono">${hr?.amount > 0 ? `${K(hr.amount)} · ${hr.valueUsd != null ? '$' + hr.valueUsd.toFixed(2) : '—'}` : '没有持仓'}</span></div>
+    <div class="qbp-sec"><div class="qbp-row"><b class="r">卖出</b><span class="qbp-tabs">${tabs('sell', QBP.ps)}</span><span class="spacer"></span><span class="muted mono" title="${esc(sellTip)}">${sellAmt > 0 ? `${K(sellAmt)} · ${sellUsd != null ? '$' + sellUsd.toFixed(2) : '—'}` : hr?.amount > 0 ? '参与下单的钱包没有持仓' : '没有持仓'}</span></div>
       <div class="qbp-grid">${btns('sell', P.sell[QBP.ps])}</div>
       ${hr?.amount > 0 && hr.costBnb > 0 && hr.valueBnb > hr.costBnb ? `<button class="qbp-b sell wide" data-qbgo="sell:${Math.min(100, (hr.costBnb / hr.valueBnb) * 100).toFixed(1)}" title="卖出刚好收回成本的比例（按现价估算）">回本（卖 ${Math.min(100, (hr.costBnb / hr.valueBnb) * 100).toFixed(1)}%）</button>` : ''}</div>
     <div class="qbp-f"><div><span>余额</span><b>${hr?.valueUsd != null ? '$' + hr.valueUsd.toFixed(2) : '—'}</b></div><div><span>总买入</span><b>${hr ? '$' + (hr.costUsd || 0).toFixed(2) : '—'}</b></div><div><span>总卖出</span><b>${hr ? '$' + (hr.soldUsd || 0).toFixed(2) : '—'}</b></div><div><span>未实现</span>${hr && hr.valueUsd != null && hr.amount > 0 ? sgnU(hr.valueUsd - (hr.costUsd || 0) + (hr.soldUsd || 0)) : '—'}</div></div>`;
