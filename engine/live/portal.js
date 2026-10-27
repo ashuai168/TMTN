@@ -107,7 +107,7 @@ export class Portal {
 
   // 真实买入。BNB 底池：Portal.buy（原子）。其他底池：BNB→报价币 → approve → buyWithQuote（多笔交易，非原子）
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），跳过 BNB→报价币
-  // quoteRate：1 BNB ≈ 多少报价币（liveTrader 传入）。钱包里已有的报价币先用上，够就不换；不够只用 BNB 换差额（jak 2026-10-27）
+  // quoteRate：1 BNB ≈ 多少报价币（liveTrader 传入）。钱包里已有的报价币先用上，够就不换；不够只用 BNB 换差额
   async buy({ wallet, market, quoteAddress, quoteSym, amountBnb, slippage, step, payQuote = null, quoteRate = null }) {
     const hashes = [];
     if (isBnbQuote(quoteAddress)) {

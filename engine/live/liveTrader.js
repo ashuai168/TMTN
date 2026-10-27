@@ -573,7 +573,7 @@ export class LiveTrader extends EventEmitter {
   async fundingPlan(w, t, amt) {
     if (!(amt > 0)) return null;
     const bnb = w.bnb || 0;
-    // 计价币盘（Gang V2 / Flap 非 BNB 盘）：先看钱包里有没有这个盘的报价币（jak 2026-10-27：BNCB 盘优先用钱包里的 BNCB，不够再用 BNB 换）。
+    // 计价币盘（Gang V2 / Flap 非 BNB 盘）：先看钱包里有没有这个盘的报价币。
     // 实际怎么付由 gangV2Pads.buy / portal.buy 决定（够就直接用，不够只换差额），这里只算出来给报价和确认框显示
     const qa = t.quoteAddress && (this.useGangV2(t) || (this.usePortal(t, 'buy') && String(t.quoteAddress).toLowerCase() !== QUOTE_TOKENS.WBNB.toLowerCase())) ? t.quoteAddress : null;
     if (qa) {

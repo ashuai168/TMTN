@@ -199,7 +199,7 @@ export class GangV2 {
     const have = have0;
     if (payQuote != null) { const want = ethers.parseUnits(Number(payQuote).toFixed(Math.min(12, dec)), dec); need = want < have ? want : have; if (need <= 0n) throw new Error('钱包里没有这个盘的报价币'); }
     if (have < need) {
-      // 钱包里已有的报价币先用上，只把差额用 BNB 换（jak 2026-10-27：BNCB 盘优先用钱包里的 BNCB，不够再用 BNB 换）；多换 3% 抵滑点，多的留在钱包
+      // 钱包里已有的报价币先用上，只把差额用 BNB 换；多换 3% 抵滑点，多的留在钱包
       const before = have; const t0 = Date.now(); fresh = false;
       const short = Number(amountBnb) * Number(need - have) / Number(need), shortBnb = trimBnb(Math.min(Number(amountBnb), isWbnb(q) ? short : short * 1.03));
       if (have > 0n) step(`钱包里有 ${ethers.formatUnits(have, dec)} ${qSym}，不够 ${ethers.formatUnits(need, dec)}，用 ${shortBnb} BNB 换差额`, 0);
