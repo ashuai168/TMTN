@@ -417,9 +417,9 @@ function alertWalletDrop(w) {
     <div class="wl-acts">${W_LOGIN_OK(w) ? `<button class="go" data-wlogin="${w.slot}">登录</button>` : '<span class="dim">后端没有运行，需要先启动它</span>'}<button data-wlclose>知道了</button></div></div>`;
 }
 // 浏览器通知要用户授权：第一次在页面上点击时顺便请求
-document.addEventListener('pointerdown', function askNotify() { document.removeEventListener('pointerdown', askNotify, true); try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch { /* ignore */ } }, true);
+document.addEventListener('pointerdown', function askNotify(e) { if (e.target.closest?.('[data-cacopy],[data-ctick],[data-copy],[data-agcopy],[data-dcopy],[data-trd-copy],.ui-copy')) return; document.removeEventListener('pointerdown', askNotify, true); try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch { /* ignore */ } }, true);
    // 页面上不再提供登录按钮（登录命令在终端运行）
-$('#loginModal').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; try { await navigator.clipboard.writeText(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } setTimeout(() => (b.textContent = '复制'), 1500); });
+$('#loginModal').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; try { await copyOrThrow(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } setTimeout(() => (b.textContent = '复制'), 1500); });
 // 「我已登录，重新检测」：点了马上有反馈（转圈 + 禁用），检测完逐个钱包显示结果；能用了就淡出遮罩并提示
 $('#loginRecheck').addEventListener('click', async () => {
   const b = $('#loginRecheck'); if (b.disabled) return;
@@ -1111,16 +1111,26 @@ async function patchCfg(path, v) { S.config = await api('/api/config', setPath({
 
 /* ---------- 事件绑定 ---------- */
 // 点代币名复制代号（详情页标题、战壕卡片）。捕获阶段处理并阻止冒泡，免得点卡片名字顺带打开详情 / 买入
+// 先在点击当下同步用 textarea + execCommand 复制（不依赖页面焦点 / 剪贴板权限，第一次点也稳），失败再试 navigator.clipboard
 async function copyText(v) {
-  try { await navigator.clipboard.writeText(v); return true; } catch { /* 非安全上下文等，退回 textarea */ }
-  const ta = document.createElement('textarea'); ta.value = v; ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0'; document.body.appendChild(ta); ta.select();
-  let ok = false; try { ok = document.execCommand('copy'); } catch { /* ignore */ } ta.remove(); return ok;
+  const prev = document.activeElement, ta = document.createElement('textarea'); ta.value = v; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0'; document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch { /* ignore */ } ta.remove(); try { prev?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
+  if (ok) return true;
+  try { await navigator.clipboard.writeText(v); return true; } catch { return false; }
 }
-document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-ctick]'); if (!el) return;
+async function copyOrThrow(v) { if (!(await copyText(v))) throw new Error('copy failed'); }
+// 详情页头部 / 战壕卡片 / 一键买卖浮窗里的复制按钮会被频繁整块重画：按下和松开之间按钮换了新元素，click 就丢了（「点第一下没反应」）。
+// 所以这几个在按下（pointerdown）时就复制，随后的 click 吞掉，免得点卡片名字顺带打开详情 / 买入
+const COPY_SEL = '[data-cacopy],[data-ctick],[data-copy]';
+document.addEventListener('pointerdown', async (e) => {
+  if (e.button !== 0) return; const el = e.target.closest(COPY_SEL); if (!el) return;
   e.stopPropagation(); e.preventDefault();
-  const v = el.dataset.ctick; (await copyText(v)) ? note(`已复制 ${v}`) : note(`复制失败，请手动选中 ${v}`, 'info');
+  const d = el.dataset;
+  if (d.ctick != null) { const v = d.ctick; return (await copyText(v)) ? note(`已复制 ${v}`) : note(`复制失败，请手动选中 ${v}`, 'info'); }
+  if (d.copy != null) { return (await copyText(d.copy)) ? note(`已复制 ${short(d.copy)}`) : note('复制失败，请手动选中地址', 'info'); }
+  caCopy(d.cacopy);
 }, true);
+document.addEventListener('click', (e) => { if (e.target.closest(COPY_SEL)) { e.stopPropagation(); e.preventDefault(); } }, true);
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-qp],[data-mwchip],[data-qb],[data-a],[data-p],[data-s],[data-a2],[data-w],[data-copy],[data-sell],[data-qsell],[data-faucet],[data-ext],[data-close],[data-sp],[data-setw],[data-fee],[data-mode],[data-q],[data-gas],[data-exec],#fakeLaunch');
   if (!el) return;
@@ -1263,7 +1273,7 @@ function openAutoSend() {
   wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
   wrap.addEventListener('click', async (e) => {
     if (e.target.closest('[data-close-as]')) return close();
-    const cp = e.target.closest('.ui-copy'); if (cp) { try { await navigator.clipboard.writeText(cp.dataset.v); cp.textContent = '已复制'; } catch { cp.textContent = '复制失败'; } return; }
+    const cp = e.target.closest('.ui-copy'); if (cp) { try { await copyOrThrow(cp.dataset.v); cp.textContent = '已复制'; } catch { cp.textContent = '复制失败'; } return; }
     const sw = e.target.closest('[data-ask]'); if (!sw || sw.disabled) return;
     const x = AS.find((a) => a.k === sw.dataset.ask), on = !S.settings[x.k];
     if (on && !(await ui.confirm({ title: `打开「${x.name} 自动转出」？`, danger: true, confirmText: '打开自动转出',
@@ -1322,7 +1332,7 @@ $('#btnSound').addEventListener('click', () => patchCfg('sound', !S.config.sound
 $('#btnBell').addEventListener('click', () => { if (!S.config.notify && window.Notification) Notification.requestPermission(); patchCfg('notify', !S.config.notify); });
 $('#quickBuy').addEventListener('change', (e) => { const v = +e.target.value; if (v > 0) patchCfg('quickBuy', v); lastList = 0; });
 $('#walletMenu').addEventListener('change', async (e) => { const c = e.target.closest('[data-mwon]'); if (!c) return; try { S.walletsInfo = await api('/api/wallets', { slot: Number(c.dataset.mwon), on: c.checked }); renderWalletMenu(); renderAuth(); scheduleRender(); } catch (err) { toast({ status: 'failed', symbol: '钱包', reason: err.message }); } });
-$('#walletMenu').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; e.stopPropagation(); try { await navigator.clipboard.writeText(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } });
+$('#walletMenu').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; e.stopPropagation(); try { await copyOrThrow(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } });
 $('#walletSel').addEventListener('click', (e) => { if (e.target.closest('#walletMenu')) return; renderWalletMenu(); $('#walletMenu').classList.toggle('hidden'); });
 $$('.modal').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m) m.classList.add('hidden'); }));
 
@@ -1500,7 +1510,7 @@ const ui = (() => {
     wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(onKey('cancel')); });
     wrap.addEventListener('click', async (e) => {
       const b = e.target.closest('[data-ui]'); if (!b) return;
-      if (b.dataset.ui === 'copy') { try { await navigator.clipboard.writeText(b.dataset.v); b.textContent = '已复制'; } catch { b.textContent = '复制失败'; } return; }
+      if (b.dataset.ui === 'copy') { try { await copyOrThrow(b.dataset.v); b.textContent = '已复制'; } catch { b.textContent = '复制失败'; } return; }
       close(onKey(b.dataset.ui));
     });
     open = { close }; setTimeout(() => (wrap.querySelector('input') || wrap.querySelector('[data-ui="ok"]'))?.focus(), 30);
@@ -1671,14 +1681,13 @@ setInterval(renderQB, 2000);
 // 大的「复制 CA」按钮（详情页顶部、一键买卖浮窗）：点一下复制完整合约地址，按钮显示「已复制 ✓」1.5 秒（状态记在内存里，页面重画也不丢）
 const caCopied = { a: '', until: 0 };
 const caOk = (a) => caCopied.a === String(a).toLowerCase() && Date.now() < caCopied.until;
-document.addEventListener('click', async (e) => {
-  const b = e.target.closest('[data-cacopy]'); if (!b) return; e.preventDefault(); e.stopPropagation();
-  const a = b.dataset.cacopy; const ok = await copyText(a);
+async function caCopy(a) {
+  const ok = await copyText(a);
   if (!ok) { note('复制失败，请手动选中地址', 'info'); return; }
   Object.assign(caCopied, { a: a.toLowerCase(), until: Date.now() + 1500 });
   document.querySelectorAll(`[data-cacopy="${a}"]`).forEach((x) => { x.classList.add('ok'); x.querySelector('span').textContent = '已复制 ✓'; });
   setTimeout(() => { document.querySelectorAll(`[data-cacopy="${a}"]`).forEach((x) => { x.classList.remove('ok'); x.querySelector('span').textContent = '复制 CA'; }); }, 1550);
-}, true);
+}
 
 
 /* ---------- 持仓页「兑换」：BNB ⇄ 任意代币（BNCB / NVDAB / BTCB…），先报价，你确认后才兑换 ---------- */
@@ -1816,7 +1825,7 @@ function openTrader(addr) {
   back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
   back.addEventListener('click', async (e) => {
     if (e.target.closest('[data-trd-close]')) return close();
-    const cp = e.target.closest('[data-trd-copy]'); if (cp) { try { await navigator.clipboard.writeText(addr); cp.textContent = '已复制'; } catch { cp.textContent = '复制失败'; } }
+    const cp = e.target.closest('[data-trd-copy]'); if (cp) { try { await copyOrThrow(addr); cp.textContent = '已复制'; } catch { cp.textContent = '复制失败'; } }
   });
   api(`/api/trader/${t.address}/${addr}`).then((d) => { if (back.isConnected) back.querySelector('.trd-b').innerHTML = traderHtmlFull(d, t); }).catch((e) => { if (back.isConnected) back.querySelector('.trd-b').innerHTML = `<div class="empty">读取失败：${esc(e.message)}</div>`; });
 }
@@ -2458,7 +2467,7 @@ function openDonate() {
   wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
   wrap.addEventListener('click', async (e) => {
     if (e.target.closest('[data-dclose]')) return close();
-    if (e.target.closest('[data-dcopy]')) { let ok = false; try { await navigator.clipboard.writeText(DONATE_ADDR); ok = true; } catch { /* 剪贴板接口不可用时退回旧办法 */ }
+    if (e.target.closest('[data-dcopy]')) { let ok = false; try { await copyOrThrow(DONATE_ADDR); ok = true; } catch { /* 剪贴板接口不可用时退回旧办法 */ }
       if (!ok) { const ta = document.createElement('textarea'); ta.value = DONATE_ADDR; ta.style.cssText = 'position:fixed;opacity:0'; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy'); } catch { ok = false; } ta.remove(); }
       note(ok ? '已复制' : '复制失败，请手动选择地址', ok ? 'ok' : 'info'); }
   });
