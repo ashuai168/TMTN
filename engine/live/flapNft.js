@@ -254,9 +254,10 @@ export class FlapNft extends EventEmitter {
   // 下单前的门槛检查：内盘 + 门槛还在 + 钱包没有 NFT → 返回原因（跳过，不报错）；能交易返回 null
   async block(token, wallet) {
     const g = this.get(token); if (!g || g.removed || g.dex) return null;
-    const nft = await this.gateOf(token).catch(() => g.nft);
+    // 门槛 NFT 和持有数同时查：先按登记的 NFT 查持有数，门槛换了才按新的再查一次
+    const [nft, n0] = await Promise.all([this.gateOf(token).catch(() => g.nft), g.nft ? this.holds(g.nft, wallet, true).catch(() => null) : null]);
     if (!nft || nft === ZERO) { g.removed = true; this.save(); this.emit('ungated', g); return null; }
-    const n = await this.holds(nft, wallet, true);
+    const n = nft === g.nft && n0 != null ? n0 : await this.holds(nft, wallet, true);
     if (n > 0) return null;
     const info = this.reg.nfts[nft]; return `跳过：这个币还在内盘，要求钱包持有 ${info?.name || nft} NFT 才能买卖，这个钱包（${wallet.slice(0, 6)}…${wallet.slice(-4)}）没有`;
   }
@@ -296,12 +297,12 @@ export class FlapNft extends EventEmitter {
   }
 
   async sell({ wallet, token, pct, slippage, step }) {
-    const bal = await this.balance(token, wallet);
+    // 余额和授权额度同时读（原来先后各一次往返）
+    const [bal, allowance] = await Promise.all([this.balance(token, wallet), this.call(token, erc, 'allowance', [wallet, FLAP_PORTAL]).then((r) => r[0])]);
     if (bal <= 0n) throw new Error('没有可卖出的余额');
     const amt = pct >= 100 ? bal : (bal * BigInt(Math.round(pct * 100))) / 10000n;
     step(`卖出 ${f18(amt).toFixed(0)} 个（持有 ${f18(bal).toFixed(0)}）`, 0);
     const hashes = [];
-    const allowance = (await this.call(token, erc, 'allowance', [wallet, FLAP_PORTAL]))[0];
     if (allowance < amt) { const cap = await capFor({ token, wallet, amount: amt, kind: 'sell' }); hashes.push(await sendApproval({ send: (o) => this.send(o), wallet, token, spender: FLAP_PORTAL, amount: amt, cap, label: `授权卖出（${capLabel('sell')}）`, kind: 'sell', step })); }
     else step('授权额度够用，跳过授权', 0);
     const out = await this.quoteSell(token, wallet, amt);

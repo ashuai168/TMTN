@@ -432,7 +432,7 @@ async function costForPct(q) {
 app.get('/api/cost-for-pct', async (req, res) => res.json(await costForPct(req.query)));
 
 // 下单（页面、跟单都走这里）。slots：指定哪几个钱包下单（跟单任务用）；不填 = 所有开了「参与下单」的钱包
-async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, via, clientTs, pctSupply, slots = null, source = '手动' }) {
+async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, via, clientTs, pctSupply, slots = null, source = '手动', symbol = null }) {
   {
     if (LIVE && token && !market.get(token)) await market.lookup(token).catch(() => null);   // 本后端还没收录这个币（多钱包时第二个后端可能会这样）
     const local = () => Promise.all(wallets.map(async (w) => {
@@ -442,18 +442,18 @@ async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, vi
         if (!(c.bnb > 0)) { const o = { id: `pct-${Date.now()}`, ts: Date.now(), wallet: WALLET_LABEL, token, symbol: market.get(token)?.symbol || '', side, amount: 0, status: 'failed', reason: c.capReached ? c.error : `买 ${pctSupply}% 报价失败：${c.error || '拿不到报价'}` }; broadcast({ type: 'order', data: o }); return o; }
         amt = c.bnb;
       }
-      return trader.execute({ walletId: w, token, side, amount: amt, slippage, source: String(source || '手动').slice(0, 40), via: via === 'quick' ? 'quick' : null, clientTs: Number(clientTs) || null });
+      return trader.execute({ walletId: w, token, side, amount: amt, slippage, source: String(source || '手动').slice(0, 40), via: via === 'quick' ? 'quick' : null, clientTs: Number(clientTs) || null, symbol: symbol ? String(symbol).slice(0, 32) : null });
     }));
     if (!LIVE || !WALLET_PEERS.length) { if (slots && !slots.includes(WALLET_SLOT)) return []; return await local(); }
     // 多钱包：所有「参与下单」的钱包同时执行（买入 = 每个钱包各买 amount BNB；卖出 = 每个钱包卖自己持仓的 amount%）。未登录 / 连不上的跳过，其他照常
-    const t = market.get(token), sym = t?.symbol || '';
+    const t = market.get(token), sym = (t?.symbol && t.symbol !== '?' ? t.symbol : symbol) || '';
     const skip = (slot, label, reason) => { const o = { id: `w${slot}-skip-${Date.now()}`, ts: Date.now(), wallet: label, walletSlot: slot, token, symbol: sym, side, amount, status: 'failed', reason: `${label}：${reason}，已跳过` }; broadcast({ type: 'order', data: o }); return [o]; };
     const jobs = [];
     const want = (slot) => (slots ? slots.includes(slot) : walletOn(slot));
     if (want(WALLET_SLOT)) jobs.push(trader.status?.auth?.state === 'ok' ? local().then((r) => r.map((o) => ({ ...o, walletSlot: WALLET_SLOT }))) : Promise.resolve(skip(WALLET_SLOT, WALLET_LABEL, '币安钱包未登录')));
     for (const p of WALLET_PEERS) {
       if (!want(p.slot)) continue; const label = p.label || `钱包 ${p.slot}`;
-      jobs.push(peerFetch(p, '/api/order', { wallets: ['baw'], token, side, amount, slippage, via, clientTs, pctSupply, source }, 200_000)
+      jobs.push(peerFetch(p, '/api/order', { wallets: ['baw'], token, side, amount, slippage, via, clientTs, pctSupply, source, symbol: sym || null }, 200_000)
         .then((r) => (r || []).map((o) => { const x = { ...o, id: `w${p.slot}-${o.id}`, wallet: label, walletSlot: p.slot }; broadcast({ type: 'order', data: x }); return x; }))
         .catch((e) => skip(p.slot, label, e.status === 401 ? '币安钱包未登录' : `后端连不上（${e.message}）`)));
     }
@@ -463,7 +463,7 @@ async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, vi
 }
 app.post('/api/order', async (req, res) => {
   const b = req.body || {};
-  try { res.json(await placeOrder({ wallets: b.wallets?.length ? b.wallets : ['big'], token: b.token, side: b.side, amount: b.amount, slippage: b.slippage, via: b.via, clientTs: b.clientTs, pctSupply: b.pctSupply, source: b.source || '手动' })); }
+  try { res.json(await placeOrder({ wallets: b.wallets?.length ? b.wallets : ['big'], token: b.token, side: b.side, amount: b.amount, slippage: b.slippage, via: b.via, clientTs: b.clientTs, pctSupply: b.pctSupply, source: b.source || '手动', symbol: b.symbol || null })); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 

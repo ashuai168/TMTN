@@ -58,7 +58,7 @@ export class LiveTrader extends EventEmitter {
       qbPresets: loadSaved().qbPresets || null,
       sellToBnb: loadSaved().sellToBnb !== false,
       preApproveCap: loadSaved().preApproveCap !== false, walletOn: loadSaved().walletOn || {} };   /* 多钱包「参与下单」开关，重启后保留 */   // 预先授权（较大固定额度，用户可在页面关闭）；关掉 = 只授权本次数量   // 卖出后自动把报价币（BNCB / GANG / 币股…）换回 BNB，默认开，可在交易设置里关   // 一键买卖面板的预设金额 / 比例（页面上编辑，存 live-settings.json）   // Gang 发射（毕业）后自动转出，同样只能本人打开   // Four 发射后自动转出（同样只能本人在页面打开）
-    this.claimable = []; this.claimRetry = new Map(); this.claiming = new Set(); this.inflight = new Set();
+    this.claimable = []; this.claimRetry = new Map(); this.claiming = new Set(); this.inflight = new Set(); this.tokenQ = new Map(); this.dupAt = new Map();
     this.preapproving = new Set();
     this.on('order', (o) => { try { latency.record(o, { gasLevel: this.settings.gas, rpc: this.market.provider?._getConnection?.().url || null }); } catch {} });
     this.status = { connected: false, error: null, dryRun: DRY_RUN, maxTradeBnb: loadMaxTrade(), auth: { state: 'checking', agentId: null, address: null, checkedAt: 0, message: '' }, login: null };
@@ -542,27 +542,47 @@ export class LiveTrader extends EventEmitter {
     }
   }
 
-  async execute({ walletId, token, side, amount, slippage = 20, source = '手动', via = null, clientTs = null }) {
+  async execute({ walletId, token, side, amount, slippage = 20, source = '手动', via = null, clientTs = null, symbol = null }) {
     const t = this.market.get(token);
-    const order = { id: randomBytes(5).toString('hex'), ts: Date.now(), walletId, wallet: this.wallets[0]?.label || 'baw', token, symbol: t?.symbol || '?', platform: t?.platform,
+    // 代号：本后端还没读到（钱包 2 刚收录的盘常这样）就用主后端传来的，再没有就当场读链上 symbol()，读到后更新这笔订单
+    const sym = t?.symbol && t.symbol !== '?' ? t.symbol : symbol || '?';
+    const order = { id: randomBytes(5).toString('hex'), ts: Date.now(), walletId, wallet: this.wallets[0]?.label || 'baw', token, symbol: sym, platform: t?.platform,
       side, amount: Number(amount), slippage, source, via, status: 'pending', steps: [], dryRun: DRY_RUN || !isRealSource(source), clientTs };
     this.orders.unshift(order); if (this.orders.length > 300) this.orders.length = 300;
     this.emit('order', order);
+    if (sym === '?' && /^0x[0-9a-fA-F]{40}$/.test(String(token))) this.market.provider.call({ to: token, data: '0x95d89b41' }).then((r) => {
+      const v = ethers.AbiCoder.defaultAbiCoder().decode(['string'], r)[0]; if (!v) return;
+      if (order.symbol === '?') { order.symbol = v; this.emit('order', order); }
+      if (t && (!t.symbol || t.symbol === '?')) t.symbol = v;
+    }).catch(() => {});
     // 每一步记两个时间：ms = 这一步自己的耗时（各模块原来的口径），at = 从服务器收到订单起累计的时间（统一时间线）
     const step = (name, ms, x) => { order.steps.push({ name, ms: Math.round(ms), at: Date.now() - order.ts }); if (x?.tx) { order.pendingTx = x.tx; order.stage = x.stage || 'broadcast'; } this.emit('order', order); };
     try {
       if (!t) throw new Error('代币不在列表中');
       const w = this.wallet(walletId);
       order.route = this.route(t, side); order.wallet = w.label;
-      // Agent ID 门槛盘：这个钱包没有门槛 NFT 就跳过（狙击 / 跟单 / 一键买都一样，不算失败、不发交易）
-      { const nb = await this.nftBlock(t, w); if (nb) { Object.assign(order, { status: 'failed', skipped: true, reason: nb, latencyMs: Date.now() - order.ts }); this.emit('order', order); return order; } }
+      // Agent ID 门槛盘：这个钱包没有门槛 NFT 就跳过（狙击 / 跟单 / 一键买都一样，不算失败、不发交易）。和钱包锁检查同时查，省一次往返
+      const [nb, lock] = await Promise.all([this.nftBlock(t, w), order.dryRun ? null : this.lockStatus()]);
+      if (nb) { Object.assign(order, { status: 'failed', skipped: true, reason: nb, latencyMs: Date.now() - order.ts }); this.emit('order', order); return order; }
 
       if (!order.dryRun) {
-        // 同一个币有一单还没结束时不再下第二单；钱包被锁（在等 App 确认）时直接说明，不去碰运气
-        if (this.inflight.has(t.address)) throw Object.assign(new Error('这个币有一笔订单还在处理中，请勿重复下单'), { code: 'BUSY' });
-        if ((await this.lockStatus()) === 'LOCKED') throw new Error('钱包里有一笔交易在等你在币安 App 里确认或拒绝，处理完之前不能下新单（这次没有发出任何交易）');
-        this.inflight.add(t.address); order.preMs = Date.now() - order.ts;   // 下单前检查（钱包锁、在途）耗时
-        try { return await this.executeReal(order, t, w, step); } finally { this.inflight.delete(t.address); }
+        // 只拦真正的重复下单（同币、同方向、同金额 / 比例，前一单还没结束且在 5 秒内）；
+        // 其他同币订单（比如先卖 25% 再卖 50%）排队等前一单结束（确认或失败）再执行，避免同一钱包并发发交易，也不报错
+        const tk = t.address.toLowerCase(), dupKey = `${tk}|${side}|${Number(amount)}`, prevDup = this.dupAt.get(dupKey);
+        if (prevDup && Date.now() - prevDup < 5_000) throw Object.assign(new Error('同一笔订单（同币、同方向、同比例）刚提交过还在处理中，这次没有重复下单'), { code: 'BUSY' });
+        if (lock === 'LOCKED') throw new Error('钱包里有一笔交易在等你在币安 App 里确认或拒绝，处理完之前不能下新单（这次没有发出任何交易）');
+        const prev = this.tokenQ.get(tk), at = Date.now(); this.dupAt.set(dupKey, at);
+        let release; const mine = new Promise((r) => { release = r; }); this.tokenQ.set(tk, mine);
+        try {
+          if (prev) { await prev; step('等前一笔同币订单结束', Date.now() - at); }
+          while (this.inflight.has(t.address) || this.inflight.has(tk)) await new Promise((r) => setTimeout(r, 200));   // 持仓兑换 / 计价币换回在跑同一个币
+          this.inflight.add(t.address); order.preMs = Date.now() - order.ts;   // 下单前检查（钱包锁、在途）耗时
+          return await this.executeReal(order, t, w, step);
+        } finally {
+          this.inflight.delete(t.address); release();
+          if (this.tokenQ.get(tk) === mine) this.tokenQ.delete(tk);
+          if (this.dupAt.get(dupKey) === at) this.dupAt.delete(dupKey);
+        }
       }
       if (side === 'buy') {
         const amt = Number(amount); if (!(amt > 0)) throw new Error('金额无效');
@@ -595,7 +615,9 @@ export class LiveTrader extends EventEmitter {
         this.emit('order', order); this.followUp(order, e);
         return order;
       }
-      Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts });
+      // 卖出时这个钱包没有这个币：灰色「无余额」提示，不算失败（多钱包一起卖时常见：另一个钱包没买到）
+      if (side === 'sell' && /没有可卖出的余额/.test(e.message)) Object.assign(order, { status: 'failed', skipped: true, noBalance: true, reason: '无余额：这个钱包没有持有这个币，已跳过（没有发出交易）', latencyMs: Date.now() - order.ts });
+      else Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts });
       this.emit('order', order);
       return order;
     }

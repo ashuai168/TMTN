@@ -298,11 +298,15 @@ td.addr { color: var(--muted); }
 
 .toppop { position: fixed; top: 14px; left: 50%; transform: translate(-50%, -140%); z-index: 80; display: flex; gap: 12px; align-items: center; padding: 12px 20px; border-radius: 12px; background: #151b23; border: 1px solid var(--line2); box-shadow: 0 8px 30px rgba(0,0,0,.5); font-size: 14px; transition: transform .2s ease-out; max-width: 70vw; }
 .toppop.show { transform: translate(-50%, 0); }
+.toppop { flex-direction: column; align-items: stretch; gap: 6px; }
+.toppop .tp-r { display: flex; gap: 12px; align-items: center; }
 .toppop b { font-size: 15px; }
-.toppop.buy { border-color: var(--g); } .toppop.buy b { color: var(--g); }
-.toppop.sell { border-color: var(--r); } .toppop.sell b { color: var(--r); }
-.toppop.err { border-color: var(--r); } .toppop.err b { color: var(--r); }
-.toppop.dry b, .toppop.pend b { color: var(--y); }
+.toppop.buy { border-color: var(--g); } .tp-r.buy b { color: var(--g); }
+.toppop.sell { border-color: var(--r); } .tp-r.sell b { color: var(--r); }
+.toppop.err { border-color: var(--r); } .tp-r.err b { color: var(--r); }
+.tp-r.dry b, .tp-r.pend b { color: var(--y); }
+.toppop.nobal { border-color: var(--line2); } .tp-r.nobal b, .tp-r.nobal span { color: #8b949e; }
+.toast.nobal { border-left-color: #8b949e; }
 
 .tc-full { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; display: inline-block; vertical-align: bottom; }
 

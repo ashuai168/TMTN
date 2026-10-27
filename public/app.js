@@ -842,7 +842,7 @@ function renderBottom() {
         ${rows.slice(0, 150).map((o) => `<tr><td class="dim">${hms(o.ts)}</td><td class="l">${o.source}</td><td class="l"><b class="me">${esc(o.wallet)}</b></td><td class="l"><a href="#" data-a="${o.token}">${esc(o.symbol)}</a></td>
         <td class="l ${o.side === 'buy' || o.side === 'claim' ? 'g' : 'r'}">${o.side === 'claim' ? '领取' : o.side === 'buy' ? '买入' : '卖出'}</td><td>${o.side === 'claim' ? '—' : o.side === 'buy' ? bnb(o.amountIn ?? o.amount) + ' BNB' : (o.amountIn && !LIVE() ? K(o.amountIn) : o.amount + '%')}</td>
         <td>${o.out == null ? '—' : o.side === 'buy' ? K(o.out) : bnb(o.out) + ' BNB'}</td><td>${o.latencyMs != null ? o.latencyMs + 'ms' : '…'}</td>
-        <td class="l"><span class="${o.status === 'filled' ? 'g' : o.status === 'failed' ? 'r' : 'y'}">${o.status === 'filled' ? '成交' : o.status === 'failed' ? esc(o.reason) : o.status === 'dry_run' ? '已报价（未上链）' : o.status === 'unknown' || o.stage === 'unknown' ? '待确认：' + esc(o.reason || '') : '提交中'}</span>
+        <td class="l"><span class="${o.status === 'filled' ? 'g' : o.noBalance ? 'muted' : o.status === 'failed' ? 'r' : 'y'}">${o.status === 'filled' ? '成交' : o.status === 'failed' ? esc(o.reason) : o.status === 'dry_run' ? '已报价（未上链）' : o.status === 'unknown' || o.stage === 'unknown' ? '待确认：' + esc(o.reason || '') : '提交中'}</span>
         <div class="steps">${(o.steps || []).map((s) => `${s.name} ${s.ms}ms`).join(' → ')}</div></td>${S.bottomTab === 'fills' || REAL() ? `<td class="l">${txLink(o.tx)}</td>` : ''}</tr>`).join('')}</table>` : '<div class="empty">暂无订单</div>';
       break;
     }
@@ -998,7 +998,7 @@ async function submitOrder({ token = S.selected, side = S.side, wallets = [...S.
   const go = async () => {
     const btn = $('#submit'); btn.classList.add('busy');
     topPop({ status: 'pending', side, symbol: t.symbol, amountIn: side === 'buy' ? items[0].amount : items[0].amount });
-    try { await Promise.all(items.map((x) => api('/api/order', { wallets: [x.w], token, side, amount: x.amount, slippage: S.slippage, ...(pctMW > 0 ? { pctSupply: pctMW } : {}) }))); }
+    try { await Promise.all(items.map((x) => api('/api/order', { wallets: [x.w], token, side, amount: x.amount, slippage: S.slippage, symbol: t.symbol, ...(pctMW > 0 ? { pctSupply: pctMW } : {}) }))); }
     catch (e) { toast({ status: 'failed', reason: e.message, symbol: t.symbol }); topPop({ status: 'failed', side, reason: e.message, symbol: t.symbol }); }
     btn.classList.remove('busy');
   };
@@ -1055,33 +1055,43 @@ function zhErr(msg) {
   return '下单失败：' + s.slice(0, 120);
 }
 
-// 顶部居中的买卖弹窗：提交时显示「提交中」，结果回来后变成成交 / 失败
-let popTimer;
+// 顶部居中的买卖弹窗：提交时显示「提交中」，结果回来后变成成交 / 失败。
+// 每行开头是钱包名；多钱包一起下单时每个钱包一行（同一次点击的结果合在一个弹窗里）。卖出时钱包里没有这个币 = 灰色「无余额」，不算失败
+let popTimer; const POP = new Map();
 function topPop(o) {
   let el = $('#topPop'); if (!el) { el = document.createElement('div'); el.id = 'topPop'; document.body.appendChild(el); }
-  const buy = o.side === 'buy', act = buy ? '买入' : '卖出';
-  const amt = o.amountIn != null ? (buy ? `${bnb(o.amountIn)} BNB` : `${o.amountIn}%`) : '';
-  const cls = o.status === 'pending' ? 'pend' : o.status === 'filled' ? (buy ? 'buy' : 'sell') : o.status === 'dry_run' ? 'dry' : 'err';
-  const bc = o.status === 'pending' && o.stage === 'broadcast' && o.pendingTx;
-  const title = bc ? (/授权/.test(o.steps?.at(-1)?.name || '') ? '授权已发出，等待上链…' : '已发出，等待上链…') : o.status === 'pending' ? `${act}已提交，处理中…` : o.status === 'filled' ? `${act}成功` : o.status === 'dry_run' ? `${act}已报价（未上链）` : `${act}失败`;
-  const detail = o.status === 'failed' ? esc(zhErr(o.reason)) : o.status === 'filled'
-    ? (buy ? `${amt} → ${K(o.out || 0)} ${esc(o.symbol)}` : `${amt} → ${o.out != null ? bnb(o.out) + ' BNB' : '?'}`) : amt;
-  el.className = 'toppop show ' + cls;
-  el.innerHTML = `<b>${title}</b><span>${esc(o.symbol || '')}</span><span class="mono">${detail}</span>${o.tx ? txLink(o.tx) : bc ? txLink(o.pendingTx) : ''}`;
+  if (!o.wallet) POP.clear(); else POP.delete('_');   // 没有钱包名 = 页面刚提交（新的一次点击）；钱包结果回来后去掉「提交中」那行
+  const now = Date.now(); for (const [k, v] of POP) if (v.o.status !== 'pending' && now - v.at > 10_000) POP.delete(k);
+  POP.set(o.wallet ? `${o.walletSlot ?? o.wallet}|${o.token || ''}` : '_', { o, at: now });
+  const row = (o) => {
+    const buy = o.side === 'buy', act = buy ? '买入' : '卖出';
+    const amt = o.amountIn != null ? (buy ? `${bnb(o.amountIn)} BNB` : `${o.amountIn}%`) : '';
+    const cls = o.noBalance ? 'nobal' : o.status === 'pending' ? 'pend' : o.status === 'filled' ? (buy ? 'buy' : 'sell') : o.status === 'dry_run' ? 'dry' : 'err';
+    const bc = o.status === 'pending' && o.stage === 'broadcast' && o.pendingTx;
+    const title = o.noBalance ? '无余额' : bc ? (/授权/.test(o.steps?.at(-1)?.name || '') ? '授权已发出，等待上链…' : '已发出，等待上链…') : o.status === 'pending' ? `${act}已提交，处理中…` : o.status === 'filled' ? `${act}成功` : o.status === 'dry_run' ? `${act}已报价（未上链）` : `${act}失败`;
+    const detail = o.noBalance ? '' : o.status === 'failed' ? esc(zhErr(o.reason)) : o.status === 'filled'
+      ? (buy ? `${amt} → ${K(o.out || 0)} ${esc(o.symbol)}` : `${amt} → ${o.out != null ? bnb(o.out) + ' BNB' : '?'}`) : amt;
+    return { cls, html: `<div class="tp-r ${cls}"><b>${o.wallet ? esc(o.wallet) + ' · ' : ''}${title}</b><span>${esc(o.symbol || '')}</span>${detail ? `<span class="mono">${detail}</span>` : ''}${o.tx ? txLink(o.tx) : bc ? txLink(o.pendingTx) : ''}</div>` };
+  };
+  const rows = [...POP.values()].map((v) => row(v.o)), cs = rows.map((r) => r.cls);
+  el.className = 'toppop show ' + (cs.includes('err') ? 'err' : cs.includes('pend') ? 'pend' : cs.find((c) => c !== 'nobal') || 'nobal');
+  el.innerHTML = rows.map((r) => r.html).join('');
   clearTimeout(popTimer);
-  if (o.status !== 'pending') popTimer = setTimeout(() => el.classList.remove('show'), o.status === 'filled' ? 4000 : 6000);
+  if (![...POP.values()].some((v) => v.o.status === 'pending')) popTimer = setTimeout(() => { el.classList.remove('show'); POP.clear(); }, cs.includes('err') ? 6000 : 4000);
 }
 
 function toast(o) {
   const el = document.createElement('div');
   const ok = o.status === 'filled';
-  el.className = 'toast ' + (ok ? '' : o.status === 'dry_run' ? 'dry' : 'err');
-  el.innerHTML = o.status === 'dry_run'
+  el.className = 'toast ' + (ok ? '' : o.status === 'dry_run' ? 'dry' : o.noBalance ? 'nobal' : 'err');
+  const wn = o.wallet ? esc(o.wallet) + ' · ' : '';
+  el.innerHTML = o.noBalance ? `<b class="muted">${wn}无余额</b> · ${esc(o.symbol || '')}<div class="muted">这个钱包没有持有，已跳过（没有发出交易）</div>`
+    : o.status === 'dry_run'
     ? `<b class="y">已报价（未上链）</b> · ${esc(o.symbol)} · ${o.wallet} · <span class="mono">${o.latencyMs}ms</span><div class="mono muted">${o.side === 'buy' ? `${bnb(o.amountIn)} BNB → ${o.out != null ? K(o.out) : '?'}` : `${K(o.amountIn || 0)} → ${o.out != null ? bnb(o.out) : '?'} BNB`}</div><div class="muted">${esc(o.route || '')}</div><div class="steps">${o.steps.map((s) => `${s.name} ${s.ms}ms`).join(' → ')}</div>`
     : ok
     ? o.side === 'claim' ? `<b class="g">领取成功</b> · ${esc(o.symbol)} · ${K(o.out || 0)} 个代币${o.tx ? `<div>${txLink(o.tx)}</div>` : ''}`
-    : `<b class="${o.side === 'buy' ? 'g' : 'r'}">${o.side === 'buy' ? '买入' : '卖出'}成交</b> · ${esc(o.symbol)} · ${o.wallet} · <span class="mono">${o.latencyMs}ms</span><div class="mono muted">${o.side === 'buy' ? `${bnb(o.amountIn)} BNB → ${K(o.out || 0)}` : LIVE() ? `${o.amountIn}% → ${o.out != null ? bnb(o.out) + ' BNB' : '?'}` : `${K(o.amountIn)} → ${bnb(o.out)} BNB`}</div>${o.tx ? `<div>${txLink(o.tx)}</div>` : ''}${o.reason ? `<div class="y">${esc(o.reason)}</div>` : ''}<div class="steps">${o.steps.map((s) => `${s.name} ${s.ms}ms`).join(' → ')}</div>`
-    : `<b class="r">失败</b> · ${esc(o.symbol || '')} ${o.wallet ? '· ' + o.wallet : ''}<div class="muted">${esc(zhErr(o.reason))}</div>`;
+    : `<b class="${o.side === 'buy' ? 'g' : 'r'}">${wn}${o.side === 'buy' ? '买入' : '卖出'}成交</b> · ${esc(o.symbol)} · <span class="mono">${o.latencyMs}ms</span><div class="mono muted">${o.side === 'buy' ? `${bnb(o.amountIn)} BNB → ${K(o.out || 0)}` : LIVE() ? `${o.amountIn}% → ${o.out != null ? bnb(o.out) + ' BNB' : '?'}` : `${K(o.amountIn)} → ${bnb(o.out)} BNB`}</div>${o.tx ? `<div>${txLink(o.tx)}</div>` : ''}${o.reason ? `<div class="y">${esc(o.reason)}</div>` : ''}<div class="steps">${o.steps.map((s) => `${s.name} ${s.ms}ms`).join(' → ')}</div>`
+    : `<b class="r">${wn}${o.side === 'buy' ? '买入失败' : o.side === 'sell' ? '卖出失败' : '失败'}</b> · ${esc(o.symbol || '')}<div class="muted">${esc(zhErr(o.reason))}</div>`;
   $('#toasts').prepend(el);
   setTimeout(() => el.remove(), REAL() ? 15000 : ok ? 5000 : 4000);
   while ($('#toasts').children.length > 3) $('#toasts').lastChild.remove();
@@ -1457,7 +1467,7 @@ async function quickOrder(side, pct) {
     if (side === 'sell') {
       topPop({ status: 'pending', side: 'sell', symbol: t.symbol, amountIn: 100 });
       const r = await api('/api/order', { wallets: ws, token: t.address, side: 'sell', amount: 100, slippage: S.slippage, via: 'quick' });
-      const f = [].concat(r).find((o) => o?.status === 'failed'); if (f) topPop({ ...f, side: 'sell', symbol: t.symbol });
+      const f = [].concat(r).find((o) => o?.status === 'failed' && !o.noBalance); if (f) topPop({ ...f, side: 'sell', symbol: t.symbol });
       return;
     }
     if (side === 'buy') { await pulseBuy1(t.address); return; }   // 按平台选比例（Flap 2%→1%，Four/Gang 1%）
