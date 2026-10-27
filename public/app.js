@@ -2215,7 +2215,7 @@ function tcMatch(k, t) {
   // 用的就是卡片上显示的那两个数（buyFeePct / sellFeePct）。任何一边已知且超过上限就隐藏；两边都不知道才算「税率未知」
   const mt = taxNum(f.maxTax);
   if (mt != null || f.hideUnknownTax) {
-    const known = [t.buyFeePct, t.sellFeePct].map(Number).filter((v) => v != null && isFinite(v));
+    const known = [t.buyFeePct, t.sellFeePct].filter((v) => v != null && v !== '').map(Number).filter((v) => isFinite(v));
     if (!known.length) { if (f.hideUnknownTax) return false; }
     else if (mt != null && Math.max(...known) > mt + 1e-9) return false;
   }
