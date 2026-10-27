@@ -19,6 +19,19 @@ export const bumpUsage = (label, url, payload) => { const node = nodeName(url); 
 // NodeReal（BSC）每个方法的 CU（docs.nodereal.io/docs/compute-units-cus）；WebSocket 推送按字节 0.04 CU；没列出的按 20 估
 export const CU = { eth_blockNumber: 5, eth_chainId: 5, eth_call: 20, eth_getLogs: 50, eth_getBalance: 15, eth_getTransactionReceipt: 15, eth_getBlockByNumber: 15, eth_subscribe: 10, eth_estimateGas: 75, eth_gasPrice: 15, eth_getCode: 15, eth_getTransactionCount: 25, eth_sendRawTransaction: 150, logs: 0 };
 export const cuOf = (method, n) => (method === 'ws_bytes' ? n * 0.04 : n * (CU[method] ?? 20));
+// 按调用位置计数（每 5 次抽 1 次看调用栈，乘 5 估算）：查 eth_call / getLogs 主要是哪段代码在用。键 = 用途|方法|文件:行 函数
+export const RPC_CALLERS = new Map();
+let callerTick = 0;
+const callerOf = () => {
+  const lim = Error.stackTraceLimit; Error.stackTraceLimit = 40; const st = new Error().stack || ''; Error.stackTraceLimit = lim;
+  for (const l of st.split('\n').slice(1)) {
+    if (/node_modules|node:|\/engine\/live\/rpc\.js/.test(l)) continue;
+    const m = /at (?:async )?(?:(\S+) )?\(?(?:file:\/\/)?[^()]*\/((?:engine\/)?[\w/.-]+\.m?js):(\d+):\d+\)?$/.exec(l.trim());
+    if (m) return `${m[2]}:${m[3]}${m[1] ? ' ' + m[1] : ''}`;
+  }
+  return '?';
+};
+export function takeCallers() { const out = {}; for (const [k, n] of RPC_CALLERS) out[k] = n; RPC_CALLERS.clear(); return out; }
 export function takeUsage() { const out = {}; for (const [k, n] of RPC_USAGE) out[k] = n; RPC_USAGE.clear(); return out; }
 export const PUBLIC_RPC = 'https://bsc-rpc.publicnode.com', PUBLIC_WSS = 'wss://bsc-rpc.publicnode.com';
 // .env 的 WSS_URL（可填多个，逗号分隔，如 Dwellir 的 wss 地址）：排在 NodeReal 之后、PublicNode 之前，NodeReal 冷却 / PublicNode 限流时订阅不至于断。用到时再读（.env 在 config.js 里加载）
@@ -52,13 +65,14 @@ export class WsLogs {
 }
 
 export class FailoverProvider extends ethers.JsonRpcProvider {
-  // urls 按优先顺序；其中多个 NodeReal key 轮流用（round-robin）。某个节点被限流 / 额度用完（429 等）就冷却 5 分钟，
-  // 其他错误冷却 30 秒，期间用下一个；全都在冷却时仍按顺序硬试一遍。不让 ethers 自己退避重试（会卡很久）
+  // urls 按优先顺序；其中多个 NodeReal key 轮流用（round-robin）。某个节点被限流（429 等）就冷却 5 分钟，NodeReal 月额度用完冷却 1 小时，
+  // 其他错误冷却 30 秒，期间用下一个；全都在冷却时只试冷却最快结束的 2 个（以前是全部硬试一遍，一个请求打 4 个节点）。
+  // getLogs 不发给 bsc-dataseed（不支持，必报 limit exceeded）；某节点 getLogs 报 limit 只停它的 getLogs 10 分钟，不影响 eth_call。不让 ethers 自己退避重试（会卡很久）
   constructor(urls, label = 'rpc') {
     const list = urls.filter((u, i, a) => u && a.indexOf(u) === i);
     super(FailoverProvider.req(list[0]), 56, { staticNetwork: true, batchMaxCount: 1 });
     this.urls = list; this.label = label; this.rr = 0;
-    this.nodes = list.map((u) => ({ url: u, name: nodeName(u), nr: /nodereal/i.test(u), cool: 0, err: null, p: new ethers.JsonRpcProvider(FailoverProvider.req(u), 56, { staticNetwork: true, batchMaxCount: 1 }) }));
+    this.nodes = list.map((u) => ({ url: u, name: nodeName(u), nr: /nodereal/i.test(u), cool: 0, err: null, noLogs: /dataseed/i.test(u) ? Infinity : 0, p: new ethers.JsonRpcProvider(FailoverProvider.req(u), 56, { staticNetwork: true, batchMaxCount: 1 }) }));
     this.lastUsed = maskRpc(list[0]); this.primaryErr = null; this.coolUntil = 0;
   }
   static req(u) { const r = new ethers.FetchRequest(u); r.setThrottleParams({ maxAttempts: 1 }); r.timeout = 8_000; return r; }
@@ -68,14 +82,19 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
     return { active: act, primary: first?.name, fallback: act !== first?.name && !(first?.nr && /^NodeReal/.test(act)),
       coolUntil: this.coolUntil, primaryErr: this.primaryErr, keys: this.nodes.filter((n) => n.nr).map((n) => ({ name: n.name, cooling: n.cool > now, err: n.cool > now ? n.err : null })) };
   }
-  order() {
-    const now = Date.now(), ok = this.nodes.filter((n) => n.cool <= now);
+  order(method) {
+    const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now);
     const nr = ok.filter((n) => n.nr);
     if (nr.length > 1) { this.rr = (this.rr + 1) % nr.length; const rot = nr.slice(this.rr).concat(nr.slice(0, this.rr)); let k = 0; for (let i = 0; i < ok.length; i++) if (ok[i].nr) ok[i] = rot[k++]; }
-    return ok.length ? ok : this.nodes;
+    return ok.length ? ok : [...(pool.length ? pool : this.nodes)].sort((a, b) => a.cool - b.cool).slice(0, 2);
   }
+  // 调用位置要在入口处抓（到 _send 时已经过了 ethers 的请求队列，调用栈里没有业务代码了）
+  tagCaller(method) { if (++callerTick % 5 === 0) { const k = `${this.label}|${method}|${callerOf()}`; RPC_CALLERS.set(k, (RPC_CALLERS.get(k) || 0) + 5); } }
+  call(tx) { this.tagCaller('eth_call'); return super.call(tx); }
+  getLogs(filter) { this.tagCaller('eth_getLogs'); return super.getLogs(filter); }
   async _send(payload) {
-    let last; const list = this.order();
+    const method = Array.isArray(payload) ? payload[0]?.method : payload?.method;
+    let last; const list = this.order(method);
     for (let i = 0; i < list.length; i++) {
       const n = list[i]; bumpUsage(this.label, n.url, payload);
       try {
@@ -83,11 +102,13 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
         const errs = (Array.isArray(r) ? r : [r]).filter((x) => x?.error).map((x) => String(x.error.message || ''));
         // 限流 / 额度：冷却这个节点换下一个；节点不支持（如 bsc-dataseed 的 getLogs「limit exceeded」）：换下一个；合约 revert 之类的正常错误直接返回
         const rl = errs.find((m) => /429|rate|too many|quota|exceed|limit/i.test(m));
-        if (rl && i < list.length - 1) { n.cool = Date.now() + (n.nr ? 300_000 : 30_000); n.err = rl.slice(0, 120); if (n.nr) { this.primaryErr = n.err; this.coolUntil = n.cool; } last = new Error(rl); continue; }
+        if (rl && method === 'eth_getLogs' && !n.nr && /^limit exceeded$/i.test(rl.trim())) { n.noLogs = Date.now() + 600_000; last = new Error(rl); continue; }
+        if (rl && i < list.length - 1) { n.cool = Date.now() + (/monthly quota/i.test(rl) ? 3600_000 : n.nr ? 300_000 : 30_000); n.err = rl.slice(0, 120); if (n.nr) { this.primaryErr = n.err; this.coolUntil = n.cool; } last = new Error(rl); continue; }
         this.lastUsed = maskRpc(n.url); this.lastUrl = n.url; return r;
       } catch (e) {
-        const m = String(e.shortMessage || e.message || e).slice(0, 160); last = e;
-        n.cool = Date.now() + (/429|limit|quota|exceed|retry/i.test(m) ? 300_000 : 30_000); n.err = m;
+        const body = /monthly quota/i.test(String(e.info?.responseBody || '')) ? '月额度已用完（monthly quota）' : '';   // 429 时 ethers 只给「exceeded maximum retry limit」，原因在响应体里
+        const m = (body || String(e.shortMessage || e.message || e)).slice(0, 160); last = e;
+        n.cool = Date.now() + (body ? 3600_000 : /429|limit|quota|exceed|retry/i.test(m) ? 300_000 : 30_000); n.err = m;
         if (n.nr) { this.primaryErr = m; this.coolUntil = n.cool; }
       }
     }
