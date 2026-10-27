@@ -174,7 +174,9 @@ const eligible = (w, t) => LIVE() ? { ok: true, why: '以合约为准' } : !t ||
 const api = async (url, body) => {
   if (url === '/api/order' && body && !body.clientTs) body = { ...body, clientTs: Date.now() };   // 记录点击到服务器收到的耗时（data/latency.jsonl）
   const r = await fetch(url, body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : undefined);
-  const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j;
+  const txt = await r.text(); let j;
+  try { j = JSON.parse(txt); } catch { throw new Error(r.status === 404 ? '后端还没有这个接口：改了代码后还没重启，请重启 TMTN 再试' : `后端返回的不是 JSON（HTTP ${r.status}）`); }   // 没有这个路由时 express 回的是 HTML 404 页
+  if (!r.ok) throw new Error(j.error || r.statusText); return j;
 };
 let ws;
 function connect() {
