@@ -353,7 +353,7 @@ export class LiveTrader extends EventEmitter {
     if (this.fairMinting(t)) return side === 'buy' ? 'Gang 打新认购 · GangRouter.fairMintBNB（固定价，每地址有上限，多余 BNB 退回）· baw contract-call' : 'Gang 打新退出 · pad.withdraw（按打新价，扣撤出费，收 WBNB）· baw contract-call';
     if (this.useGangV2(t) && t.gangTrack !== 'v2') return `Gang V3 内盘 · ${side === 'buy' ? `BNB→${t.quote}→buy` : `sell→${t.quote}→BNB`}（和 V2 同一套，非原子）${V3_TRADE ? '' : ' · 只报价（GANG_V3_TRADE 未开启）'}`;
     if (this.useGangV2(t)) return side === 'buy' ? `Gang V2 内盘 · BNB→${t.quote}→buy（非原子，2～3 笔交易）· 每个钱包最多 1%` : `Gang V2 内盘 · sell→${t.quote}→BNB（非原子，2～3 笔交易）`;
-    if (this.useFlapNft(t)) return `Flap 内盘（${t.nftGate?.removed ? '门槛已取消' : `${t.nftGate?.name || 'NFT'} 门槛`}）· Portal.swapExactInput ${side === 'buy' ? 'BNB→代币' : '代币→BNB'} · baw contract-call（每个地址最多买总量 2%）`;
+    if (this.useFlapNft(t)) return `Flap 内盘（${t.nftGate?.plain ? '普通盘' : t.nftGate?.removed ? '门槛已取消' : `${t.nftGate?.name || 'NFT'} 门槛`}）· Portal.swapExactInput ${side === 'buy' ? 'BNB→代币' : '代币→BNB'}${t.quote && t.quote !== 'BNB' ? `（Portal 内部 BNB⇄${t.quote}）` : ''} · baw contract-call${t.nftGate?.plain ? '' : '（每个地址最多买总量 2%）'}`;
     if (this.useOpenFour(t)) return `Four Agent 专属内盘 · OpenFour Core.${side} · baw contract-call（每个钱包最多买总量 1%）`;
     if (this.usePortal(t, side) && side === 'sell') return `Flap Agent Curve · Portal.sell${t.quote === 'BNB' ? '' : ` → ${t.quote} → BNB`}`;
     if (this.usePortal(t, side)) return `Flap Agent Curve · ${t.quote === 'BNB' ? 'Portal.buy（BNB，原子）' : `BNB→${t.quote}→Portal.buyWithQuote（非原子）`}`;

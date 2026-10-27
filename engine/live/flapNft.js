@@ -267,11 +267,26 @@ export class FlapNft extends EventEmitter {
   // 门槛还在吗（管理员可能去掉了）：nftGate(token)，0 = 不再有门槛
   async gateOf(token) { return (await this.call(FLAP_PORTAL, iface, 'nftGate', [token]))[0].toLowerCase(); }
 
-  // 不在登记表里的地址（钱包 2 后端没订阅到、手动搜索的）：直接问 Portal，是门槛盘就补登记
-  async check(token) {
+  // 不在登记表里的地址（钱包 2 后端没订阅到、手动搜索的）：直接问 Portal，是门槛盘就补登记。
+  // plain = 手动粘贴地址：没有门槛的普通 Portal 盘（如以 NOKB 计价的 NOKIA 0x1871…7777）也收录，按「门槛已取消」同一套买卖（Portal 自己做 BNB⇄报价币）
+  async check(token, { plain = false } = {}) {
     const k = String(token).toLowerCase(); if (this.reg.tokens[k]) return this.reg.tokens[k];
     let nft; try { nft = await this.gateOf(k); } catch { return null; }
-    if (!nft || nft === ZERO) return null;
+    if (!nft || nft === ZERO) {
+      if (!plain) return null;
+      let st; try { st = await this.state(k); } catch { return null; }
+      if (st.status !== 1 && st.status !== 4) return null;   // 不是 Portal 的币（读出来全 0）
+      // 普通盘没有 FlapNFTGated 事件可以定创建区块：按 DexScreener 的创建时间估一个（往前多留 300 块），免得 history() 从 45 万块前开始补；查不到就只补最近约 5000 块
+      const at = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + k, { signal: AbortSignal.timeout(5000) }).then((r) => r.json())
+        .then((j) => Math.min(...(j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === k && x.pairCreatedAt > 0).map((x) => x.pairCreatedAt))).catch(() => Infinity);
+      let block = null;
+      try {
+        const head = await this.provider.getBlock('latest'), old = await this.provider.getBlock(head.number - 1000), ms = ((head.timestamp - old.timestamp) * 1000) / 1000 || 750;
+        block = Number.isFinite(at) ? Math.max(0, head.number - Math.ceil((head.timestamp * 1000 - at) / ms) - 300) : head.number - 5000;
+      } catch { /* 读不到就按默认回补 */ }
+      const g = { token: k, nft: ZERO, plain: true, removed: true, dex: st.status === 4, block, tx: null, seenAt: Date.now(), at: Number.isFinite(at) ? at : null };
+      this.reg.tokens[k] = g; this.save(); this.emit('gated', g, { restore: true }); return g;
+    }
     const g = { token: k, nft, block: null, tx: null, seenAt: Date.now(), at: null };
     this.reg.tokens[k] = g; this.save(); this.emit('gated', g, { restore: true }); return g;
   }
@@ -332,7 +347,7 @@ export class FlapNft extends EventEmitter {
     const q = await this.quoteBuy(token, wallet, amountBnb);
     step(`Flap Portal 报价 ${f18(q.out).toFixed(0)} 个`, 0);
     const got = await this.simulate(wallet, iface.encodeFunctionData('swapExactInput', [[ZERO, token, q.value, 0n, '0x']]), q.value);
-    step('链上模拟通过（tx.origin = 钱包，NFT 门槛满足）', 0);
+    step('链上模拟通过（tx.origin = 钱包）', 0);
     return { dryRun: true, venue: 'Flap Portal.swapExactInput（Agent ID 门槛，未上链）', expected: f18(got) };
   }
 
@@ -344,7 +359,7 @@ export class FlapNft extends EventEmitter {
     const inputData = iface.encodeFunctionData('swapExactInput', [[ZERO, token, q.value, minOut(q.out, slippage), '0x']]);
     if (!fast) await this.simulate(wallet, inputData, q.value);   // 快捷买入不模拟，直接发（报价 + 滑点保护照旧）
     const hash = await this.send({ wallet, to: FLAP_PORTAL, valueWei: q.value, inputData, label: 'Flap Portal.swapExactInput 买入', step });
-    return { venue: 'Flap Portal.swapExactInput（Agent ID 门槛内盘，BNB）', expected: f18(q.out), txHash: hash, hashes: [hash] };
+    return { venue: 'Flap Portal.swapExactInput（内盘，BNB）', expected: f18(q.out), txHash: hash, hashes: [hash] };
   }
 
   async sell({ wallet, token, pct, slippage, step }) {
@@ -360,6 +375,6 @@ export class FlapNft extends EventEmitter {
     const inputData = iface.encodeFunctionData('swapExactInput', [[token, ZERO, amt, minOut(out, slippage), '0x']]);
     await this.simulate(wallet, inputData, 0n);
     hashes.push(await this.send({ wallet, to: FLAP_PORTAL, inputData, label: 'Flap Portal.swapExactInput 卖出', step }));
-    return { venue: 'Flap Portal.swapExactInput（Agent ID 门槛内盘，卖出得 BNB）', expected: f18(out), txHash: hashes.at(-1), hashes };
+    return { venue: 'Flap Portal.swapExactInput（内盘，卖出得 BNB）', expected: f18(out), txHash: hashes.at(-1), hashes };
   }
 }
