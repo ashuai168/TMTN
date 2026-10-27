@@ -2,7 +2,7 @@
 // 默认不提交真实交易（订单状态 dry_run）。LIVE_TRADE=1 时，页面上手动点击的订单、以及本人启动的「真实下单」跟单任务（source 形如「跟单 任务名」）和 Gang 新盘狙击（狙击 Gang）才会真实上链；自动买/自动卖始终只报价。
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { PREAPPROVE, QUOTE_TOKENS, dataFile, EXPECT_WALLET } from './config.js';
 import { setApprovalCtx, capFor, capLabel, sendApproval, listApprovals } from './approvals.js';
 import { DRY_RUN, AUTH_SIMULATE_LOGGED_OUT, MAX_TRADE_BNB, LIVE_SETTINGS_FILE, BNB_NATIVE, BINANCE_CHAIN_ID, WALLET_LABEL, AUTO_TRANSFER_TO, AUTO_TRANSFER_FOUR } from './config.js';
@@ -26,6 +26,17 @@ export class LiveTrader extends EventEmitter {
   constructor(market) {
     super();
     this.market = market;
+    // 订单日志：每笔订单到达结果（成交 / 失败 / 未知）时追加一行到 data/orders.jsonl（含每一步，比如「收到报价币…接着换回 BNB」），
+    // 同时在控制台（live.log）打一行。页面上的订单记录只在内存里，重启就没了
+    this.logged = new Map();
+    this.on('order', (o) => {
+      if (o.dryRun || !['filled', 'failed', 'unknown'].includes(o.status)) return;   // 只记真实订单
+      const key = `${o.status}|${o.reason || ''}`; if (this.logged.get(o.id) === key) return; this.logged.set(o.id, key);
+      if (this.logged.size > 2000) this.logged = new Map([...this.logged].slice(-1000));
+      const row = { at: new Date().toISOString(), id: o.id, wallet: o.wallet, symbol: o.symbol, token: o.token, side: o.side, amount: o.amount, source: o.source, status: o.status, route: o.route, venue: o.venue, out: o.out, tx: o.tx, txs: o.txs, reason: o.reason, steps: (o.steps || []).map((x) => x.name) };
+      try { appendFileSync(dataFile('orders.jsonl'), JSON.stringify(row) + '\n'); } catch { /* 写不了就只打控制台 */ }
+      console.log(`[订单] ${o.wallet || ''} ${o.side === 'buy' ? '买' : '卖'} ${o.symbol} ${o.status}${o.out != null ? ` 得 ${o.out}` : ''}${o.reason ? ' · ' + String(o.reason).slice(0, 160) : ''}`);
+    });
     this.portal = new Portal(market.tradeProvider || market.provider, market.provider);   // 交易走 NodeReal 优先；领取前的模拟（定时扫描）走公共节点
     setApprovalCtx({ trader: this, market });
     setQuoteLookup((a) => this.quoteSet().has(String(a).toLowerCase()));   // 计价币兑换前的流动性检查只针对计价币（见 quoteRoutes.js）
