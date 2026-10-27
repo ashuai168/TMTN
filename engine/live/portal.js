@@ -3,6 +3,7 @@
 import { ethers } from 'ethers';
 import { PORTAL, FACTORY, ZERO, BNB_NATIVE } from './config.js';
 import * as baw from './baw.js';
+import { USDT, ONDO_RE, viaUsdt, markViaUsdt } from './quoteRoutes.js';
 import { capFor, capLabel, sendApproval } from './approvals.js';
 
 const PORTAL_ABI = [
@@ -159,14 +160,22 @@ export class Portal {
     if (!toBnb) return { venue: `Portal.sell → ${quoteSym}`, expected: null, txHash: hashes[0], hashes, note: `已卖出得到 ${ethers.formatUnits(got, dec)} ${quoteSym}（「卖出后自动换回 BNB」已关闭，留在钱包）` };
     const t = Date.now();
     // 第二步：只换这次卖出实际到账的那部分（链上余额差，整数），失败最多再试 2 次
-    let o = null, sw = {};
+    let o = null, sw = {}, usdtGot = null;
     for (let k = 0; k < 3; k++) {
-      try { sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(got, dec), fromToken: quoteAddress, toToken: BNB_NATIVE, slippage }); o = sw.orderId ? await baw.pollOrder(sw.orderId) : null; } catch (e) { o = { status: 'FAILED', err: e.message }; }
+      try {
+        if (viaUsdt(quoteAddress)) {   // Ondo 类报价币（NVDAB / FXIon …）只能和稳定币直接换：报价币→USDT→BNB；USDT 那步只换一次，重试只重试 USDT→BNB
+          if (usdtGot == null) { const a = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(got, dec), fromToken: quoteAddress, toToken: USDT, slippage }); const oa = a.orderId ? await baw.pollOrder(a.orderId) : null;
+            if (oa && oa.status !== 'FINISHED' && oa.status !== 'FAILED') { o = oa; sw = a; break; }   // 已提交、结果未知：不重试，免得重复卖
+            if (oa?.status !== 'FINISHED') throw new Error(`${quoteSym}→USDT ${oa?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${a.orderId || '无'}）`); if (oa.txHash) hashes.push(oa.txHash); usdtGot = String(oa.toTokenActualQty); step(`${quoteSym}→USDT 完成 ${usdtGot}`, Date.now() - t); }
+          sw = await baw.marketSwap({ fromTokenQty: usdtGot, fromToken: USDT, toToken: BNB_NATIVE, slippage });
+        } else sw = await baw.marketSwap({ fromTokenQty: ethers.formatUnits(got, dec), fromToken: quoteAddress, toToken: BNB_NATIVE, slippage });
+        o = sw.orderId ? await baw.pollOrder(sw.orderId) : null;
+      } catch (e) { if (ONDO_RE.test(e.message) && !viaUsdt(quoteAddress)) { markViaUsdt(quoteAddress); k--; step(`${quoteSym} 只能和稳定币直接兑换（Ondo 类），改走 USDT`, Date.now() - t); continue; } o = { status: 'FAILED', err: e.message }; }
       if (o?.status === 'FINISHED' || (o && o.status !== 'FAILED')) break;
       step(`${quoteSym}→BNB 第 ${k + 1} 次没成功${o?.err ? '：' + o.err.slice(0, 60) : ''}，重试`, Date.now() - t); await new Promise((r) => setTimeout(r, 2000 * (k + 1)));
     }
     if (o?.txHash) hashes.push(o.txHash);
-    if (o?.status !== 'FINISHED') return { venue: `Portal.sell → ${quoteSym}`, expected: null, txHash: hashes[0], hashes, note: `已卖出得到 ${ethers.formatUnits(got, dec)} ${quoteSym}，换回 BNB ${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${sw.orderId || '无'}）` };
+    if (o?.status !== 'FINISHED') return { venue: `Portal.sell → ${quoteSym}`, expected: null, txHash: hashes[0], hashes, note: `已卖出得到 ${ethers.formatUnits(got, dec)} ${quoteSym}，换回 BNB ${o?.status === 'FAILED' ? '失败' : '未完成'}（订单 ${sw.orderId || '无'}）${usdtGot != null ? `；已换出 ${usdtGot} USDT 留在钱包` : ''}` };
     step(`${quoteSym}→BNB 完成`, Date.now() - t);
     return { venue: `Portal.sell → ${quoteSym} → BNB`, expected: Number(o.toTokenActualQty || 0), txHash: hashes.at(-1), hashes };
   }

@@ -12,6 +12,11 @@ export function getRoute(addr) { return load()[String(addr).toLowerCase()] || nu
 let quoteLookup = () => false;
 export const setQuoteLookup = (fn) => { quoteLookup = fn; };
 export function isQuoteToken(addr) { const k = String(addr || '').toLowerCase(); return !!QUOTE_BY_ADDRESS[k] || !!load()[k]?.buy || !!quoteLookup(k); }
+// Ondo 代币化股票（FXIon / NVDAB / QQQB …）币安只允许和稳定币直接兑换，和 BNB 互换要拆成经 USDT 两步
+export const USDT = '0x55d398326f99059fF775485246999027B3197955';   // BSC USDT（18 位小数）
+export const ONDO_RE = /one side must be a supported stablecoin|Unsupported token pair for Ondo/i;
+export const viaUsdt = (addr) => { const r = getRoute(addr); return r?.sell === 'via_USDT' || r?.buy === 'via_USDT'; };
+export const markViaUsdt = (addr) => setRoute(addr, { buy: 'via_USDT', sell: 'via_USDT', note: '只能和稳定币直接兑换（Ondo 类）' });
 export function setRoute(addr, route) {
   const k = String(addr).toLowerCase(), t = load(); t[k] = { ...(t[k] || {}), ...route, checkedAt: Date.now() };
   try { mkdirSync(new URL('.', FILE), { recursive: true }); writeFileSync(FILE, JSON.stringify(t, null, 1)); } catch { /* 写不了就只在内存里 */ }

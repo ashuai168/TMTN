@@ -16,7 +16,7 @@ import * as openFour from './openFour.js';
 import { GangTrade } from './gangTrade.js';
 import { GangV2 } from './gangV2Pads.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
-import { setQuoteLookup } from './quoteRoutes.js';
+import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt } from './quoteRoutes.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -535,9 +535,16 @@ export class LiveTrader extends EventEmitter {
     if (!this.quoteSet().has(String(token).toLowerCase())) throw new Error('不是计价币');
     const { balance, symbol } = await this.quoteBal(token); if (!(balance > 0)) throw new Error(`钱包里没有 ${symbol}`);
     if (token.toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase()) return { token, symbol, balance, out: balance, minOut: balance, route: 'WBNB.withdraw 解包（1:1，只付 gas）', slippage: 0 };
-    const q = await baw.marketQuote({ fromTokenQty: trim(balance), fromToken: token, toToken: BNB_NATIVE, slippage });
+    const two = async () => {   // Ondo 类：报价两步，代币→USDT→BNB
+      const a = await baw.marketQuote({ fromTokenQty: trim(balance), fromToken: token, toToken: USDT, slippage });
+      return baw.marketQuote({ fromTokenQty: trim(Number(a?.toCoinAmount || 0)), fromToken: USDT, toToken: BNB_NATIVE, slippage });
+    };
+    let q, via = viaUsdt(token);
+    if (via) q = await two();
+    else try { q = await baw.marketQuote({ fromTokenQty: trim(balance), fromToken: token, toToken: BNB_NATIVE, slippage }); }
+    catch (e) { if (!ONDO_RE.test(e.message)) throw e; markViaUsdt(token); via = true; q = await two(); }
     const out = Number(q?.toCoinAmount || 0); const mid = (this.market.qUsd?.[token.toLowerCase()] || 0) * balance / (this.market.bnbUsd || 1);
-    return { token, symbol, balance, out, minOut: out * (1 - slippage / 100), route: 'baw market-order（币安聚合路由）', slippage, midBnb: mid || null };
+    return { token, symbol, balance, out, minOut: out * (1 - slippage / 100), route: via ? `baw market-order：${symbol}→USDT→BNB（Ondo 类只能和稳定币直接换，两笔）` : 'baw market-order（币安聚合路由）', slippage, midBnb: mid || null };
   }
 
   // 一键把某个计价币全部换回 BNB：点击这一刻读余额；登录、钱包锁、同币在途检查和普通订单一样；已提交但结果未知按「待确认」跟踪
@@ -760,7 +767,27 @@ export class LiveTrader extends EventEmitter {
     return { venue: 'OpenFour Core.sell（内盘）', expected: Number(q.estimate.userReceives), txHash: hashes.at(-1), hashes };
   }
 
+  // BNB ↔ Ondo 类代币（只能和稳定币直接换）自动拆成经 USDT 两步；路线表里没记录的，第一次报错时记下来并改走 USDT（报错时还没提交订单）
   async swapReal({ from, to, qty, slippage, step, label }) {
+    const isBnb = (a) => String(a).toLowerCase() === BNB_NATIVE.toLowerCase();
+    const other = isBnb(from) ? to : isBnb(to) ? from : null;
+    if (other && viaUsdt(other)) return this.swapViaUsdt({ from, to, qty, slippage, step, label });
+    try { return await this.swapOnce({ from, to, qty, slippage, step, label }); }
+    catch (e) {
+      if (!other || !ONDO_RE.test(e.message)) throw e;
+      markViaUsdt(other); step(`${label} 只能和稳定币直接兑换（Ondo 类），改走 USDT 两步`, 0);
+      return this.swapViaUsdt({ from, to, qty, slippage, step, label });
+    }
+  }
+  async swapViaUsdt({ from, to, qty, slippage, step, label }) {
+    const a = await this.swapOnce({ from, to: USDT, qty, slippage, step, label: `${label}（第 1 步 →USDT）` });
+    if (!(a.raw > 0)) throw new Error(`${label} 第 1 步没有拿到 USDT，没有继续`);
+    let b;
+    try { b = await this.swapOnce({ from: USDT, to, qty: String(a.raw), slippage, step, label: `${label}（第 2 步 USDT→）` }); }
+    catch (e) { e.message = `${e.message}；第 1 步已换出 ${a.raw} USDT 留在钱包`; throw e; }
+    return { venue: 'baw market-order（经 USDT 两步）', expected: b.expected, txHash: b.txHash, hashes: [...a.hashes, ...b.hashes], note: [a.note, b.note].filter(Boolean).join('；') || null };
+  }
+  async swapOnce({ from, to, qty, slippage, step, label }) {
     const t0 = Date.now();
     const sw = await baw.marketSwap({ fromTokenQty: typeof qty === 'string' ? qty : trim(qty), fromToken: from, toToken: to, slippage });   // 字符串 = 精确数量，原样传
     if (!sw.orderId) throw new Error(`${label} 没有返回 orderId`);
@@ -769,7 +796,7 @@ export class LiveTrader extends EventEmitter {
     if (o?.status !== 'FINISHED') throw Object.assign(new Error(`${label} ${o?.status === 'FAILED' ? '失败' : '仍在处理，请稍后在钱包里查看'}（订单 ${sw.orderId}）`), o?.status === 'FAILED' ? {} : { code: 'UNCONFIRMED', tx: o?.txHash || null });   // 没失败也没完成 = 已提交、结果未知，按待确认跟踪
     const refund = Array.isArray(o.refund) && o.refund.length ? `；部分成交，退回 ${o.refund.map((x) => `${x.amount} ${x.symbol}`).join('、')}` : '';
     step(`${label} 完成${refund}`, Date.now() - t0);
-    return { venue: 'baw market-order', expected: Number(o.toTokenActualQty || 0), txHash: o.txHash || null, hashes: [o.txHash].filter(Boolean), note: refund ? refund.slice(1) : null };
+    return { venue: 'baw market-order', expected: Number(o.toTokenActualQty || 0), raw: o.toTokenActualQty || 0, txHash: o.txHash || null, hashes: [o.txHash].filter(Boolean), note: refund ? refund.slice(1) : null };
   }
 
   async swap({ from, to, qty, slippage, step }) {
