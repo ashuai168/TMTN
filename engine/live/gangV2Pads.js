@@ -42,6 +42,8 @@ export class GangV2 {
   }
 
   quoteToken(c) { return isWbnb(c.quote) ? WBNB : c.quote; }
+  // 已毕业（迁移到 PancakeSwap）的盘内盘不能再买卖：直接报 MIGRATED，交给上层改走外盘（liveTrader.checkMigrated）
+  notGraduated(c) { if (c.graduated) throw Object.assign(new Error('这个盘已发射到 PancakeSwap，内盘不能再买卖'), { code: 'MIGRATED', pair: c.pair }); return c; }
 
   // 买入报价（和合约 _prepBuy 一样的算法）：quoteIn 报价币 → 能拿到多少代币；到 1% 上限 / 毕业门槛时只花一部分，其余退回
   buyQuote(c, quoteIn, room) {
@@ -139,7 +141,7 @@ export class GangV2 {
     // 「买总量 X%」要连着试算好几次：曲线状态 / 剩余额度 / 小数位 2 秒内复用，不再每次重新读链（每次约 0.5 秒，6 次就是 3 秒）。真实下单不走这里
     this.pvCache ||= new Map(); const key = `${token}|${wallet}`.toLowerCase(); let s = this.pvCache.get(key);
     if (!s || Date.now() - s.at > 2_000) {
-      const { c } = await this.curve(token); const q = this.quoteToken(c);
+      const { c } = await this.curve(token); this.notGraduated(c); const q = this.quoteToken(c);
       const [dec, room] = await Promise.all([this.decimals(q), this.room(token, wallet).catch(() => null)]);
       s = { c, q, dec, room, at: Date.now() }; this.pvCache.set(key, s);
     }
@@ -188,7 +190,7 @@ export class GangV2 {
   // 真实买入：先拿报价币（已有足够的就直接用）→ 授权 → 报价 + 模拟 → buy
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
   async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
-    const { pad: p, c } = await this.curve(token); const q = this.quoteToken(c); const hashes = [];
+    const { pad: p, c } = await this.curve(token); this.notGraduated(c); const q = this.quoteToken(c); const hashes = [];
     // 并行读（狙击要快）：小数位、报价币余额、授权额度、剩余额度一次读完；钱包里报价币够用时后面不再重读曲线
     const [dec, have0, alw0, room0] = await Promise.all([isWbnb(q) ? 18 : this.decimals(q), this.balanceOf(q, wallet), this.call(q, erc20, 'allowance', [wallet, p]).then((x) => x[0]).catch(() => 0n), this.call(p, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null)]);
     const qSym = isWbnb(q) ? 'WBNB' : '报价币'; let fresh = true;
@@ -230,7 +232,7 @@ export class GangV2 {
 
   // 真实卖出：授权代币（本次数量）→ sell → 收到的报价币换回 BNB（WBNB 直接解包）
   async sell({ wallet, token, pct, slippage, step, toBnb = true }) {
-    const { pad: p, c } = await this.curve(token); const q = this.quoteToken(c); const hashes = [];
+    const { pad: p, c } = await this.curve(token); this.notGraduated(c); const q = this.quoteToken(c); const hashes = [];
     const bal = await this.balanceOf(token, wallet); if (bal <= 0n) throw new Error('没有可卖出的余额');
     const amt = pct >= 100 ? bal : (bal * BigInt(Math.round(pct * 100))) / 10000n;
     const ap = await this.ensureAllowance({ wallet, token, spender: p, amount: amt, label: '授权卖出', step, kind: 'sell' }); if (ap) hashes.push(ap);

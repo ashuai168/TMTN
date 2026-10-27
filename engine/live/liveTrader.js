@@ -14,7 +14,8 @@ const POS_FILE = dataFile('positions.json');
 import { Portal } from './portal.js';
 import * as openFour from './openFour.js';
 import { GangTrade } from './gangTrade.js';
-import { GangV2 } from './gangV2Pads.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
+import { GangV2 } from './gangV2Pads.js';
+import { DexDirect } from './dexDirect.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
 import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt } from './quoteRoutes.js';
 
@@ -29,6 +30,7 @@ export class LiveTrader extends EventEmitter {
     setQuoteLookup((a) => this.quoteSet().has(String(a).toLowerCase()));   // 计价币兑换前的流动性检查只针对计价币（见 quoteRoutes.js）
     this.gangTrade = new GangTrade(market.tradeProvider || market.provider, (o) => this.portal.send(o));
     this.gangV2 = new GangV2(market.tradeProvider || market.provider, (o) => this.portal.send(o));
+    this.dex = new DexDirect(market.tradeProvider || market.provider, (o) => this.portal.send(o), this.gangV2);   // 刚发射、币安聚合还没收录新池子时直连 PancakeSwap V2
     this.wallets = [];
     this.positions = new Map();
     this.orders = [];
@@ -160,7 +162,7 @@ export class LiveTrader extends EventEmitter {
       const toks = [...this.market.tokens.values()];
       await Promise.all(toks.map(async (t) => {
         let amt = null;
-        if (t.source === 'agent-curve' && t.market && t.stage === 'curve') {
+        if (t.source === 'agent-curve' && t.market && this.onCurve(t)) {
           try { amt = Number(ethers.formatEther(await this.portal.sharesOf(t.market, w.address))); } catch { return; }
         } else if (w.tokens) amt = w.tokens[t.address] || 0;
         if (amt == null) return;
@@ -363,13 +365,15 @@ export class LiveTrader extends EventEmitter {
 
   // four.meme Agentic Wallet 专属盘在内盘阶段只能走 OpenFour Core（baw contract-call）；迁移后走 market-order
   // gang.fun 老盘（BNB 计价，合约 0x315B…）内盘：直接 buy/sell；V2 报价币盘还不支持
-  useGang(t) { return t.source === 'gang' && t.stage === 'curve' && t.gangTrack !== 'v2'; }
+  // onCurve：行情说在内盘，且下单时没在链上发现已发射（checkMigrated 设的 t.migrated；行情接口常比链上晚几十秒）
+  onCurve(t) { return t.stage === 'curve' && !t.migrated; }
+  useGang(t) { return t.source === 'gang' && this.onCurve(t) && t.gangTrack !== 'v2'; }
   // gang.fun V2 报价币盘：先把 BNB 换成报价币再买，卖出后换回 BNB（非原子）
-  useGangV2(t) { return t.source === 'gang' && t.stage === 'curve' && t.gangTrack === 'v2'; }
+  useGangV2(t) { return t.source === 'gang' && this.onCurve(t) && t.gangTrack === 'v2'; }
 
-  useOpenFour(t) { return t.source === 'four-agent' && t.stage === 'curve'; }
+  useOpenFour(t) { return t.source === 'four-agent' && this.onCurve(t); }
 
-  usePortal(t, side) { return t.source === 'agent-curve' && t.market && t.stage === 'curve' && (side === 'buy' || !DRY_RUN); }
+  usePortal(t, side) { return t.source === 'agent-curve' && t.market && this.onCurve(t) && (side === 'buy' || !DRY_RUN); }
 
   route(t, side) {
     if (this.useGang(t)) return `Gang 内盘 · ${side === 'buy' ? 'buy' : 'sell'}（BNB，一笔完成）· baw contract-call（每个钱包最多买总量 1%）`;
@@ -377,7 +381,30 @@ export class LiveTrader extends EventEmitter {
     if (this.useOpenFour(t)) return `Four Agent 专属内盘 · OpenFour Core.${side} · baw contract-call（每个钱包最多买总量 1%）`;
     if (this.usePortal(t, side) && side === 'sell') return `Flap Agent Curve · Portal.sell${t.quote === 'BNB' ? '' : ` → ${t.quote} → BNB`}`;
     if (this.usePortal(t, side)) return `Flap Agent Curve · ${t.quote === 'BNB' ? 'Portal.buy（BNB，原子）' : `BNB→${t.quote}→Portal.buyWithQuote（非原子）`}`;
-    return `币安 Web3 DEX 聚合 · baw market-order ${side === 'buy' ? 'BNB→代币' : '代币→BNB'}${t.platform === 'four' ? '（可能打不到内盘）' : ''}`;
+    return `币安 Web3 DEX 聚合 · baw market-order ${side === 'buy' ? 'BNB→代币' : '代币→BNB'}${t.platform === 'four' && this.onCurve(t) ? '（可能打不到内盘）' : ''}（聚合没收录新池子时直连 PancakeSwap V2）`;
+  }
+
+  // 链上确认是否已发射（迁移）到 PancakeSwap：Gang V2 看曲线的 graduated；其他平台看 PancakeSwap V2 上有没有带储备的池子。
+  // 只在内盘报价 / 下单失败后调用。确认了就记 t.migrated 并把状态改成外盘，后面的报价、下单直接走外盘
+  async checkMigrated(t) {
+    const yes = t.source === 'gang' && t.gangTrack === 'v2' ? !!(await this.gangV2.curve(t.address)).c.graduated : !!(await this.dex.pool(t.address, t.quoteAddress));
+    if (yes && !t.migrated) { t.migrated = true; t.stage = 'dex'; t.progress = 100; this.quoteCache.clear(); this.market.emit('migrate', this.market.summary(t)); }
+    return yes;
+  }
+
+  // 外盘买卖：先走币安 DEX 聚合（baw market-order）；聚合没成交（刚迁移还没收录新池子、报不出价，或订单失败）就直连 PancakeSwap V2。
+  // 已提交但结果未知（要在 App 确认 / 未确认）的不再重下
+  async dexTrade({ t, w, side, qty, pct, slippage, step }) {
+    try {
+      return side === 'buy' ? await this.swapReal({ from: BNB_NATIVE, to: t.address, qty, slippage, step, label: `BNB→${t.symbol}` })
+        : await this.swapReal({ from: t.address, to: BNB_NATIVE, qty, slippage, step, label: `${t.symbol}→BNB` });
+    } catch (e) {
+      if (['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code) || /insufficient|余额不足|仍在处理/i.test(e.message)) throw e;
+      if (!(await this.dex.pool(t.address, t.quoteAddress).catch(() => null))) throw e;
+      step(`币安聚合没成交（${String(e.message).slice(0, 80)}），改为直连 PancakeSwap V2`, 0);
+      return side === 'buy' ? this.dex.buy({ wallet: w.address, token: t.address, quoteAddress: t.quoteAddress, amountBnb: trim(qty), slippage, step, taxPct: t.buyTax || 0 })
+        : this.dex.sell({ wallet: w.address, token: t.address, quoteAddress: t.quoteAddress, pct, slippage, step, toBnb: this.settings.sellToBnb, taxPct: t.sellTax || 0 });
+    }
   }
 
   // 链上精确余额（字符串，按代币精度原样给出，不经过浮点数）。以前用 Number 转一次再写成 18 位小数，
@@ -397,7 +424,7 @@ export class LiveTrader extends EventEmitter {
     this.quoteCache.set(k, { v, at: Date.now() }); return v;
   }
 
-  async preview({ walletId, token, side, amount, slippage }) {
+  async preview({ walletId, token, side, amount, slippage }, again = false) {
     const t = this.market.get(token); if (!t) return null;
     const base = { route: this.route(t, side) };
     if (!(Number(amount) > 0) || !this.wallets.length) return base;
@@ -411,7 +438,7 @@ export class LiveTrader extends EventEmitter {
         const q = await this.portal.quoteBuy(t.market, w.address, ethers.parseEther(String(amount)));
         const out = +ethers.formatEther(q.shares);
         v = { ...base, amountIn: +amount, out, minOut: out * (1 - slippage / 100), feeBnb: +ethers.formatEther(q.fee), feePct: (+ethers.formatEther(q.fee) / amount) * 100 };
-      } else if (side === 'buy' && t.source === 'agent-curve' && t.market && t.stage === 'curve') {
+      } else if (side === 'buy' && t.source === 'agent-curve' && t.market && this.onCurve(t)) {
         // 非 BNB 底池：BNB→报价币用 baw 报价，再用 Portal.quoteBuy 算份额
         const { ethers } = await import('ethers');
         const sq = await baw.marketQuote({ fromTokenQty: trim(amount), fromToken: BNB_NATIVE, toToken: t.quoteAddress, slippage });
@@ -427,7 +454,7 @@ export class LiveTrader extends EventEmitter {
         } else {
           const bal = await this.gangV2.balanceOf(t.address, w.address); const amt = (bal * BigInt(Math.round(Math.min(100, Number(amount)) * 100))) / 10000n;
           if (amt <= 0n) return { ...base, note: '没有可卖出的余额' };
-          const { c } = await this.gangV2.curve(t.address); const r = this.gangV2.sellQuote(c, amt);
+          const { c } = await this.gangV2.curve(t.address); this.gangV2.notGraduated(c); const r = this.gangV2.sellQuote(c, amt);
           v = { ...base, amountIn: Number(ethers.formatEther(amt)), out: Number(ethers.formatEther(r.out)), minOut: Number(ethers.formatEther(r.out)) * (1 - slippage / 100), feeBnb: null, feePct: 1, note: `卖出得到 ${t.quote}，再换回 BNB` };
         }
       } else if (this.useGang(t)) {
@@ -459,15 +486,25 @@ export class LiveTrader extends EventEmitter {
       } else {
         const qty = side === 'buy' ? Number(amount) : (await this.tokenBal(w, token)) * Number(amount) / 100;
         if (!(qty > 0)) return { ...base, note: '没有可卖出的余额' };
-        const q = await baw.marketQuote({ fromTokenQty: trim(qty), fromToken: side === 'buy' ? BNB_NATIVE : token, toToken: side === 'buy' ? token : BNB_NATIVE, slippage });
-        const out = Number(q?.toCoinAmount || 0);
-        v = { ...base, amountIn: qty, out, minOut: out * (1 - slippage / 100), feeBnb: null, feePct: this.market.buyFeePct(t) };
+        let q = null, err = null;
+        try { q = await baw.marketQuote({ fromTokenQty: trim(qty), fromToken: side === 'buy' ? BNB_NATIVE : token, toToken: side === 'buy' ? token : BNB_NATIVE, slippage }); } catch (e) { err = e; }
+        let out = Number(q?.toCoinAmount || 0), route = base.route;
+        if (!(out > 0)) {   // 币安聚合报不出价（刚迁移、还没收录新池子）：用 PancakeSwap V2 链上报价，下单时也会直连
+          const sellQty = side === 'sell' ? await this.exactBal(w, t.address).then((x) => ethers.formatUnits((x.raw * BigInt(Math.round(Math.min(100, Number(amount)) * 100))) / 10000n, x.dec)).catch(() => trim(qty)) : null;
+          const d = await this.dex.quote({ token: t.address, quoteAddress: t.quoteAddress, side, amount: side === 'buy' ? qty : sellQty, taxPct: (side === 'buy' ? t.buyTax : t.sellTax) || 0 }).catch(() => null);
+          if (!d) { if (err) throw err; } else { out = d.out; route = `PancakeSwap V2 直连 · ${side === 'buy' ? (d.pool.isBnb ? 'BNB→代币' : 'BNB→报价币→代币') : (d.pool.isBnb ? '代币→BNB' : '代币→报价币→BNB')}（币安聚合还没收录这个池子）`; }
+        }
+        v = { ...base, route, amountIn: qty, out, minOut: out * (1 - slippage / 100), feeBnb: null, feePct: this.market.buyFeePct(t) };
       }
       if (side === 'buy' && !DRY_RUN) {   // BNB 不够时报价就说明会用哪个币付款
         const f = await this.fundingPlan(w, t, Number(amount)).catch(() => null); if (f) v = { ...v, fund: { mode: f.mode, symbol: f.symbol || null, qty: f.qty || null, note: f.note } }; }
       this.quoteCache.set(key, { v, at: Date.now() });
       return v;
-    } catch (e) { return { ...base, error: e.message }; }
+    } catch (e) {
+      // 内盘报价失败：可能刚发射到外盘、行情还没跟上。链上确认后按外盘重新报价一次
+      if (!again && (e.code === 'MIGRATED' || t.stage === 'curve') && await this.checkMigrated(t).catch(() => false)) return this.preview({ walletId, token, side, amount, slippage }, true);
+      return { ...base, error: e.message };
+    }
   }
 
   async execute({ walletId, token, side, amount, slippage = 20, source = '手动', via = null, clientTs = null }) {
@@ -493,7 +530,7 @@ export class LiveTrader extends EventEmitter {
       if (side === 'buy') {
         const amt = Number(amount); if (!(amt > 0)) throw new Error('金额无效');
         let r;
-        if (side === 'buy' && t.source === 'agent-curve' && t.market && t.stage === 'curve') {
+        if (side === 'buy' && t.source === 'agent-curve' && t.market && this.onCurve(t)) {
           r = await this.portal.previewBuy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, amountBnb: trim(amt), slippage, step });
         } else {
           r = await this.swap({ w, from: BNB_NATIVE, to: t.address, qty: amt, slippage, step });
@@ -651,7 +688,22 @@ export class LiveTrader extends EventEmitter {
   }
 
   // 真实下单（只由手动订单进入）。曲线阶段的 Flap Agent 盘走 Portal；其余走 baw market-order。
+  // 内盘下单失败时看看是不是刚发射到外盘（行情还没跟上）：链上确认后改走外盘重下一次。
+  // 只在内盘那条路没有发出过买卖交易时重下（授权不算）；已提交 / 结果未知的不重下
   async executeReal(order, t, w, step) {
+    const curve = this.onCurve(t), n0 = order.steps.length;
+    try { return await this.executeRoute(order, t, w, step); }
+    catch (e) {
+      if (!curve || ['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) throw e;
+      if (e.code !== 'MIGRATED' && order.steps.slice(n0).some((s) => /已提交|已广播|已上链/.test(s.name) && !/授权/.test(s.name))) throw e;
+      if (!(await this.checkMigrated(t).catch(() => false))) throw e;
+      step(`这个盘已发射到 PancakeSwap（内盘：${String(e.message).slice(0, 60)}），改走外盘`, 0);
+      order.route = this.route(t, order.side);
+      return this.executeRoute(order, t, w, step);
+    }
+  }
+
+  async executeRoute(order, t, w, step) {
     const { side, slippage } = order;
     const p = this.pos(w.id, t.address);
     let r;
@@ -684,7 +736,7 @@ export class LiveTrader extends EventEmitter {
         : this.useOpenFour(t) ? await this.openFourBuy({ w, t, amt, slippage, step })
         : this.usePortal(t, 'buy')
         ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step, payQuote, quoteRate: t.quoteAddress ? await this.gangV2.quoteRate(t.quoteAddress, { stale: 30_000 }).catch(() => null) : null })
-        : await this.swapReal({ from: BNB_NATIVE, to: t.address, qty: amt, slippage, step, label: `BNB→${t.symbol}` });
+        : await this.dexTrade({ t, w, side: 'buy', qty: amt, slippage, step });
       if (!p.openedAt) p.openedAt = Date.now();
       p.boughtBnb += amt; p.costBnb += amt; p.amount += r.expected || 0;
       Object.assign(order, { amountIn: amt, out: r.expected });
@@ -708,7 +760,7 @@ export class LiveTrader extends EventEmitter {
         const qty = ex ? (pct >= 100 ? ex.str : ethers.formatUnits((ex.raw * BigInt(Math.round(pct * 100))) / 10000n, ex.dec)) : bal * Math.min(pct, 99.9) / 100;
         step(`查询余额 ${trim(bal)}`, 0);
         if (!(qty > 0)) throw new Error(`钱包里没有 ${t.symbol}（实际 0 个）`);
-        try { r = await this.swapReal({ from: t.address, to: BNB_NATIVE, qty, slippage, step, label: `${t.symbol}→BNB` }); }
+        try { r = await this.dexTrade({ t, w, side: 'sell', qty, pct, slippage, step }); }
         catch (e) { if (/insufficient|balance/i.test(e.message)) throw new Error(`钱包里的 ${t.symbol} 余额不足（实际 ${trim(bal)} 个）：${e.message}`); throw e; }
       }
       p.soldBnb += r.expected || 0; p.amount = Math.max(0, p.amount * (1 - pct / 100));
