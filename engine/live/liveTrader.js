@@ -516,7 +516,7 @@ export class LiveTrader extends EventEmitter {
       const w = this.wallet(walletId);
       order.route = this.route(t, side); order.wallet = w.label;
       // Agent ID 门槛盘：这个钱包没有门槛 NFT 就跳过（狙击 / 跟单 / 一键买都一样，不算失败、不发交易）。和钱包锁检查同时查，省一次往返
-      // 战壕 ⚡ 快捷买入不等任何检查：不查 NFT 门槛，钱包锁只用 30 秒内的缓存（过期就后台刷新，不等）（jak 2026-10-27：快捷买入要最快）
+      // 战壕 ⚡ 快捷买入不等任何检查：不查 NFT 门槛，钱包锁只用 30 秒内的缓存（过期就后台刷新，不等）
       const quick = via === 'quick' && side === 'buy';
       if (quick && !order.dryRun && !(this.lockState && Date.now() - this.lockState.at < 30_000)) this.lockStatus().catch(() => {});
       const [nb, lock] = quick ? [null, order.dryRun ? null : this.lockState && Date.now() - this.lockState.at < 30_000 ? this.lockState.v : null]
