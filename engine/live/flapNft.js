@@ -25,7 +25,8 @@ const TOPICS = [[T_GATED, T_GATE_UPD, T_DEX]];
 const T_BUY = '0xa800a2038683844fac66747f771bfdfae862eb28b16bcfa387afa9fbacce8ff7';
 const T_SELL = '0x03a4693e592f5e75dc7c136acb39b146d2b4966c0e509c34f362dee02b3b861a';
 const T_XFER = ethers.id('Transfer(address,address,uint256)');
-const PORTAL_T = ethers.zeroPadValue(FLAP_PORTAL, 32).toLowerCase();
+const PORTAL_T = ethers.zeroPadValue(FLAP_PORTAL, 32).toLowerCase(), PORTAL_A = FLAP_PORTAL.toLowerCase();
+const lim6 = async (xs, fn) => { const q = [...xs]; await Promise.all(Array.from({ length: Math.min(6, q.length) }, async () => { while (q.length) await fn(q.shift()); })); };   // 最多 6 个并行
 const REG = dataFile('flapNftGated.json');
 const BACKFILL = 450_000;   // 第一次启动往回补约 4 天（功能 10-24 才上线），之后从记下的区块接着补
 export const AGENT_ID_NFT = '0x60b9262456de011f7d15a54cdd8c48baaa8b022f';   // Binance Agent ID（SPACE ID）
@@ -88,55 +89,77 @@ export class FlapNft extends EventEmitter {
       const b = Math.min(to, a + span - 1);
       let ls; try { ls = await this.provider.getLogs({ address: addrs, topics: [T_XFER], fromBlock: a, toBlock: b }); }
       catch (e) { if (span > 2000) { span = Math.floor(span / 2); continue; } throw e; }
-      for (const l of ls) if (String(l.topics[1]).toLowerCase() === PORTAL_T || String(l.topics[2]).toLowerCase() === PORTAL_T) out.add(l.blockNumber);
+      const px = new Set();
+      for (const l of ls) if (String(l.topics[1]).toLowerCase() === PORTAL_T || String(l.topics[2]).toLowerCase() === PORTAL_T) { out.add(l.blockNumber); px.add(l.transactionHash); }
+      for (const l of ls) if (px.has(l.transactionHash)) this.noteXfer(l);
       a = b + 1;
     }
     return [...out].sort((x, y) => x - y);
   }
   // 区块 → 读 Portal 成交（相邻的区块合成一段，一段最多 500 块）
-  async tradesAt(blocks) {
+  async tradesAt(blocks, only = null) {   // only = 只要这个币的（按币补历史时）
     const ranges = [];
     for (const b of blocks) { const r = ranges.at(-1); if (r && b - r[1] <= 20 && b - r[0] < 500) r[1] = b; else ranges.push([b, b]); }
     const got = [];
-    for (const [a, b] of ranges) for (const l of await this.provider.getLogs({ address: FLAP_PORTAL, topics: [[T_BUY, T_SELL]], fromBlock: a, toBlock: b })) { const tr = this.parseTrade(l); if (tr) got.push(tr); }
+    await lim6(ranges, async ([a, b]) => { for (const l of await this.provider.getLogs({ address: FLAP_PORTAL, topics: [[T_BUY, T_SELL]], fromBlock: a, toBlock: b })) { const tr = this.parseTrade(l); if (tr && (!only || tr.token === only)) got.push(tr); } });   // 几段并行（以前一段一段读，补一个活跃的币要半分钟）
+    got.sort((x, y) => x.block - y.block || x.idx - y.idx);
     await this.realTraders(got);
     return got;
+  }
+  noteXfer(l) {
+    this.xfers ||= new Map(); const h = l.transactionHash; let xs = this.xfers.get(h); if (!xs) this.xfers.set(h, (xs = []));
+    if (!xs.some((e) => e.idx === (l.index ?? l.logIndex))) xs.push({ token: l.address.toLowerCase(), from: '0x' + l.topics[1].slice(26).toLowerCase(), to: '0x' + l.topics[2].slice(26).toLowerCase(), idx: l.index ?? l.logIndex });
+    if (this.xfers.size > 30_000) this.xfers = new Map([...this.xfers].slice(-15_000));
   }
   // 事件里的 trader 是直接调 Portal 的地址：走 baw 市价单 / 聚合器时是路由合约（如 0x9e69…f364，代币再转给钱包），不是真正的人。
   // trader 是合约就改记成交易发起人（tx.from = tx.origin，门槛也是按它检查的），原地址留在 via。合约判断、tx.from 都缓存
   async realTraders(list) {
     this.isCode ||= new Map(); this.txFrom ||= new Map();
-    const lim = async (xs, fn) => { const q = [...xs]; await Promise.all(Array.from({ length: Math.min(6, q.length) }, async () => { while (q.length) await fn(q.shift()); })); };
+    const lim = lim6;
     await lim(new Set(list.map((x) => x.trader).filter((a) => !this.isCode.has(a))), async (a) => { try { const c = await this.provider.getCode(a); this.isCode.set(a, c !== '0x' && !c.startsWith('0xef0100'));   /* 0xef0100… = 7702 委托的普通钱包，不算合约 */ } catch { /* 下次再查 */ } });
     const routed = list.filter((x) => this.isCode.get(x.trader));
-    await lim(new Set(routed.map((x) => x.tx).filter((h) => !this.txFrom.has(h))), async (h) => { try { const tx = await this.provider.getTransaction(h); if (tx?.from) this.txFrom.set(h, tx.from.toLowerCase()); } catch { /* 留原地址 */ } });
-    for (const x of routed) { const f = this.txFrom.get(x.tx); if (f) { x.via = x.trader; x.trader = f; } }
+    // 先看同一笔交易里代币的转账（补历史 / WS 时已经拿到了，不用再请求）：买 = 从路由往下追到最后收币的地址，卖 = 往上追到最早发币的地址；追到的是普通地址就用它
+    const hop = (x) => {
+      const xs = this.xfers?.get(x.tx); if (!xs) return null;
+      let cur = x.trader;
+      for (let i = 0; i < 6; i++) { const n = xs.find((e) => e.token === x.token && (x.side === 'buy' ? e.from === cur && e.to !== cur : e.to === cur && e.from !== cur && e.from !== PORTAL_A)); if (!n) break; cur = x.side === 'buy' ? n.to : n.from; }
+      return cur !== x.trader ? cur : null;
+    };
+    const ends = new Map(routed.map((x) => [x, hop(x)]));
+    await lim(new Set([...ends.values()].filter((a) => a && !this.isCode.has(a))), async (a) => { try { const c = await this.provider.getCode(a); this.isCode.set(a, c !== '0x' && !c.startsWith('0xef0100')); } catch { /* 下次再查 */ } });
+    for (const [x, a] of ends) if (a && this.isCode.get(a) === false) this.txFrom.set(x.tx + ':' + x.side, a);
+    await lim(new Set(routed.filter((x) => !this.txFrom.has(x.tx + ':' + x.side)).map((x) => x.tx).filter((h) => !this.txFrom.has(h))), async (h) => { try { const tx = await this.provider.getTransaction(h); if (tx?.from) this.txFrom.set(h, tx.from.toLowerCase()); } catch { /* 留原地址 */ } });
+    for (const x of routed) { const f = this.txFrom.get(x.tx + ':' + x.side) || this.txFrom.get(x.tx); if (f) { x.via = x.trader; x.trader = f; } }
     if (this.txFrom.size > 20_000) this.txFrom = new Map([...this.txFrom].slice(-10_000));
   }
   // 一个门槛盘从创建起的全部内盘成交（补过的接着补，排队一个一个来，启动时几十个币不会一起打节点）
-  // urgent = 用户正点开的币：插到队首（启动时一百多个门槛盘排队补历史，不插队的话选中的币要等几分钟，K 线只有一根轮询点）
+  // urgent = 用户正点开的币：不排队直接补（启动时一百多个门槛盘排队补历史，排队的话选中的币要等几分钟，K 线只有一根轮询点）
   history(token, urgent = false) {
     const k = String(token).toLowerCase(), g = this.reg.tokens[k]; if (!g) return Promise.resolve([]);
     const h = this.hist.get(k) || {}; this.hist.set(k, h);
     this.hq ||= [];
-    if (h.p) { if (urgent && h.job && !h.job.started) { this.hq.splice(this.hq.indexOf(h.job), 1); this.hq.unshift(h.job); } return h.p; }
+    if (h.p) { if (urgent && h.job && !h.job.started) { this.hq.splice(this.hq.indexOf(h.job), 1); h.job.started = true; h.job.run(); } return h.p; }
     const job = { started: false };
     h.p = new Promise((ok, no) => { job.run = () => this.histRun(k, g, h).then(ok, no); }).finally(() => { h.p = null; h.job = null; });
-    h.job = job; if (urgent) this.hq.unshift(job); else this.hq.push(job);
-    this.histPump(); return h.p;
+    h.job = job; if (urgent) { job.started = true; job.run(); } else { this.hq.push(job); this.histPump(); }   // 选中的不排队，马上补（和后台那一个并行）
+    return h.p;
   }
   async histPump() {
     if (this.hqBusy) return; this.hqBusy = true;
     try { while (this.hq.length) { const j = this.hq.shift(); j.started = true; await j.run().catch(() => {}); } } finally { this.hqBusy = false; }
   }
   async histRun(k, g, h) {
-    if (!h.to && !h.db) {   // 第一次：先从 MySQL 缓存读出已补过的成交，只补那之后的（往回多查 15 块防重组）
-      const c = await cache.loadTrades('flap-nft', k).catch(() => null); h.db = !!c;
-      if (c?.cursor) { for (const tr of c.rows) this.keep(tr); h.to = Math.max(0, c.cursor - 15); }
+    if (!h.db) {   // 先从 MySQL 缓存读出已补过的成交，只补那之后的（往回多查 15 块防重组）。数据库暂时连不上（启动时偶尔超时）就下次再试，不是从此不用
+      const c = await cache.loadTrades('flap-nft', k).catch(() => null);
+      if (c) {
+        h.db = true;
+        if (!h.to && c.cursor) { for (const tr of c.rows) this.keep(tr); h.to = Math.max(0, c.cursor - 15); }
+        else if (h.to && !(c.cursor >= h.to)) cache.saveTrades('flap-nft', k, this.trades(k), h.to, (x) => `${x.tx}:${x.idx}`).catch(() => {});   // 之前直接查链补的，补存进库
+      }
     }
     const head = await this.provider.getBlockNumber();
     const from = h.to ? h.to + 1 : g.block || head - BACKFILL, to = g.dexBlock ? Math.min(head, g.dexBlock) : head;
-    if (from <= to) { const got = await this.tradesAt(await this.portalBlocks([k], from, to)); for (const tr of got) this.keep(tr); h.to = to; if (h.db) cache.saveTrades('flap-nft', k, got, to, (x) => `${x.tx}:${x.idx}`).catch(() => {}); }
+    if (from <= to) { const got = await this.tradesAt(await this.portalBlocks([k], from, to), k); for (const tr of got) this.keep(tr); h.to = to; if (h.db) cache.saveTrades('flap-nft', k, got, to, (x) => `${x.tx}:${x.idx}`).catch(() => {}); }
     h.at = Date.now(); return this.trades(k);
   }
   // 实时：WS 订阅内盘门槛盘的 Transfer（币列表变了就重订），另外每 30 秒（WS 不通时 5 秒）用 getLogs 补一遍，两边按 tx:logIndex 去重
@@ -148,6 +171,7 @@ export class FlapNft extends EventEmitter {
     this.trSub = addrs.length ? new WsLogs({ label: 'flap-nft成交', urls: [...NODEREAL_WSS, PUBLIC_WSS], filters: [{ address: addrs, topics: [T_XFER] }], onLog: (l) => this.onXfer(l), status: this.trStatus }).start() : null;
   }
   onXfer(l) {
+    try { this.noteXfer(l); } catch { /* 解析失败跳过 */ }
     if (String(l.topics[1]).toLowerCase() !== PORTAL_T && String(l.topics[2]).toLowerCase() !== PORTAL_T) return;
     (this.xferBlocks ||= new Set()).add(l.blockNumber);
     clearTimeout(this.xferT); this.xferT = setTimeout(() => this.flushXfer(), 300);
