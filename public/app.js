@@ -901,11 +901,11 @@ function renderBottom() {
         cnt = hr?.amount > 0 ? '持有中' : '';
         html = !hr ? `<div class="empty">没有持有 ${esc(t.symbol)}${LIVE() ? '' : '（模拟盘）'}</div>` : `<div class="mypos">
           <div><span>持有</span><b>${K(hr.amount)}</b><small>${hr.supplyPct != null ? hr.supplyPct.toFixed(3) + '% 总量' : ''}</small></div>
-          <div title="${hr.avgBuyBnb ? sub(hr.avgBuyBnb) + ' BNB' : ''}${hr.avgBuyQuote && hr.quote !== 'BNB' ? ' / ' + sub(hr.avgBuyQuote) + ' ' + esc(hr.quote) : ''}"><span>买入均价</span><b>${hr.avgBuyUsd ? '$' + sub(hr.avgBuyUsd) : '—'}</b><small>${hr.avgBuyBnb ? sub(hr.avgBuyBnb) + ' BNB' : ''}</small></div>
-          <div><span>现价</span><b>${t.priceUsd ? '$' + sub(t.priceUsd) : '—'}</b><small>${hr.priceBnb ? sub(hr.priceBnb) + ' BNB' : ''}</small></div>
-          <div title="我持有的这部分按现价值多少（不是代币市值）"><span>余额</span><b>${hr.valueUsd != null ? '$' + (hr.valueUsd).toFixed(2) : '—'}</b><small>${hr.valueBnb != null ? bnb(hr.valueBnb) + ' BNB' : ''}</small></div>
-          <div title="${usdTip(hr)}"><span>成本</span><b>$${(hr.costUsd || 0).toFixed(2)}</b><small>${bnb(hr.costBnb)} BNB</small></div>
-          <div title="${usdTip(hr)}"><span>已卖出</span><b>$${(hr.soldUsd || 0).toFixed(2)}</b><small>${bnb(hr.soldBnb)} BNB</small></div>
+          <div title="${hr.avgBuyBnb ? sub(hr.avgBuyBnb) + ' BNB' : ''}${hr.avgBuyQuote && hr.quote !== 'BNB' ? ' / ' + sub(hr.avgBuyQuote) + ' ' + esc(hr.quote) : ''}"><span>买入均价</span><b>${hr.avgBuyUsd ? '$' + sub(hr.avgBuyUsd) : '—'}</b></div>
+          <div title="${hr.priceBnb ? sub(hr.priceBnb) + ' BNB' : ''}"><span>现价</span><b>${t.priceUsd ? '$' + sub(t.priceUsd) : '—'}</b></div>
+          <div title="我持有的这部分按现价值多少（不是代币市值）${hr.valueBnb != null ? '\n' + bnb(hr.valueBnb) + ' BNB' : ''}"><span>余额</span><b>${hr.valueUsd != null ? '$' + (hr.valueUsd).toFixed(2) : '—'}</b></div>
+          <div title="${bnb(hr.costBnb)} BNB\n${usdTip(hr)}"><span>成本</span><b>$${(hr.costUsd || 0).toFixed(2)}</b></div>
+          <div title="${bnb(hr.soldBnb)} BNB\n${usdTip(hr)}"><span>已卖出</span><b>$${(hr.soldUsd || 0).toFixed(2)}</b></div>
           <div title="${usdTip(hr)}"><span>盈亏</span><b class="${(hr.pnlUsd ?? hr.pnlBnb ?? 0) >= 0 ? 'g' : 'r'}">${usdSigned(hr.pnlUsd)}</b><small>${hr.pnlPct != null ? (hr.pnlPct >= 0 ? '+' : '') + hr.pnlPct.toFixed(1) + '%' : ''}</small></div>
           ${hr.amount > 0 ? `<div class="acts"><button class="qb" data-hsell="${hr.walletId}:${hr.token}:50">卖 50%</button> <button class="qb" style="color:var(--r)" data-hsell="${hr.walletId}:${hr.token}:100">清仓</button></div>` : ''}
         </div>${posTradesHtml(hr, t)}`;
