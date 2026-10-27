@@ -2568,7 +2568,7 @@ function renderSnipe() {
   const st = !v.enabled ? '<b class="muted">已关闭</b>' : p.dryRun ? '<b class="y">运行中 · 模拟（不下单）</b>' : '<b class="r">运行中 · 真实下单</b>';
   const recent = (v.recent || []).slice(0, 8);
   $('#snpHead').innerHTML = `<div class="snp-top"><div class="snp-st">${st}<div class="hsub">新盘出现时：${snpWl(p.wallets)} 各买总量 ${p.pct}%（每个钱包最多 ${p.maxBnbPerBuy} BNB）· 只狙 ${esc(p.quotes.includes('*') ? '全部报价币' : p.quotes.join(' / ') + ' 盘')} · 出块后 ${p.maxDelaySec} 秒内</div></div>
-    <span class="spacer"></span>${v.enabled ? `<button class="trk-kill on" data-snp="off">急停（立刻关闭）</button>` : `<button class="trk-new" data-snp="on">${p.dryRun ? '开启（模拟）' : '开启（真实下单）'}</button>`}</div>
+    <span class="spacer"></span>${v.enabled ? `<button class="trk-kill on" data-snp="off">急停（立刻关闭）</button>` : `<button class="trk-new snp-real" data-snp="on:real">开启（真实买入）</button><button class="trk-new" data-snp="on:sim">开启（模拟）</button>`}</div>
     ${!p.dryRun && !v.liveTrade ? '<div class="ui-note y">这个后端没有开 LIVE_TRADE=1，真实模式下单也只会报价。</div>' : ''}
     <div class="snp-cards"><div class="snp-card"><span class="muted">今天已用</span><b>${bnb(td.bnb, 4)} / ${p.dailyCapBnb} BNB</b></div><div class="snp-card"><span class="muted">今天已狙</span><b>${td.tokens} / ${p.maxTokensPerDay || '不限'} 个</b></div>
       <div class="snp-card"><span class="muted">累计</span><b>${v.stats.orders} 笔下单 · ${bnb(v.stats.bnb, 4)} BNB</b><span class="hsub">模拟 ${v.stats.sims} 次 · 失败 ${v.stats.fails} 笔</span></div></div>
@@ -2606,10 +2606,10 @@ $('#snipe').addEventListener('click', async (e) => {
   try {
     if (act.startsWith('forget:')) { if (!(await ui.confirm({ title: '不再自动卖出这个币？', body: '只是不再盯着它，已买的币留在钱包里，不会卖出。', confirmText: '停止盯' }))) return; SNP.v = await api('/api/snipe', { forget: act.slice(7) }); }
     else if (act === 'off') { SNP.v = await api('/api/snipe', { enabled: false }); note('Gang 狙击已关闭'); }
-    else if (act === 'on') {
-      const p = v.params, nW = p.wallets.length || 1;
+    else if (act.startsWith('on:')) {
+      const p = { ...v.params, dryRun: act === 'on:sim' }, nW = p.wallets.length || 1;   // 按哪个按钮就用哪种方式开启（不用先去参数里改「模拟」）
       if (!(await ui.confirm({ title: `开启 Gang 狙击（${p.dryRun ? '模拟' : '真实下单'}）？`, body: p.dryRun ? '<p>这是<b class="y">模拟</b>：每个新盘只记录会买多少，不会下单。</p>' : `<p class="r"><b>真实下单：</b>gang.fun 每出一个符合条件的新盘，${nW} 个钱包（${snpWl(p.wallets)}）会立刻各买总量 ${p.pct}%：每个钱包每次最多 ${p.maxBnbPerBuy} BNB，每天合计最多 ${p.dailyCapBnb} BNB、最多 ${p.maxTokensPerDay || '不限'} 个币。会花真实的 BNB，新盘很可能归零。随时可以点「急停」。</p>`, confirmText: '开启', danger: !p.dryRun }))) return;
-      SNP.v = await api('/api/snipe', { enabled: true }); note(`Gang 狙击已开启（${p.dryRun ? '模拟' : '真实下单'}）`);
+      SNP.v = await api('/api/snipe', { params: { dryRun: p.dryRun }, enabled: true }); SNP.formAt = 0; note(`Gang 狙击已开启（${p.dryRun ? '模拟' : '真实下单'}）`);
     } else if (act === 'save') {
       const f = $('#snpForm'), q = {}; f.querySelectorAll('[data-sp]').forEach((i) => { q[i.dataset.sp] = i.type === 'checkbox' ? i.checked : i.dataset.sp === 'quotes' ? i.value.split(/[,，\s]+/).filter(Boolean) : Number(i.value); });
       q.wallets = [...f.querySelectorAll('[data-spw]:checked')].map((i) => Number(i.dataset.spw));
