@@ -544,7 +544,10 @@ function renderWalletMenu() {
 }
 
 /* ---------- 左栏 ---------- */
+// 左栏的 内盘中 / 即将发射 / 已迁移 和战壕的三列一一对应，用同一套筛选（tcMatch：平台、市值、持有人、进度、报价币、社交、税率、关键词），结果和战壕一致
+const LIST_COL = { curve: 'new', soon: 'soon', dex: 'dex' };
 function filtered() {
+  const col = LIST_COL[S.listTab];
   const mine = new Set(S.positions.filter((p) => p.amount > 0).map((p) => p.token));
   return [...S.tokens.values()].filter((t) => {
     if (S.listTab !== 'mine' && t.platform !== S.platform) return false;
@@ -557,13 +560,22 @@ function filtered() {
     if (S.chips.has('other') && t.quote === 'BNB') return false;
     if (S.chips.has('traded') && !(t.buys + t.sells)) return false;
     if (S.chips.has('h1') && Date.now() - t.createdAt > 3600_000) return false;
+    if (col) { try { if (!tcMatch(col, t)) return false; } catch { /* 战壕设置还没初始化 */ } }
     return true;
-  }).sort((a, b) => (S.listTab === 'soon' ? b.progress - a.progress : b.createdAt - a.createdAt));
+  }).sort((a, b) => (S.listTab === 'soon' ? (trSort() === 'mc' ? (b.mcapUsd || 0) - (a.mcapUsd || 0) : b.progress - a.progress) : b.createdAt - a.createdAt || (a.address < b.address ? -1 : 1)));
+}
+function trSort() { try { return TR.cols.soon.sort; } catch { return 'pct'; } }
+// 左栏漏斗：打开对应战壕列的筛选窗口；有条件生效时高亮
+function renderListFunnel() {
+  const b = $('#listFunnel'); if (!b) return; const k = LIST_COL[S.listTab];
+  let on = false, tip = '「我的」不筛选';
+  try { if (k) { on = tcActive(k) || !!TR.cols[k].q; tip = `${tcFilterSummary(k)}${TR.cols[k].q ? '，关键词 ' + TR.cols[k].q : ''}（和战壕「${TCOLS[k]}」列同一套，任一边改了两边都变）`; } } catch { /* ignore */ }
+  b.classList.toggle('act', on); b.disabled = !k; b.title = tip;
 }
 
 function renderList() {
   // 和战壕同一套卡片（tcCard）：固定高度、按地址局部更新，不整列重画；点卡片在当前页打开详情
-  const list = filtered().slice(0, 80);
+  const list = filtered().slice(0, 80); renderListFunnel();
   const body = $('#tokenList'); body.classList.add('tl-trench');
   if (!list.length) { body.innerHTML = '<div class="empty">暂无代币</div>'; }
   else {
@@ -1383,7 +1395,7 @@ $('#slip').addEventListener('click', async (e) => {
 });
 $('#amtMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.amtMode = b.dataset.a; $$('#amtMode button').forEach((x) => x.classList.toggle('active', x === b)); S.pctBnb = 0; $('#amount').value = S.amtMode === 'pct' ? '2' : ''; renderRight(); refreshQuote(); });
 $('#listTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.listTab = b.dataset.t; $$('#listTabs button').forEach((x) => x.classList.toggle('active', x === b)); syncUrl(); lastList = 0; scheduleRender(); });
-$('#chips').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; const c = b.dataset.c; S.chips.has(c) ? S.chips.delete(c) : S.chips.add(c); b.classList.toggle('active'); lastList = 0; scheduleRender(); });
+$('#chips').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; if (b.id === 'listFunnel') { const k = LIST_COL[S.listTab]; if (k) tfModal(k); return; } const c = b.dataset.c; S.chips.has(c) ? S.chips.delete(c) : S.chips.add(c); b.classList.toggle('active'); lastList = 0; scheduleRender(); });
 $('#intervals').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.interval = +b.dataset.i; S.ivManual = S.selected; $$('#intervals button').forEach((x) => x.classList.toggle('active', x === b)); resetView(); drawChart(); });
 $('#metric').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.metric = b.dataset.m; $$('#metric button').forEach((x) => x.classList.toggle('active', x === b)); drawChart(); });
 $('#bottomTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.bottomTab = b.dataset.b; $$('#bottomTabs button').forEach((x) => x.classList.toggle('active', x === b)); renderBottom(); });
@@ -2093,7 +2105,7 @@ for (const ms of [4000, 8000, 22000]) window.addEventListener('order-done', () =
 const PLATS = ['flap', 'four', 'gang'];
 const platOf = (t) => (t.platform === 'four' || t.platform === 'gang' ? t.platform : 'flap');
 const TCOLS = { new: '新创建', soon: '即将打满', dex: '已开盘' };
-const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', quote: '', social: false, maxTax: '', hideUnknownTax: false } });
+const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false } });
 const TR = (() => {
   let s = null; try { s = JSON.parse(localStorage.getItem('trench') || 'null'); } catch { /* ignore */ }
   const st = s && s.cols ? s : { cols: {}, hidden: [] };
@@ -2102,6 +2114,10 @@ const TR = (() => {
 })();
 const trSave = () => { try { localStorage.setItem('trench', JSON.stringify(TR)); } catch { /* ignore */ } };
 const P = (k) => TR.cols[k].presets[TR.cols[k].preset];
+// 税率输入宽松解析：「10%」「１０」「 5 」都认；解析不了当作不限
+const taxNum = (v) => { if (v === '' || v == null) return null; const x = parseFloat(String(v).replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[^\d.]/g, '')); return isFinite(x) ? x : null; };
+// 税率条件是全局的：三列 × P1-P3 都用同一个，切预设也不会「突然失效」
+const setTaxAll = (maxTax, hideUnknownTax) => { for (const c of Object.keys(TCOLS)) for (const p of Object.values(TR.cols[c].presets)) Object.assign(p.f, { maxTax: maxTax ?? '', hideUnknownTax: !!hideUnknownTax }); };
 const tcPaused = new Set();
 // 卡片下单状态（点击后立刻显示，几秒后清掉）：busy 下单中 / ok 已提交 / pend 待确认 / err 失败
 const tcState = new Map();
@@ -2140,7 +2156,7 @@ function setView(v, fromRoute) {
 // 列头：搜索 / BNB 快捷金额 / P1-P3 / 声音 / 隐藏 / 筛选（即将打满多一个 % / MC 排序）
 function tcHead(k) {
   const c = TR.cols[k], p = P(k), f = p.f;
-  const active = f.plats.length < 3 || f.minMc || f.maxMc || f.minHolders || f.minProg || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax;
+  const active = tcActive(k);
   return `<div class="tch"><b>${TCOLS[k]}</b><span class="cnt" id="tcn-${k}">0</span><i class="tc-pause" id="tcp-${k}" title="鼠标在列里，暂停刷新">❚❚</i>
     <span class="tch-r">
       <label class="tc-search"><svg viewBox="0 0 16 16" width="12" height="12"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6"/></svg><input data-tq="${k}" value="${esc(c.q)}" placeholder="关键词1, ..."/></label>
@@ -2152,6 +2168,7 @@ function tcHead(k) {
       <button class="tc-ic tc-funnel ${active ? 'act' : ''}" data-tf="${k}" title="${esc(tcFilterSummary(k))}"><svg viewBox="0 0 16 16" width="15" height="15" style="pointer-events:none"><path d="M2 3h12l-4.6 5.4v4.4l-2.8 1.4V8.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
     </span></div>`;
 }
+function tcActive(k) { const f = P(k).f; return !!(f.plats.length < 3 || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax); }
 // 漏斗按钮的提示文字：当前预设下生效的筛选条件
 function tcFilterSummary(k) {
   const f = P(k).f, x = [];
@@ -2159,6 +2176,7 @@ function tcFilterSummary(k) {
   if (f.maxTax !== '' && f.maxTax != null) x.push(`税率 ≤ ${f.maxTax}%`);
   if (f.hideUnknownTax) x.push('隐藏税率未知');
   if (f.minMc || f.maxMc) x.push(`市值 ${f.minMc || 0}~${f.maxMc || '∞'}`);
+  if (f.minAge || f.maxAge) x.push(`创建 ${f.minAge || 0}~${f.maxAge || '∞'} 分钟`);
   if (f.minHolders) x.push(`持有人 ≥ ${f.minHolders}`);
   if (f.minProg) x.push(`进度 ≥ ${f.minProg}%`);
   if (f.quote) x.push('报价币 ' + f.quote);
@@ -2185,14 +2203,21 @@ function tcMatch(k, t) {
   if (n(f.maxMc) != null && !((t.mcapUsd || 0) <= n(f.maxMc))) return false;
   if (n(f.minHolders) != null && !((t.holders || 0) >= n(f.minHolders))) return false;
   if (n(f.minProg) != null && !((t.progress || 0) >= n(f.minProg))) return false;
+  // 创建时间（分钟）：从创建到现在过了多久，最少 ~ 最多
+  if (n(f.minAge) != null || n(f.maxAge) != null) {
+    const age = (Date.now() - (t.createdAt || 0)) / 60_000;
+    if (n(f.minAge) != null && !(age >= n(f.minAge))) return false;
+    if (n(f.maxAge) != null && !(age <= n(f.maxAge))) return false;
+  }
   if (f.quote && !f.quote.toUpperCase().split(/[,，\s]+/).filter(Boolean).includes(String(t.quote || '').toUpperCase())) return false;
   if (f.social && !(t.website || t.twitter || t.telegram)) return false;
   // 税率：买或卖任一边超过上限就隐藏；不知道税率的默认照常显示
   // 用的就是卡片上显示的那两个数（buyFeePct / sellFeePct）。任何一边已知且超过上限就隐藏；两边都不知道才算「税率未知」
-  if (n(f.maxTax) != null || f.hideUnknownTax) {
-    const known = [t.buyFeePct, t.sellFeePct].filter((v) => v != null && isFinite(v));
+  const mt = taxNum(f.maxTax);
+  if (mt != null || f.hideUnknownTax) {
+    const known = [t.buyFeePct, t.sellFeePct].map(Number).filter((v) => v != null && isFinite(v));
     if (!known.length) { if (f.hideUnknownTax) return false; }
-    else if (n(f.maxTax) != null && Math.max(...known) > n(f.maxTax)) return false;
+    else if (mt != null && Math.max(...known) > mt + 1e-9) return false;
   }
   const kw = c.q.toLowerCase().split(/[,，]+/).map((x) => x.trim()).filter(Boolean);
   if (kw.length && !kw.some((w) => `${t.symbol} ${t.name} ${t.address}`.toLowerCase().includes(w))) return false;
@@ -2364,7 +2389,7 @@ document.addEventListener('click', (e) => {
   else if (d.ts) { const [k, v] = d.ts.split(':'); TR.cols[k].sort = v; }
   else if (d.tsound) { TR.cols[d.tsound].sound = !TR.cols[d.tsound].sound; if (TR.cols[d.tsound].sound) colTone(990); }
   else if (d.tf) { tfModal(d.tf); return; }
-  else if (d.tfall) { const src = P(d.tfall).f; for (const k of Object.keys(TCOLS)) Object.assign(P(k).f, { maxTax: src.maxTax, hideUnknownTax: src.hideUnknownTax }); note(`税率条件已应用到三列${src.maxTax !== '' ? `：最高 ${src.maxTax}%` : ''}`, 'info'); }
+  else if (d.tfall) { const src = P(d.tfall).f; setTaxAll(src.maxTax, src.hideUnknownTax); note(`税率条件已应用到三列（P1-P3 都生效）${src.maxTax !== '' ? `：最高 ${src.maxTax}%` : ''}`, 'info'); }
   else if (d.tfreset) { P(d.tfreset).f = defPreset().f; $('#tcf-' + d.tfreset).innerHTML = tcFilterPop(d.tfreset); }
   else if (d.tqb) {
     // 整个右侧框都是买入按钮：点下立刻显示「下单中」，结果按这次点击之后该币的最新买单判断
@@ -2381,18 +2406,18 @@ document.addEventListener('click', (e) => {
     }).finally(() => setTimeout(() => { tcState.delete(a); lastPulse = 0; renderPulse(); }, 2500));
     return;
   }
-  trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse();
+  trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse(); lastList = 0; scheduleRender();
 }, true);
 document.addEventListener('input', (e) => {
   const d = e.target.dataset; if (!e.target.closest?.('#pulse')) return;
   if (d.tq) TR.cols[d.tq].q = e.target.value;
   else if (d.ta) P(d.ta).amt = Math.max(0, Number(e.target.value) || 0);
-  else if (d.tff) { const [k, f] = d.tff.split(':'); P(k).f[f] = e.target.value.trim(); }
+  else if (d.tff) { const [k, f] = d.tff.split(':'); P(k).f[f] = e.target.value.trim(); if (f === 'maxTax') setTaxAll(P(k).f.maxTax, P(k).f.hideUnknownTax); }
   else if (d.tfp) { const [k, p] = d.tfp.split(':'); const s = new Set(P(k).f.plats); e.target.checked ? s.add(p) : s.size > 1 ? s.delete(p) : (e.target.checked = true); P(k).f.plats = PLATS.filter((x) => s.has(x)); }
   else if (d.tfs) P(d.tfs).f.social = e.target.checked;
-  else if (d.tfu) P(d.tfu).f.hideUnknownTax = e.target.checked;
+  else if (d.tfu) setTaxAll(P(d.tfu).f.maxTax, e.target.checked);
   else return;
-  trSave(); lastPulse = 0; renderPulse();
+  trSave(); lastPulse = 0; renderPulse(); lastList = 0; scheduleRender();
   if (d.tff || d.tfp || d.tfs || d.tfu) { const k = (d.tff || d.tfp || d.tfs || d.tfu).split(':')[0]; $('#tcb-' + k) && ($(`#tch-${k} .tc-funnel`).classList.toggle('act', true)); }
 });
 for (const k of Object.keys(TCOLS)) {
@@ -2446,15 +2471,17 @@ function tfModal(k) {
         <div class="tfm-s"><div class="tfm-t"><span>报价代币</span><span class="muted">不选 = 全部</span></div>
           <div class="tfm-chips">${quotes.map((q) => `<button class="tfm-c${qs.has(q) ? ' on' : ''}" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>
         <div class="tfm-s"><div class="tfm-t"><span>市值 $</span></div><div class="tfm-row"><input data-f="minMc" value="${esc(dr.minMc)}" placeholder="最低"/><span>~</span><input data-f="maxMc" value="${esc(dr.maxMc)}" placeholder="最高"/></div></div>
+        <div class="tfm-s"><div class="tfm-t"><span>创建时间（分钟）</span><span class="muted">创建到现在过了多久</span></div><div class="tfm-row"><input data-f="minAge" value="${esc(dr.minAge ?? '')}" placeholder="最少，如 0"/><span>~</span><input data-f="maxAge" value="${esc(dr.maxAge ?? '')}" placeholder="最多，如 5"/></div></div>
         <div class="tfm-s tfm-2"><div><div class="tfm-t"><span>持有人 ≥</span></div><input data-f="minHolders" value="${esc(dr.minHolders)}" placeholder="不限"/></div>
           <div><div class="tfm-t"><span>进度 ≥ %</span></div><input data-f="minProg" value="${esc(dr.minProg)}" placeholder="不限"/></div></div>
         <div class="tfm-s"><label class="tfm-chk"><input type="checkbox" data-soc ${dr.social ? 'checked' : ''}/> 有社交链接</label></div>
-        <div class="tfm-s tfm-2"><div><div class="tfm-t"><span>最高税率 %</span><span class="muted">买或卖超过就隐藏</span></div><input data-f="maxTax" value="${esc(dr.maxTax ?? '')}" placeholder="不限，如 5"/></div>
+        <div class="tfm-s tfm-2"><div><div class="tfm-t"><span>最高税率 %</span><span class="muted">买或卖超过就隐藏（等于不算超过）</span></div><input data-f="maxTax" value="${esc(dr.maxTax ?? '')}" placeholder="不限，如 5"/>
+            <div class="tfm-chips tfm-taxq">${[['', '不限'], ['1', '≤1%'], ['3', '≤3%'], ['5', '≤5%'], ['9.9', '去掉 10%+']].map(([v, l]) => `<button class="tfm-c${String(taxNum(dr.maxTax) ?? '') === v ? ' on' : ''}" data-taxq="${v}">${l}</button>`).join('')}</div></div>
           <div><div class="tfm-t"><span>&nbsp;</span></div><label class="tfm-chk"><input type="checkbox" data-unk ${dr.hideUnknownTax ? 'checked' : ''}/> 税率未知也隐藏</label></div></div>
       </div>
       <div class="tfm-f"><button class="tfm-reset" data-reset>重置</button><button class="tfm-reset" data-alltax title="把这里的税率条件用到三列（当前预设）">税率应用到全部列</button><button class="tfm-ok" data-ok>应用</button></div></div>`;
   };
-  const close = () => { m.remove(); document.removeEventListener('keydown', esc_); };
+  const close = () => { m.remove(); document.removeEventListener('keydown', esc_); lastList = 0; scheduleRender(); };   // 左栏用同一套筛选，一起刷新
   const esc_ = (e) => { if (e.key === 'Escape') close(); };
   m.addEventListener('input', (e) => { const x = e.target.dataset; if (x.f) dr[x.f] = e.target.value.trim(); if (x.soc != null) dr.social = e.target.checked; if (x.unk != null) dr.hideUnknownTax = e.target.checked; });
   m.addEventListener('click', (e) => {
@@ -2464,13 +2491,15 @@ function tfModal(k) {
     if (x.plat) { const st = new Set(dr.plats); st.has(x.plat) ? (st.size > 1 && st.delete(x.plat)) : st.add(x.plat); dr.plats = PLATS.filter((p) => st.has(p)); }
     else if (x.pall != null) dr.plats = [...PLATS];
     else if (x.q) { const st = qset(); st.has(x.q) ? st.delete(x.q) : st.add(x.q); dr.quote = [...st].join(','); }
+    else if (x.taxq != null) dr.maxTax = x.taxq;
     else if (x.reset != null) Object.assign(dr, defPreset().f);
-    else if (x.alltax != null) { for (const c of Object.keys(TCOLS)) Object.assign(P(c).f, { maxTax: dr.maxTax ?? '', hideUnknownTax: !!dr.hideUnknownTax }); P(k).f = dr; trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse(); note(`税率条件已应用到三列${dr.maxTax ? `：最高 ${dr.maxTax}%` : ''}${dr.hideUnknownTax ? '，未知也隐藏' : ''}`, 'info'); return close(); }
+    else if (x.alltax != null) { setTaxAll(dr.maxTax, dr.hideUnknownTax); P(k).f = dr; trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse(); note(`税率条件已应用到三列（P1-P3 都生效）${dr.maxTax ? `：最高 ${dr.maxTax}%` : ''}${dr.hideUnknownTax ? '，未知也隐藏' : ''}`, 'info'); return close(); }
     else if (x.ok != null) {
       // 税率条件改了就同时用到三列（只在一列设的话另外两列照常显示，容易以为没生效）
+      { const v = taxNum(dr.maxTax); dr.maxTax = v == null ? '' : String(v); }
       const taxChanged = String(dr.maxTax ?? '') !== String(P(k).f.maxTax ?? '') || !!dr.hideUnknownTax !== !!P(k).f.hideUnknownTax;
       P(k).f = dr;
-      if (taxChanged) { for (const c of Object.keys(TCOLS)) Object.assign(P(c).f, { maxTax: dr.maxTax ?? '', hideUnknownTax: !!dr.hideUnknownTax }); note(`税率条件已同时用到三列${dr.maxTax ? `：最高 ${dr.maxTax}%` : '：不限'}${dr.hideUnknownTax ? '，未知也隐藏' : ''}`, 'info'); }
+      if (taxChanged) { setTaxAll(dr.maxTax, dr.hideUnknownTax); note(`税率条件已同时用到三列（P1-P3 都生效）${dr.maxTax ? `：最高 ${dr.maxTax}%` : '：不限'}${dr.hideUnknownTax ? '，未知也隐藏' : ''}`, 'info'); }
       trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse(); return close();
     }
     else return;
