@@ -368,8 +368,14 @@ export class LiveMarket extends EventEmitter {
   }
   applyDex(t) {
     const s = t.dexSwaps || [], bars = dexBars(s, t.dexHist || []); if (!bars.length) return;
-    const first = bars[0].t, q = this.quoteUsd(t);
-    t.candles = (t.candles || []).filter((c) => c.t < first && !c.dex).concat(bars);
+    const q = this.quoteUsd(t), curve = (t.candles || []).filter((c) => !c.dex), end = curve.length ? curve[curve.length - 1].t : -Infinity;
+    // 外盘第一根分钟线的起点（如 06:40:00）常早于内盘最后一笔（06:40:43）：以前把这一分钟里的内盘成交整段删掉，K 线在毕业处断开一截。
+    // 现在内盘全部保留，落在内盘结束之前的外盘线并成一根，放在内盘最后一笔之后
+    const head = bars.filter((c) => c.t <= end), tail = bars.filter((c) => c.t > end);
+    if (head.length) tail.unshift({ t: end + 1, o: head[0].o, h: Math.max(...head.map((c) => c.h)), l: Math.min(...head.map((c) => c.l)), c: head[head.length - 1].c, v: head.reduce((x, c) => x + c.v, 0), dex: 1 });
+    if (tail[0] && tail[1] && tail[0].t >= tail[1].t) tail.splice(0, 2, { ...tail[1], o: tail[0].o, h: Math.max(tail[0].h, tail[1].h), l: Math.min(tail[0].l, tail[1].l), v: tail[0].v + tail[1].v });
+    if (tail[0] && curve.length) { const o = curve[curve.length - 1].c; tail[0] = { ...tail[0], o, h: Math.max(tail[0].h, o), l: Math.min(tail[0].l, o) }; }   // 外盘第一根从内盘收盘价开，两段接上
+    t.candles = curve.concat(tail);
     const last = s[s.length - 1]; t.price = last ? last.price : bars[bars.length - 1].c; if (last) t.lastTradeAt = Math.max(t.lastTradeAt || 0, last.ts);
     if (q) { t.mcapUsd = t.dexMcapUsd = t.price * (t.maxSupply || 1e9) * q; if (t.dexQuoteRes) t.dexLiqUsd = t.dexQuoteRes * 2 * q; }
     const day = Date.now() - 86_400_000; let v = 0, nb = 0, ns = 0;
