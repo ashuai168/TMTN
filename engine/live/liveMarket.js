@@ -215,9 +215,9 @@ export class LiveMarket extends EventEmitter {
     const raised = Number(it.raisedQuote ?? it.raisedBnb) || 0, pct = Number(it.progressPct) || 0;
     Object.assign(t, {
       source: 'gang', platform: 'gang', agentExclusive: true, symbol: it.symbol, name: it.name, quote: it.quoteSymbol || 'BNB', quoteAddress: it.quoteAddress || null, creator: it.creator,
-      creatorName: it.creatorHandle || null, feeBps: 100, sellFeeBps: 100, stage: it.graduated ? 'dex' : 'curve', raised, progress: pct, target: it.gradAmtQuote || (pct > 0 ? Math.round((raised / (pct / 100)) * 10) / 10 : (t.target || 15)), gangTrack: it.track || 'v1', remaining: t._v2Rem ?? null,   // 剩余可售：V2 从合约读，读到之前 / 老盘未知 = null（页面显示「—」）
+      creatorName: it.creatorHandle || null, feeBps: 100, sellFeeBps: 100, stage: it.graduated ? 'dex' : 'curve', raised: t._qDec && t._qDec !== 18 ? t.raised : raised, progress: pct, target: t._qDec && t._qDec !== 18 ? t.target : it.gradAmtQuote || (pct > 0 ? Math.round((raised / (pct / 100)) * 10) / 10 : (t.target || 15)),   /* 非 18 位报价币（XAUt）接口按 18 位给，数会小 1e12 倍，用链上读的 */ gangTrack: it.track || 'v1', remaining: t._v2Rem ?? null,   // 剩余可售：V2 从合约读，读到之前 / 老盘未知 = null（页面显示「—」）
      
-      price: Number(it.priceQuote ?? it.priceBnb) || t.price, mcapUsd: Number(it.fdvUsd) || t.mcapUsd || 0, holders: it.holders ?? null,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0 volume: Number(it.volume24hBnb) || 0, pair: it.pair || null, tradeCount: it.trades || 0,
+      price: (t._qDec && t._qDec !== 18 ? 0 : Number(it.priceQuote ?? it.priceBnb)) || t.price, mcapUsd: Number(it.fdvUsd) || t.mcapUsd || 0, holders: it.holders ?? null,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0 volume: Number(it.volume24hBnb) || 0, pair: it.pair || null, tradeCount: it.trades || 0,
     });
     if (!existed) t.createdAt = it.createdAt * 1000;
     if (it.lastTradeAt) t.lastTradeAt = Math.max(t.lastTradeAt || 0, it.lastTradeAt * 1000);
@@ -473,7 +473,14 @@ export class LiveMarket extends EventEmitter {
     const { c } = await this._gv2.curve(t.address);
     const VT = 1066666666666666666666666667n, vq = BigInt(c.virtualQuote), grad = BigInt(c.gradAmt), sold = BigInt(c.sold);
     const soldAtGrad = VT - (vq * VT + vq + grad - 1n) / (vq + grad);
-    t.launchPrice = Number(ethers.formatEther(vq)) / Number(ethers.formatEther(VT));
+    // 报价币不一定是 18 位（XAUt 是 6 位）：开盘价、已筹、目标都按报价币自己的小数位换算
+    const dec = t._qDec ??= await this._gv2.decimals(c.quote).catch(() => 18), real = BigInt(c.realQuote || 0);
+    t.launchPrice = Number(ethers.formatUnits(vq, dec)) / Number(ethers.formatEther(VT));
+    if (dec !== 18) {
+      t.raised = Number(ethers.formatUnits(real, dec)); t.target = Number(ethers.formatUnits(grad, dec));
+      const q = vq + real, tokRes = (vq * VT) / q;   // 恒定乘积：现价 = 报价币储备 / 代币储备
+      if (tokRes > 0n) { t.price = Number(ethers.formatUnits(q, dec)) / Number(ethers.formatEther(tokRes)); const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }
+    }
     t._v2Rem = c.graduated ? 0 : Math.max(0, Number(ethers.formatEther(soldAtGrad > sold ? soldAtGrad - sold : 0n)));
     t.remaining = t._v2Rem; t._v2At = Date.now(); t._chgAt = 0;
   }
