@@ -53,6 +53,10 @@ function switchTo(tag, force) {
   if (!force && !confirm(`${up ? '更新' : '回退'}到 ${short(tag)}？\n\n· 只替换程序代码，data/、.env、钱包登录都不动\n· 切换前会自动备份当前代码，随时能恢复\n· 完成后服务会自动重启（约 5–10 秒），重启期间不能下单、跟单和狙击会暂停`)) return;
   post('/api/version/switch', { tag, force: !!force }).catch((e) => alert(e.message));
 }
+function restartNow() {
+  if (!confirm('现在重启服务？\n\n大约 5–10 秒，重启期间不能下单，跟单和狙击会暂停；data/、.env、钱包登录都不动。页面会自动刷新。')) return;
+  post('/api/version/restart', {}).catch((e) => alert(e.message));
+}
 function restore(file) {
   if (!confirm(`恢复备份 ${file}？\n\n会先备份当前代码，再把代码换回这份备份，然后自动重启服务。`)) return;
   post('/api/version/restore', { file }).catch((e) => alert(e.message));
@@ -73,7 +77,7 @@ function paint() {
   let jobHtml = '';
   if (j && (busy || restarting || j.error || j.ok)) {
     const head = restarting ? '<span class="y">服务正在重启，起来后页面会自动刷新…</span>'
-      : busy ? `<span class="y">正在切换到 ${esc(j.tag)}…</span>`
+      : busy ? `<span class="y">${j.tag === 'restart' ? '正在重启…' : `正在切换到 ${esc(j.tag)}…`}</span>`
       : j.error ? `<span class="r">${esc(j.error)}</span>` : '<span class="g">完成</span>';
     const dirty = j.dirty && !busy ? `<div class="vm-dirty">${j.dirty.unknown ? '这台机器上的代码可能被改过（开发版或手动改过）。' : `这些文件改过（共 ${j.dirty.count} 个）：<div class="vm-files mono">${j.dirty.files.map(esc).join('<br>')}${j.dirty.count > j.dirty.files.length ? '<br>…' : ''}</div>`}继续的话会先整体备份，再覆盖。<button class="vm-b warn" data-vm-force="${esc(j.tag)}">仍然切换（先备份）</button></div>` : '';
     jobHtml = `<div class="vm-job"><div>${head}</div><div class="vm-log mono">${j.log.map(esc).join('<br>')}</div>${dirty}</div>`;
@@ -84,7 +88,7 @@ function paint() {
     <div class="vm-h"><b>版本管理</b>${upd ? '<i class="vm-new">NEW</i>' : ''}<span class="spacer"></span><button class="vm-x" data-vm-close>×</button></div>
     <div class="vm-line">当前版本 <b class="mono">${esc(short(V.current))}</b> · ${status}</div>
     <div class="vm-sub muted">${V.checkedAt ? `上次检查 ${hm(V.checkedAt)} · ` : ''}来源 <a href="${esc(V.repoUrl)}" target="_blank" rel="noopener">${esc(V.repo)}</a>${V.install === 'git' ? ' · git 安装' : ''}</div>
-    ${V.pendingRestart ? `<div class="vm-warn">代码已经是 ${esc(short(V.current))}，但服务还在跑 ${esc(short(V.running))}，重启后生效</div>` : ''}
+    ${V.pendingRestart ? `<div class="vm-warn vm-row2"><span>代码已经是 ${esc(short(V.current))}，但服务还在跑 ${esc(short(V.running))}，重启后生效</span><button class="vm-b sm" data-vm-restart ${busy || blocked ? 'disabled' : ''}>立即重启</button></div>` : ''}
     ${blocked ? `<div class="vm-warn">${esc(blocked)}</div>` : ''}
     ${upd ? `<div class="vm-notes">${notes}</div><button class="vm-b primary" data-vm-switch="${esc(V.latest)}" ${busy || blocked ? 'disabled' : ''}>更新到 ${esc(V.latest)}</button>`
       : cur?.notes ? `<details class="vm-cur"><summary>本版更新内容</summary><div class="vm-notes">${md(cur.notes)}</div></details>` : '<div class="vm-sub">暂未取得本版简介，可查看完整说明。</div>'}
@@ -102,7 +106,7 @@ function paint() {
 
 btn.addEventListener('click', () => { open = !open; pop.classList.toggle('hidden', !open); paint(); if (open && !V?.checkedAt) load(false); });
 pop.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-vm-close],[data-vm-check],[data-vm-switch],[data-vm-force],[data-vm-hist],[data-vm-restore]');
+  const t = e.target.closest('[data-vm-close],[data-vm-check],[data-vm-switch],[data-vm-force],[data-vm-hist],[data-vm-restore],[data-vm-restart]');
   if (!t) return;
   if (t.dataset.vmClose != null) { open = false; pop.classList.add('hidden'); paint(); }
   else if (t.dataset.vmCheck != null) { t.textContent = '检查中…'; load(true); }
@@ -110,6 +114,7 @@ pop.addEventListener('click', (e) => {
   else if (t.dataset.vmForce) switchTo(t.dataset.vmForce, true);
   else if (t.dataset.vmHist != null) { histOpen = !histOpen; paint(); }
   else if (t.dataset.vmRestore) restore(t.dataset.vmRestore);
+  else if (t.dataset.vmRestart != null) restartNow();
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) { open = false; pop.classList.add('hidden'); paint(); } });
 

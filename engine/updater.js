@@ -234,6 +234,12 @@ export function mountUpdater(app, { rootDir, peers = 0 }) {
     try { startJob(tag, () => (isGit ? switchGit(tag, force) : switchFiles(tag, force))); res.json(view(cache)); }
     catch (e) { res.status(409).json({ error: e.message }); }
   });
+  // 只重启（代码已经换好、或想手动重启时）：和切换版本完成后的重启是同一套
+  app.post('/api/version/restart', (req, res) => {
+    if (!writeGuard(req, res)) return;
+    try { startJob('restart', async () => {}); res.json(view(cache)); }
+    catch (e) { res.status(409).json({ error: e.message }); }
+  });
   app.post('/api/version/restore', (req, res) => {
     if (!writeGuard(req, res)) return;
     const file = String(req.body?.file || '');
