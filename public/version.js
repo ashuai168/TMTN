@@ -87,12 +87,12 @@ function paint() {
     ${V.pendingRestart ? `<div class="vm-warn">代码已经是 ${esc(short(V.current))}，但服务还在跑 ${esc(short(V.running))}，重启后生效</div>` : ''}
     ${blocked ? `<div class="vm-warn">${esc(blocked)}</div>` : ''}
     ${upd ? `<div class="vm-notes">${notes}</div><button class="vm-b primary" data-vm-switch="${esc(V.latest)}" ${busy || blocked ? 'disabled' : ''}>更新到 ${esc(V.latest)}</button>`
-      : cur?.notes ? `<details class="vm-cur"><summary>本版更新内容</summary><div class="vm-notes">${md(cur.notes)}</div></details>` : ''}
+      : cur?.notes ? `<details class="vm-cur"><summary>本版更新内容</summary><div class="vm-notes">${md(cur.notes)}</div></details>` : '<div class="vm-sub">暂未取得本版简介，可查看完整说明。</div>'}
     ${jobHtml}
-    <div class="vm-btns"><button class="vm-b" data-vm-check ${busy ? 'disabled' : ''}>重新检查</button><a class="vm-b" href="${esc(V.changelogUrl)}" target="_blank" rel="noopener">完整说明 ↗</a></div>
+    <div class="vm-btns"><button class="vm-b" data-vm-check ${busy ? 'disabled' : ''}>重新检查</button><a class="vm-link" href="${esc(V.changelogUrl)}" target="_blank" rel="noopener">完整说明</a></div>
     ${V.peers ? `<div class="vm-sub muted">多钱包：其他钱包的后端（容器）要另外更新、重建才会生效。</div>` : ''}
     <div class="vm-hist ${histOpen ? 'open' : ''}">
-      <button class="vm-ht" data-vm-hist>一键回退历史版本 <span>${histOpen ? '▴' : '▾'}</span></button>
+      <button class="vm-ht" data-vm-hist><span>${histOpen ? '▼' : '▶'}</span> 一键回退历史版本</button>
       ${histOpen ? `<div class="vm-hb">
         ${V.releases.length ? V.releases.map((r) => { const c = cmp(r.tag, V.current); return `<div class="vm-row"><b class="mono">${esc(r.tag)}</b><span class="muted">${esc(r.date)}</span><span class="spacer"></span>${c === 0 ? '<span class="g">当前</span>' : `<button class="vm-b sm" data-vm-switch="${esc(r.tag)}" ${busy || blocked ? 'disabled' : ''}>${c > 0 ? '更新' : '回退'}</button>`}</div>`; }).join('') : '<div class="muted">还没拿到版本列表，先点「重新检查」</div>'}
         ${V.backups.length ? `<div class="vm-bt muted">切换前的自动备份（本机）</div>${V.backups.map((b) => `<div class="vm-row"><span class="mono">${esc(short(b.version))}</span><span class="muted">${hm(b.at)} · ${(b.size / 1048576).toFixed(1)} MB</span><span class="spacer"></span><button class="vm-b sm" data-vm-restore="${esc(b.file)}" ${busy || blocked ? 'disabled' : ''}>恢复</button></div>`).join('')}` : ''}
