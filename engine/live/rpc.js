@@ -39,18 +39,23 @@ const customWss = () => (process.env.WSS_URL || '').split(',').map((x) => x.trim
 
 // 订阅链上事件（WebSocket）：按顺序用 urls（一般是 NodeReal → publicnode）。断线 / 被拒（如 429）5 秒后换下一个；
 // 用的不是第一个时，10 分钟后再试回第一个。status.connected 表示订阅正常
+// NodeReal 月额度用完时 wss 握手直接 429：这个地址 30 分钟内不再试（所有订阅共用），不然每 10 分钟切回去都要断十几秒
+const WS_COOL = new Map();
+const wsCooling = (u) => (WS_COOL.get(u) || 0) > Date.now();
 export class WsLogs {
   constructor({ label, urls, filters, onLog, status }) { Object.assign(this, { label, urls: urls.filter(Boolean).flatMap((u) => (u === PUBLIC_WSS ? [...customWss(), u] : [u])), filters, onLog, status }); this.ws = null; }
   start() { this.connect(0); return this; }
   get live() { return !!this.ws && !!this.status.connected; }
   connect(i) {
+    for (let k = 0; k < this.urls.length && wsCooling(this.urls[i]); k++) i = (i + 1) % this.urls.length;   // 跳过冷却中的（全在冷却就照常试）
     const url = this.urls[i]; if (!url) return;
     let ws; try { ws = new ethers.WebSocketProvider(url, 56); } catch (e) { return this.retry(i, e); }
     this.ws = ws; this.idx = i; this.status.wss = nodeName(url); this.status.connected = false;
     const sock = ws.websocket;
-    sock?.addEventListener?.('open', () => { if (this.ws === ws) { this.status.connected = true; this.status.connectedAt = Date.now(); this.status.lastError = null; } });
+    let opened = false;
+    sock?.addEventListener?.('open', () => { opened = true; if (this.ws === ws) { this.status.connected = true; this.status.connectedAt = Date.now(); this.status.lastError = null; } });
     sock?.addEventListener?.('close', () => this.retry(i, new Error('连接断开'), ws));
-    sock?.addEventListener?.('error', (e) => this.retry(i, e?.error || new Error('连接出错'), ws));
+    sock?.addEventListener?.('error', (e) => { if (!opened && /nodereal/i.test(url)) WS_COOL.set(url, Date.now() + 30 * 60_000); this.retry(i, e?.error || new Error('连接出错'), ws); });
     for (const f of this.filters) ws.on(f, (log) => { this.status.connected = true; this.status.lastLogAt = Date.now(); bumpUsage(this.label + '-ws推送', url, { method: 'logs' }); const k = `${nodeName(url)}|${this.label}-ws推送|ws_bytes`; RPC_USAGE.set(k, (RPC_USAGE.get(k) || 0) + JSON.stringify(log).length + 200);   /* WS 按字节计费，估算每条推送的大小 */ try { this.onLog(log); } catch { /* 单条解析失败不影响订阅 */ } });
     bumpUsage(this.label, url, this.filters.map(() => ({ method: 'eth_subscribe' })));
     clearTimeout(this.backT);
