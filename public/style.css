@@ -1165,3 +1165,6 @@ h1, h2, h3, h4, .lh b, .tch b, .trkp-h b { font-weight: var(--fw-head); }
 .snp-cost { margin: 6px 0 4px; font-size: 12px; } .snp-cost > b { display: block; margin-bottom: 4px; } .snp-cost .trk-tbl { max-width: 560px; }
 .snipe .snp { max-width: 1100px; } .snp-tier { display: flex; align-items: center; gap: 6px; } .snp-tier input { width: 80px; height: 30px; padding: 0 8px; border: 1px solid var(--line2); background: var(--panel2); color: var(--text); }
 .snp-recent { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
+/* 狙击模块：左侧钱包追踪栏打开时让出宽度（和持仓 / 追踪页一样） */
+body.trkp-on #snipe { margin-left: calc(var(--trkpW, 340px) + 8px); }
+@media (max-width: 760px) { body.trkp-on #snipe { margin-left: 0; } }
