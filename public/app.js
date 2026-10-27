@@ -764,11 +764,22 @@ const candles = chart.addCandlestickSeries({ upColor: '#1ecb81', downColor: '#f6
 const volume = chart.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false });
 chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
 const bar = (d) => ({ time: d.t + tz, open: d.o, high: d.h, low: d.l, close: d.c });
-const volBar = (d) => ({ time: d.t + tz, value: d.v, color: d.c >= d.o ? 'rgba(30,203,129,.45)' : 'rgba(246,70,93,.45)' });
+const volBar = (d) => ({ time: d.t + tz, value: d.v, color: d.c >= d.o ? CT.vu : CT.vd });
 // 只在换代币 / 换周期 / 换市值-价格时 setData；其余只 update 最新一两根
 const CH = { key: '', len: 0, lastT: 0, markers: '' };
 const Y = { zoom: 1 };
 function resetView() { CH.key = ''; Y.zoom = 1; }
+// 主题（theme.js / theme.css）：K 线颜色读 --chart-* 变量，没设就是经典配色；切主题时重画
+const CT = { up: '#1ecb81', down: '#f6465d', vu: 'rgba(30,203,129,.45)', vd: 'rgba(246,70,93,.45)' };
+function applyChartTheme() {
+  const cs = getComputedStyle(document.documentElement), v = (k, d) => cs.getPropertyValue('--chart-' + k).trim() || d;
+  Object.assign(CT, { up: v('up', '#1ecb81'), down: v('down', '#f6465d'), vu: v('vol-up', 'rgba(30,203,129,.45)'), vd: v('vol-down', 'rgba(246,70,93,.45)') });
+  const cross = { color: v('cross', '#3a4350'), labelBackgroundColor: v('label', '#2b3139') }, grid = { color: v('grid', '#151b22') }, border = v('border', '#1e2329');
+  chart.applyOptions({ layout: { textColor: v('text', '#7d8794'), fontFamily: cs.getPropertyValue('--mono') || 'monospace' }, grid: { vertLines: grid, horzLines: grid }, crosshair: { vertLine: cross, horzLine: cross }, rightPriceScale: { borderColor: border }, timeScale: { borderColor: border } });
+  candles.applyOptions({ upColor: CT.up, downColor: CT.down, wickUpColor: CT.up, wickDownColor: CT.down, priceLineColor: CT.up });
+}
+applyChartTheme();
+window.addEventListener('tmtn-theme', () => { applyChartTheme(); CH.key = ''; CH.markers = ''; try { drawChart(); } catch { /* 还没选币 */ } });
 // 鼠标在右侧价格轴上滚轮：拉伸 / 压缩 K 线高度（不动时间轴）；双击价格轴恢复自动
 const overPriceAxis = (e) => { const r = chartEl.getBoundingClientRect(); return e.clientX >= r.right - chart.priceScale('right').width() && e.clientY <= r.bottom - chart.timeScale().height(); };
 function applyYZoom() { chart.priceScale('right').applyOptions({ autoScale: true }); candles.applyOptions({ autoscaleInfoProvider: candles.options().autoscaleInfoProvider }); }
@@ -819,7 +830,7 @@ function drawChart() {
     // 早于第一根 K 线的成交（K 线历史不全时）不标：库会把它们全挤到第一根上
     const t0 = all.length ? all[0].t : Infinity;
     candles.setMarkers(mine.filter((t) => Math.floor(t.ts / 1000 / S.interval) * S.interval >= t0).map((t) => ({ time: Math.floor(t.ts / 1000 / S.interval) * S.interval + tz, position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
-      color: t.side === 'buy' ? '#1ecb81' : '#f6465d', shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown', text: t.side === 'buy' ? '买' : '卖' })).sort((a, b) => a.time - b.time));
+      color: t.side === 'buy' ? CT.up : CT.down, shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown', text: t.side === 'buy' ? '买' : '卖' })).sort((a, b) => a.time - b.time));
   }
 }
 chart.subscribeCrosshairMove((p) => {

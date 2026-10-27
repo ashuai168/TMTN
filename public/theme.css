@@ -1,0 +1,154 @@
+/* 主题：theme.js 在 <html> 上设 data-theme；没有 data-theme = 经典深色（style.css 原样） */
+.theme-btn { cursor: pointer; }
+@media (max-width: 1500px) { .theme-btn .theme-n { display: none; } }
+
+/* ===== 新配色：灰蓝底 + 一个强调色 #6E8BFF；红绿只表示涨跌；标签统一灰色 =====
+   html[data-theme] 的优先级高于 style.css 里的 :root，所以变量直接覆盖；写死颜色的地方逐个改 */
+html[data-theme="new"] {
+  --bg: #0B0E13; --panel: #11151C; --panel2: #171C25; --raised: #171C25; --hover: #1D2330; --line: #1F2632; --line2: #2A3240;
+  --text: #E6E9EF; --muted: #9AA3B2; --dim: #5F6878;
+  --accent: #6E8BFF; --accent-bg: rgba(110, 139, 255, .12);
+  --g: #2EBD85; --g-bg: rgba(46, 189, 133, .12); --g-line: rgba(46, 189, 133, .35);
+  --r: #F0616D; --r-bg: rgba(240, 97, 109, .10); --r-line: rgba(240, 97, 109, .32);
+  /* 原来的黄色强调 → 蓝紫强调色；蓝 / 紫 / 橙这些装饰色都收成强调色或灰 */
+  --y: #6E8BFF; --y-bg: rgba(110, 139, 255, .12); --b: #6E8BFF; --b-bg: rgba(110, 139, 255, .12);
+  --p: #9AA3B2; --p-bg: #171C25; --o: #D9A54A;
+  --card-flap: #171C25; --card-flap-line: #1F2632; --card-four: #171C25; --card-four-line: #1F2632; --card-gang: #171C25; --card-gang-line: #1F2632;
+  --mc-line: #2A3240; --mc-line-hi: #6E8BFF; --pink: #2EBD85;
+  --trk-card: #171C25; --trk-card-hover: #1D2330;
+  --sans: Inter, "PingFang SC", -apple-system, BlinkMacSystemFont, "Microsoft YaHei", "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  /* K 线图（app.js 读这几个变量） */
+  --chart-text: #5F6878; --chart-grid: #1A202A; --chart-cross: #2A3240; --chart-label: #1D2330; --chart-border: #1F2632;
+  --chart-up: #2EBD85; --chart-down: #F0616D; --chart-vol-up: rgba(46, 189, 133, .35); --chart-vol-down: rgba(240, 97, 109, .35);
+  color-scheme: dark;
+}
+[data-theme="new"] ::-webkit-scrollbar-thumb { background: #2A3240; }
+[data-theme="new"] .mono, [data-theme="new"] .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+/* 顶栏 / 面板 */
+[data-theme="new"] .topbar { background: var(--bg); }
+[data-theme="new"] .viewsw button.active, [data-theme="new"] #viewSw button.active { color: var(--text); background: var(--raised); }
+[data-theme="new"] .brand-v, [data-theme="new"] .brand-s { color: var(--dim); }
+[data-theme="new"] .brand-logo { box-shadow: 0 0 0 1px var(--line2); }
+[data-theme="new"] .wtag { background: var(--raised); }
+[data-theme="new"] .handle { color: var(--accent); background: var(--accent-bg); }
+[data-theme="new"] .search-results div:hover, [data-theme="new"] .wallet-menu .wi:hover, [data-theme="new"] .fav-menu button:hover { background: var(--hover); }
+[data-theme="new"] .panel { border-radius: 8px; }
+[data-theme="new"] .splitter:hover, [data-theme="new"] .splitter.drag { background: var(--accent-bg); }
+[data-theme="new"] .sim-badge { color: var(--o); border-color: var(--line2); background: transparent; }
+
+/* 标签：统一灰底灰字，只有 Agent 用强调色 */
+[data-theme="new"] .tag, [data-theme="new"] .chip,
+[data-theme="new"] .tag.b, [data-theme="new"] .tag.y, [data-theme="new"] .tag.p, [data-theme="new"] .tag.gray, [data-theme="new"] .tag.tax,
+[data-theme="new"] .tag.gangy, [data-theme="new"] .tag.gangy.v3, [data-theme="new"] .tag.nftg, [data-theme="new"] .tag.chg,
+[data-theme="new"] .chip.tax, [data-theme="new"] .chip.q, [data-theme="new"] .chip.gv, [data-theme="new"] .chip.gv.v3, [data-theme="new"] .chip.nftg,
+[data-theme="new"] .pg, [data-theme="new"] .pf, [data-theme="new"] .p4, [data-theme="new"] .pbadge {
+  background: var(--raised) !important; color: var(--muted) !important; box-shadow: inset 0 0 0 1px var(--line); font-weight: var(--fw-body);
+}
+[data-theme="new"] .tag.ag, [data-theme="new"] .chip.ag, [data-theme="new"] .tag.agent, [data-theme="new"] .chip.agent { background: var(--accent-bg) !important; color: var(--accent) !important; box-shadow: none; }
+/* 涨跌 / 风险提示的标签保留红绿 */
+[data-theme="new"] .tag.g, [data-theme="new"] .tag.div.on, [data-theme="new"] .chip.div.on { background: var(--g-bg) !important; color: var(--g) !important; box-shadow: none; }
+[data-theme="new"] .tag.r, [data-theme="new"] .tag.tax.hi, [data-theme="new"] .chip.tax.hi { background: var(--r-bg) !important; color: var(--r) !important; box-shadow: none; }
+
+/* 选中态 / 开关 / 筛选：强调色 */
+[data-theme="new"] .chips button.active, [data-theme="new"] .chips .lf-funnel.act, [data-theme="new"] #btnPause.paused,
+[data-theme="new"] .bb-btn.on, [data-theme="new"] .bt-qb.qb-on, [data-theme="new"] .sw-chips button.on, [data-theme="new"] .fav-tg.on {
+  color: var(--accent); border-color: var(--accent); background: transparent;
+}
+[data-theme="new"] .tabs button.active { border-color: var(--accent); }
+[data-theme="new"] input[type="checkbox"], [data-theme="new"] input[type="radio"] { accent-color: var(--accent); }
+[data-theme="new"] .tfm-c.on, [data-theme="new"] .tfm-c.pf-flap.on, [data-theme="new"] .tfm-c.pf-four.on, [data-theme="new"] .tfm-c.pf-gang.on { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+[data-theme="new"] .tfm-all { color: var(--accent); }
+[data-theme="new"] .seg.plat button.active[data-p="gang"] { color: var(--text) !important; }
+[data-theme="new"] .fav-star.on, [data-theme="new"] .tc-fav.on, [data-theme="new"] .tlc-ic.on, [data-theme="new"] .fav-menu button.on { color: var(--accent); }
+[data-theme="new"] .bb-n { background: var(--accent); color: #fff; }
+[data-theme="new"] .ui-btn.ok, [data-theme="new"] .trk-row button, [data-theme="new"] .trk-new, [data-theme="new"] .trd-copy, [data-theme="new"] .trkp-empty button { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* 选中 / 持有的卡片：强调色细框 */
+[data-theme="new"] .tcard.sel, [data-theme="new"] #tokenList.legacy .tcard.sel { border-color: var(--accent); background: var(--raised); }
+[data-theme="new"] #tokenList.tl-trench > .tcard.sel, [data-theme="new"] .tlc.sel, [data-theme="new"] .tcb > .tcard.sel, [data-theme="new"] .tcb > .tcard.held { outline-color: var(--accent); }
+[data-theme="new"] .tcb > .tcard.sel::after, [data-theme="new"] .tcb > .tcard.held::after { border-color: var(--accent); }
+[data-theme="new"] .pcard.held, [data-theme="new"] .tcard.held { box-shadow: inset 0 0 0 1px var(--accent); }
+[data-theme="new"] .pcard.flap, [data-theme="new"] .pcard.four, [data-theme="new"] .pcard.gang { border-left-color: var(--line2); background: var(--raised); }
+[data-theme="new"] .pcard .phold, [data-theme="new"] .stats .hold-st { background: var(--accent-bg); color: var(--accent); border-color: transparent; }
+[data-theme="new"] .stats .hold-st > span { color: var(--accent); }
+[data-theme="new"] .stats > div { background: transparent; }
+@keyframes flash-new { from { background: rgba(110, 139, 255, .18); } to { background: transparent; } }
+
+/* 进度条：强调色 */
+[data-theme="new"] .bar i, [data-theme="new"] .tc-prog i, [data-theme="new"] .tlc-bar i,
+[data-theme="new"] .pcard.gang .bar i, [data-theme="new"] .pcard.four .bar i, [data-theme="new"] .pcard.flap .bar i, [data-theme="new"] .tcard.gang .tc-prog i { background: var(--accent) !important; }
+[data-theme="new"] .tc-prog, [data-theme="new"] .tlc-bar { background: var(--line2); }
+[data-theme="new"] .tc-badge, [data-theme="new"] .tc-badge.four, [data-theme="new"] .tc-badge.gang { background: var(--raised) !important; color: var(--muted) !important; box-shadow: 0 0 0 1px var(--line2); }
+[data-theme="new"] .tc-route, [data-theme="new"] .tc-route.dex { border-color: var(--line2); color: var(--muted); }
+
+/* 一键买卖：描边按钮，悬停才填 12% 淡色 */
+[data-theme="new"] .qb { background: transparent; border-color: var(--g-line); color: var(--g); }
+[data-theme="new"] .qb:hover { background: var(--g-bg); }
+[data-theme="new"] .qbp { background: var(--panel); border-color: var(--line2); border-radius: 10px; }
+[data-theme="new"] .qbp-h { background: var(--panel); border-bottom-color: var(--line); }
+[data-theme="new"] .qbp-sec { border-bottom-color: var(--line); }
+[data-theme="new"] .qbp-x, [data-theme="new"] .qbp-tabs button { border-color: var(--line2); }
+[data-theme="new"] .qbp-b { background: transparent; }
+[data-theme="new"] .qbp-b.buy { border-color: var(--g-line); color: var(--g); }
+[data-theme="new"] .qbp-b.sell { border-color: var(--r-line); color: var(--r); }
+[data-theme="new"] .qbp-b.buy:hover { background: var(--g-bg); border-color: var(--g-line); }
+[data-theme="new"] .qbp-b.sell:hover { background: var(--r-bg); border-color: var(--r-line); }
+[data-theme="new"] .qbp-in { border-color: var(--accent); background: var(--bg); }
+/* 战壕卡片上的 ⚡ 快买：粉色 → 绿色描边 */
+[data-theme="new"] .tc-buy, [data-theme="new"] .tlc-buy { background: transparent; border-color: var(--g-line); color: var(--g); }
+[data-theme="new"] .tcb > .tcard .tc-buy, [data-theme="new"] .tlc-buy { color: var(--g) !important; }
+[data-theme="new"] .tlc-buy:hover { background: var(--g-bg); }
+/* 卡片上的大号买入：描边，不再是实心绿 */
+[data-theme="new"] .pcard .qb.qb1, [data-theme="new"] #tokenList.legacy .qb.qb1 { background: transparent !important; color: var(--g) !important; border-color: var(--g-line) !important; }
+[data-theme="new"] .pcard .qb.qb1:hover, [data-theme="new"] #tokenList.legacy .qb.qb1:hover { background: var(--g-bg) !important; border-color: var(--g-line) !important; }
+
+/* 复制 CA 等次要按钮：灰描边 */
+[data-theme="new"] .ca-big { border-color: var(--line2); background: transparent; color: var(--text); }
+[data-theme="new"] .ca-big:hover, [data-theme="new"] .links .ca-big:hover { border-color: var(--muted); color: var(--text); background: transparent; }
+[data-theme="new"] .to-latest { border-color: var(--line2); background: var(--panel); color: var(--muted); }
+
+/* 提示框：灰底，警告用暖黄 */
+[data-theme="new"] .hold-q, [data-theme="new"] .rule-bar, [data-theme="new"] .nftg-box { border-color: var(--line2); background: var(--raised); }
+[data-theme="new"] .nftg-ph { background: var(--raised); color: var(--muted); }
+[data-theme="new"] .agent-status { border-color: var(--line); background: var(--raised); }
+[data-theme="new"] .authpill.warn { background: transparent; color: var(--o); border-color: var(--line2); }
+[data-theme="new"] .authpill.warn i { background: var(--o); }
+[data-theme="new"] .authpill { background: transparent; color: var(--g); border-color: var(--line2); }
+[data-theme="new"] .authpill i { background: var(--g); box-shadow: none; }
+[data-theme="new"] .dot.g, [data-theme="new"] .dot.y { box-shadow: none; }
+[data-theme="new"] .dot.y { background: var(--o); }
+[data-theme="new"] .tc-pause { background: var(--o); }
+[data-theme="new"] .vm-pop { background: var(--panel); }
+
+/* 右侧下单区：买/卖切换用淡色，实心绿只留给「买入」主按钮 */
+[data-theme="new"] .seg { background: var(--bg); }
+[data-theme="new"] .seg button.active { background: var(--raised); color: var(--text); }
+[data-theme="new"] .seg.bs button.active[data-s="buy"] { background: var(--g-bg); color: var(--g); }
+[data-theme="new"] .seg.bs button.active[data-s="sell"] { background: var(--r-bg); color: var(--r); }
+[data-theme="new"] .big-btn { color: #06140E; border-radius: 8px; }
+[data-theme="new"] .big-btn.sell { background: transparent; color: var(--r); border: 1px solid var(--r-line); }
+[data-theme="new"] .big-btn.sell:hover:not(:disabled) { background: var(--r-bg); }
+[data-theme="new"] .presets button { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+[data-theme="new"] .presets button:hover { background: var(--hover); color: var(--text); }
+[data-theme="new"] .qtrade button { background: transparent; }
+[data-theme="new"] .qtrade .qt-b { border-color: var(--g-line); } .qtrade .qt-b:hover { background: var(--g-bg); }
+[data-theme="new"] .qtrade .qt-s { border-color: var(--r-line); } .qtrade .qt-s:hover { background: var(--r-bg); }
+[data-theme="new"] .wchip.on { border-color: var(--accent); background: transparent; color: var(--text); }
+[data-theme="new"] .mw-chip .mw-ck { color: var(--accent); }
+/* 开关：开 = 强调色，关 = 灰 */
+[data-theme="new"] .tgl i, [data-theme="new"] .tgl.neutral i { background: var(--line2); }
+[data-theme="new"] .tgl i::after { background: var(--dim); }
+[data-theme="new"] .tgl input:checked + i { background: var(--accent); }
+[data-theme="new"] .tgl input:checked + i::after { background: #fff; }
+[data-theme="new"] .amt, [data-theme="new"] .addrbox, [data-theme="new"] .field input, [data-theme="new"] .inp, [data-theme="new"] .unit-inp { background: var(--bg); }
+[data-theme="new"] .sheet, [data-theme="new"] .toast { background: var(--panel); }
+[data-theme="new"] .fav-groups button.on { background: var(--raised); }
+/* 没有图片的代币头像：灰色渐变 */
+[data-theme="new"] .logo, [data-theme="new"] .logo.flap, [data-theme="new"] .logo-peek .pk-img, [data-theme="new"] .logo-peek .pk-img.four { background: linear-gradient(135deg, #384055, #232937); color: var(--text); box-shadow: none; }
+[data-theme="new"] .tc-pre button.on { color: var(--accent); background: var(--accent-bg); }
+[data-theme="new"] .tc-funnel.act::after { background: var(--accent); }
+[data-theme="new"] .tc-mc b.cy { color: var(--text); }
+[data-theme="new"] .sw-go.buy { background: transparent; border-color: var(--g-line); color: var(--g); } [data-theme="new"] .sw-go.buy:hover { background: var(--g-bg); }
+[data-theme="new"] .sw-go.sell { background: transparent; border-color: var(--r-line); } [data-theme="new"] .sw-go.sell:hover { background: var(--r-bg); }
