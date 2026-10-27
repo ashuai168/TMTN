@@ -722,7 +722,8 @@ function aggregate() {
   }
   return out;
 }
-function fmtAxis(v) { return S.metric === 'mcap' ? '$' + K(v, Math.abs(v) >= 1e3 ? 2 : 4) : '$' + sub(v, 4); }
+// 价格轴下方留给成交量的空白会画出负数刻度（$-4K…），价格 / 市值不会是负数，不显示
+function fmtAxis(v) { if (v < 0) return ''; return S.metric === 'mcap' ? '$' + K(v, Math.abs(v) >= 1e3 ? 2 : 4) : '$' + sub(v, 4); }
 const LWC = window.LightweightCharts;
 const chartEl = $('.chart-wrap');
 const tz = -new Date().getTimezoneOffset() * 60;   // 库按 UTC 显示时间，这里换成本地时间
@@ -798,7 +799,9 @@ function drawChart() {
   const mk = S.selected + ':' + mine.map((t) => t.tx + t.side).join(',');
   if (mk !== CH.markers) {
     CH.markers = mk;
-    candles.setMarkers(mine.map((t) => ({ time: Math.floor(t.ts / 1000 / S.interval) * S.interval + tz, position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
+    // 早于第一根 K 线的成交（K 线历史不全时）不标：库会把它们全挤到第一根上
+    const t0 = all.length ? all[0].t : Infinity;
+    candles.setMarkers(mine.filter((t) => Math.floor(t.ts / 1000 / S.interval) * S.interval >= t0).map((t) => ({ time: Math.floor(t.ts / 1000 / S.interval) * S.interval + tz, position: t.side === 'buy' ? 'belowBar' : 'aboveBar',
       color: t.side === 'buy' ? '#1ecb81' : '#f6465d', shape: t.side === 'buy' ? 'arrowUp' : 'arrowDown', text: t.side === 'buy' ? '买' : '卖' })).sort((a, b) => a.time - b.time));
   }
 }

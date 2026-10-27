@@ -37,11 +37,25 @@ export class GangPadChain extends EventEmitter {
     const id = `${log.transactionHash}:${log.index}`; if (this.seen.has(id)) return; this.seen.add(id);
     if (this.seen.size > 20_000) this.seen = new Set([...this.seen].slice(-10_000));
     this.status.lastBlock = Math.max(this.status.lastBlock, log.blockNumber || 0);
-    const w = log.data.slice(2).match(/.{64}/g) || []; if (w.length < 4) return;
+    const tr = this.parse(log, Date.now()); if (!tr) return;
+    this.status.trades++;
+    this.emit('trade', { ...tr, live });
+  }
+  parse(log, ts) {
+    const w = log.data.slice(2).match(/.{64}/g) || []; if (w.length < 4) return null;
     const buy = log.topics[0] === T_BUY;
     const quote = buy ? f18(w[0]) + f18(w[1]) + f18(w[2]) : f18(w[3]), tokens = buy ? f18(w[3]) : f18(w[0]);
-    if (!(tokens > 0)) return;
-    this.status.trades++;
-    this.emit('trade', { token: ('0x' + log.topics[1].slice(26)).toLowerCase(), trader: ('0x' + log.topics[2].slice(26)).toLowerCase(), side: buy ? 'buy' : 'sell', bnb: quote, tokens, price: quote / tokens, tx: log.transactionHash, ts: Date.now(), live });
+    if (!(tokens > 0)) return null;
+    return { token: ('0x' + log.topics[1].slice(26)).toLowerCase(), trader: ('0x' + log.topics[2].slice(26)).toLowerCase(), side: buy ? 'buy' : 'sell', bnb: quote, tokens, price: quote / tokens, tx: log.transactionHash, ts };
+  }
+  // 一个币在某个 pad 上 [fromBlock, toBlock] 的全部买卖（按出块时间，升序）。给 Gang V3 盘从开盘起重建 K 线用：gang.fun 成交接口没有 V3 盘的成交，
+  // 以前重启后 K 线只从重启那一刻开始，之前的成交（包括自己的买卖标）全挤在第一根上。只读
+  async history(token, pad, fromBlock, toBlock) {
+    const logs = [], topic = ethers.zeroPadValue(token.toLowerCase(), 32);
+    for (let from = fromBlock; from <= toBlock;) { const to = Math.min(toBlock, from + 1999); logs.push(...await this.provider.getLogs({ address: pad, topics: [[T_BUY, T_SELL], topic], fromBlock: from, toBlock: to })); from = to + 1; }
+    const bt = this.blockTs ||= new Map(), need = [...new Set(logs.map((l) => l.blockNumber))].filter((b) => !bt.has(b));
+    for (let i = 0; i < need.length; i += 8) await Promise.all(need.slice(i, i + 8).map((b) => this.provider.getBlock(b).then((x) => { if (x) bt.set(b, x.timestamp * 1000); })));
+    if (bt.size > 50_000) this.blockTs = new Map([...bt].slice(-20_000));
+    return logs.sort((a, b) => a.blockNumber - b.blockNumber || a.index - b.index).map((l) => bt.has(l.blockNumber) && this.parse(l, bt.get(l.blockNumber))).filter(Boolean);
   }
 }

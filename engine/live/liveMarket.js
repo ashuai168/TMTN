@@ -471,12 +471,56 @@ export class LiveMarket extends EventEmitter {
     if (tr.tx) { t.seenTx.add(id); if (t.seenTx.size > 5000) t.seenTx = new Set([...t.seenTx].slice(-2500)); }
     if (tr.name) this.names.set(tr.trader, tr.name);
     if (tr.side === 'buy') t.buys++; else t.sells++;
+    if (t.gangTrack === 'v3') t.volume = (t.volume || 0) + tr.bnb * this.qScale(t);   // V3 内盘成交量：开盘起的从链上历史算（gangV3History），之后的实时累加
     // 链上事件和 gang.fun 接口都把报价币金额按 18 位小数给；BEM（8 位）、XAUt（6 位）这类要乘回 10^(18-dec)
     const k = this.qScale(t);
     const trade = { ts: tr.ts, side: tr.side, bnb: tr.bnb * k, tokens: tr.tokens, price: tr.price * k, trader: tr.trader, tx: tr.tx, name: tr.name };
     this.addTrade(t, trade);
     if (k !== 1 && trade.price > 0 && trade.ts >= (t.lastTradeAt || 0) - 1) { const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }   // 接口的 fdvUsd 也按 18 位算错了，用成交价重算
     if (live) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: trade.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });   // Gang V2 的金额是报价币（GANG / BNCB…），按报价币价格换美元
+  }
+
+  // Gang V3 曲线盘从开盘起的全部成交（pad 的链上 Buy / Sell，真实出块时间）→ 重建内盘 K 线、买卖笔数、成交量，最近 100 笔换成带真实时间的。
+  // 第一次从创建前一点的区块查起，之后只补新区块（15 秒内不重复查）。返回新增的笔数
+  async gangV3History(t) {
+    const h = t._v3Hist ||= { rows: [], block: 0, at: 0 };
+    if (h.busy) return h.busy;
+    if (Date.now() - h.at < 15_000) return 0;
+    h.busy = (async () => {
+      this._gv2 ||= new GangV2(this.provider, null);
+      const { pad } = await this._gv2.curve(t.address);
+      const head = await this.provider.getBlockNumber();
+      let from = h.block + 1;
+      if (!h.block) {   // 按平均出块时间从创建时间倒推起始区块，多往前 600 块
+        const [a, b] = await Promise.all([this.provider.getBlock(head), this.provider.getBlock(head - 10_000)]);
+        const bt = (a.timestamp - b.timestamp) / 10_000 || 0.45, age = Math.max(0, a.timestamp - Math.floor((t.createdAt || (a.timestamp - 86_400) * 1000) / 1000));
+        from = Math.max(1, head - 400_000, head - Math.ceil(age / bt) - 600);
+      }
+      const add = from <= head ? await this.gangPads.history(t.address, pad, from, head) : [];
+      const seen = new Set(h.rows.map((x) => `${x.tx}:${x.side}:${x.tokens}`));
+      for (const x of add) if (!seen.has(`${x.tx}:${x.side}:${x.tokens}`)) h.rows.push(x);
+      h.block = head; h.at = Date.now();
+      this.applyV3History(t);
+      return add.length;
+    })().finally(() => { h.busy = null; });
+    return h.busy;
+  }
+  v3Row(t, x) { const k = this.qScale(t); return { ts: x.ts, side: x.side, bnb: x.bnb * k, tokens: x.tokens, price: x.price * k, trader: x.trader, tx: x.tx }; }
+  applyV3History(t) {
+    const rows = (t._v3Hist?.rows || []).map((x) => this.v3Row(t, x)); if (!rows.length) return;
+    const last = rows.at(-1), tx = new Set(rows.map((x) => `${x.tx}:${x.side}`));
+    // 历史之后才到的实时成交（还没进历史的）补在后面，K 线不会少最新一两笔
+    const live = (t.trades || []).filter((x) => !tx.has(`${x.tx}:${x.side}`) && x.ts > last.ts && !x.dex);
+    t.candles = (t.candles || []).filter((c) => c.dex);
+    let buys = 0, sells = 0, vol = 0;
+    for (const x of [...rows, ...live.slice().reverse()]) { if (x.side === 'buy') buys++; else sells++; vol += x.bnb || 0; if (x.price > 0) this.pushCandle(t, x.ts, x.price, x.bnb || 0); }
+    Object.assign(t, { buys, sells, volume: vol });
+    t.seenTx ||= new Set(); for (const x of rows) t.seenTx.add(`${x.tx}:${x.side}:${x.tokens}`);
+    const q = this.quoteUsd(t), old = new Map((t.trades || []).map((x) => [`${x.tx}:${x.side}`, x]));
+    const keep = rows.slice(-100).map((x) => { const o = old.get(`${x.tx}:${x.side}`); return { ...x, name: o?.name || this.names.peek(x.trader), usd: x.bnb * q, mcapUsd: x.price * 1e9 * q }; });
+    t.trades = [...keep, ...(t.trades || []).filter((x) => !tx.has(`${x.tx}:${x.side}`))].sort((a, b) => b.ts - a.ts).slice(0, 100);
+    for (const x of rows) this.noteFirstBuy(t, x);
+    t.lastTradeAt = Math.max(t.lastTradeAt || 0, last.ts); t._chgAt = 0;
   }
 
   // 报价币不是 18 位小数时，18 位口径的金额 / 价格要乘的倍数（BEM 8 位 = 1e10）
@@ -650,9 +694,11 @@ export class LiveMarket extends EventEmitter {
       } else if (t.source === 'gang') {
         // 选中时拉一次较长的成交记录画 K 线（5 秒内不重复请求）
         // 已发射的不再拉：内盘不会有新成交，成交列表换成外盘的之后重拉会把同一批内盘成交重复记进 K 线成交量
-        if (t.stage !== 'dex' && (!t.gangAt || Date.now() - t.gangAt > 5000)) { t.gangAt = Date.now(); await this.gang.trades(t.address, 200); }
+        // V3 曲线盘：gang.fun 成交接口没有 V3 的成交，K 线 / 成交 / 成交量都从 pad 的链上事件重建（第一次最多等 4 秒，之后只补新区块）
+        if (t.gangTrack === 'v3') await Promise.race([this.gangV3History(t).then((n) => { if (n) this.emit('detail', t.address); }), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
+        else if (t.stage !== 'dex' && (!t.gangAt || Date.now() - t.gangAt > 5000)) { t.gangAt = Date.now(); await this.gang.trades(t.address, 200); }
         // 第一次选中：拉全部成交，从开盘起重建 K 线（也清掉改单位之前按 BNB 记的旧 K 线，全部是报价币单位）；10 分钟重建一次
-        if (!t.gangFullAt || Date.now() - t.gangFullAt > 600_000) {
+        if (t.gangTrack !== 'v3' && (!t.gangFullAt || Date.now() - t.gangFullAt > 600_000)) {
           t.gangFullAt = Date.now();
           const rows = await this.gang.history(t.address).catch(() => null);
           if (rows?.length) { const k = this.qScale(t); t.candles = []; for (const r of rows) if (r.price > 0) this.pushCandle(t, r.ts, r.price * k, r.bnb * k); t._chgAt = 0; }
@@ -780,7 +826,8 @@ export class LiveMarket extends EventEmitter {
     this._all ||= new Map(); const c = this._all.get(t.address);
     if (c && Date.now() - c.at < 60_000) return c;
     let list = [], complete = true;
-    if (t.source === 'gang' && t.gangTrack !== 'v3fair') { const k = this.qScale(t); list = (await this.gang.history(t.address, 20000)).map((x) => (k === 1 ? x : { ...x, price: x.price * k, bnb: x.bnb * k })); }
+    if (t.source === 'gang' && t.gangTrack === 'v3') { await this.gangV3History(t); list = (t._v3Hist?.rows || []).map((x) => this.v3Row(t, x)); }
+    else if (t.source === 'gang' && t.gangTrack !== 'v3fair') { const k = this.qScale(t); list = (await this.gang.history(t.address, 20000)).map((x) => (k === 1 ? x : { ...x, price: x.price * k, bnb: x.bnb * k })); }
     else if (t.source === 'four-agent') list = await this.four.tokenTrades(t.address);
     else if (t.source === 'flap-nft') list = (await this.flapNft.history(t.address, true).catch(() => this.flapNft.trades(t.address))).map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx }));   // 门槛盘：Portal 内盘成交（从创建起）
     else if (t.market) { list = await this.fsiHistory(t); complete = list.length < 9000; }
