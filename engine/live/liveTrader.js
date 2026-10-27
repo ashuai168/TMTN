@@ -16,6 +16,7 @@ import * as openFour from './openFour.js';
 import { GangTrade } from './gangTrade.js';
 import { GangV2 } from './gangV2Pads.js';
 import { V3_TRADE } from './gangV3.js';
+import { FlapNft } from './flapNft.js';
 import { DexDirect } from './dexDirect.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
 import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt } from './quoteRoutes.js';
@@ -42,6 +43,8 @@ export class LiveTrader extends EventEmitter {
     setQuoteLookup((a) => this.quoteSet().has(String(a).toLowerCase()));   // 计价币兑换前的流动性检查只针对计价币（见 quoteRoutes.js）
     this.gangTrade = new GangTrade(market.tradeProvider || market.provider, (o) => this.portal.send(o));
     this.gangV2 = new GangV2(market.tradeProvider || market.provider, (o) => this.portal.send(o));
+    this.flapNft = new FlapNft(market.tradeProvider || market.provider, (o) => this.portal.send(o));   // Flap Portal Agent ID 门槛盘（登记表和行情共用 market.flapNft）
+    this.flapNft.reg = market.flapNft?.reg || this.flapNft.reg;
     this.dex = new DexDirect(market.tradeProvider || market.provider, (o) => this.portal.send(o), this.gangV2);   // 刚发射、币安聚合还没收录新池子时直连 PancakeSwap V2
     this.wallets = [];
     this.positions = new Map();
@@ -385,6 +388,10 @@ export class LiveTrader extends EventEmitter {
   useGangV2(t) { return t.source === 'gang' && this.onCurve(t) && ['v2', 'v3', 'v3fair'].includes(t.gangTrack); }
 
   useOpenFour(t) { return t.source === 'four-agent' && this.onCurve(t); }
+  // Flap 普通 Portal 的 Agent ID 门槛盘：内盘时直接调 Portal.swapExactInput（tx.origin 必须持有门槛 NFT；币安聚合不保证打到内盘）
+  useFlapNft(t) { return t.source === 'flap-nft' && this.onCurve(t); }
+  // 下单前的门槛检查：钱包没有门槛 NFT → 返回「跳过」原因（不发交易）；能交易 / 不是门槛盘 → null
+  async nftBlock(t, w) { return this.useFlapNft(t) && w?.address ? this.flapNft.block(t.address, w.address).catch(() => null) : null; }
 
   usePortal(t, side) { return t.source === 'agent-curve' && t.market && this.onCurve(t) && (side === 'buy' || !DRY_RUN); }
 
@@ -392,6 +399,7 @@ export class LiveTrader extends EventEmitter {
     if (this.useGang(t)) return `Gang 内盘 · ${side === 'buy' ? 'buy' : 'sell'}（BNB，一笔完成）· baw contract-call（每个钱包最多买总量 1%）`;
     if (this.useGangV2(t) && t.gangTrack !== 'v2') return t.gangTrack === 'v3fair' ? 'Gang V3 打新币 · 暂不支持' : `Gang V3 内盘 · ${side === 'buy' ? `BNB→${t.quote}→buy` : `sell→${t.quote}→BNB`}（和 V2 同一套，非原子）${V3_TRADE ? '' : ' · 只报价（GANG_V3_TRADE 未开启）'}`;
     if (this.useGangV2(t)) return side === 'buy' ? `Gang V2 内盘 · BNB→${t.quote}→buy（非原子，2～3 笔交易）· 每个钱包最多 1%` : `Gang V2 内盘 · sell→${t.quote}→BNB（非原子，2～3 笔交易）`;
+    if (this.useFlapNft(t)) return `Flap 内盘（${t.nftGate?.removed ? '门槛已取消' : `${t.nftGate?.name || 'NFT'} 门槛`}）· Portal.swapExactInput ${side === 'buy' ? 'BNB→代币' : '代币→BNB'} · baw contract-call（每个地址最多买总量 2%）`;
     if (this.useOpenFour(t)) return `Four Agent 专属内盘 · OpenFour Core.${side} · baw contract-call（每个钱包最多买总量 1%）`;
     if (this.usePortal(t, side) && side === 'sell') return `Flap Agent Curve · Portal.sell${t.quote === 'BNB' ? '' : ` → ${t.quote} → BNB`}`;
     if (this.usePortal(t, side)) return `Flap Agent Curve · ${t.quote === 'BNB' ? 'Portal.buy（BNB，原子）' : `BNB→${t.quote}→Portal.buyWithQuote（非原子）`}`;
@@ -401,7 +409,8 @@ export class LiveTrader extends EventEmitter {
   // 链上确认是否已发射（迁移）到 PancakeSwap：Gang V2 看曲线的 graduated；其他平台看 PancakeSwap V2 上有没有带储备的池子。
   // 只在内盘报价 / 下单失败后调用。确认了就记 t.migrated 并把状态改成外盘，后面的报价、下单直接走外盘
   async checkMigrated(t) {
-    const yes = t.source === 'gang' && (t.gangTrack === 'v2' || t.gangTrack === 'v3') ? !!(await this.gangV2.curve(t.address)).c.graduated : !!(await this.dex.pool(t.address, t.quoteAddress));
+    const yes = t.source === 'gang' && (t.gangTrack === 'v2' || t.gangTrack === 'v3') ? !!(await this.gangV2.curve(t.address)).c.graduated
+      : t.source === 'flap-nft' ? (await this.flapNft.state(t.address)).status === 4 : !!(await this.dex.pool(t.address, t.quoteAddress));
     if (yes && !t.migrated) { t.migrated = true; t.stage = 'dex'; t.progress = 100; this.quoteCache.clear(); this.market.emit('migrate', this.market.summary(t)); }
     return yes;
   }
@@ -460,6 +469,18 @@ export class LiveTrader extends EventEmitter {
         const q = await this.portal.quoteBuy(t.market, w.address, ethers.parseUnits(quoteOut.toFixed(12), 18));
         const out = +ethers.formatEther(q.shares);
         v = { ...base, amountIn: +amount, out, minOut: out * (1 - slippage / 100), quoteOut, feeQuote: +ethers.formatEther(q.fee), feePct: quoteOut ? (+ethers.formatEther(q.fee) / quoteOut) * 100 : null };
+      } else if (this.useFlapNft(t)) {
+        const nb = await this.nftBlock(t, w);
+        if (side === 'buy') {
+          const q = await this.flapNft.quoteBuy(t.address, w.address, trim(amount)); const out = +ethers.formatEther(q.out);
+          const qa = await this.flapNft.quota(t.address, w.address).catch(() => null);
+          v = { ...base, amountIn: +amount, out, minOut: out * (1 - slippage / 100), feeBnb: null, feePct: this.market.buyFeePct(t), note: nb || (qa?.capped && qa.remaining === 0n ? '已到每个地址 2% 上限' : null), nftBlocked: !!nb };
+        } else {
+          const bal = await this.flapNft.balance(t.address, w.address); const amt = (bal * BigInt(Math.round(Math.min(100, Number(amount)) * 100))) / 10000n;
+          if (amt <= 0n) return { ...base, note: '没有可卖出的余额' };
+          const out = +ethers.formatEther(await this.flapNft.quoteSell(t.address, w.address, amt));
+          v = { ...base, amountIn: +ethers.formatEther(amt), out, minOut: out * (1 - slippage / 100), feeBnb: null, feePct: null, note: nb, nftBlocked: !!nb };
+        }
       } else if (this.useGangV2(t)) {
         const { ethers } = await import('ethers');
         if (side === 'buy') {
@@ -533,6 +554,8 @@ export class LiveTrader extends EventEmitter {
       if (!t) throw new Error('代币不在列表中');
       const w = this.wallet(walletId);
       order.route = this.route(t, side); order.wallet = w.label;
+      // Agent ID 门槛盘：这个钱包没有门槛 NFT 就跳过（狙击 / 跟单 / 一键买都一样，不算失败、不发交易）
+      { const nb = await this.nftBlock(t, w); if (nb) { Object.assign(order, { status: 'failed', skipped: true, reason: nb, latencyMs: Date.now() - order.ts }); this.emit('order', order); return order; } }
 
       if (!order.dryRun) {
         // 同一个币有一单还没结束时不再下第二单；钱包被锁（在等 App 确认）时直接说明，不去碰运气
@@ -544,7 +567,9 @@ export class LiveTrader extends EventEmitter {
       if (side === 'buy') {
         const amt = Number(amount); if (!(amt > 0)) throw new Error('金额无效');
         let r;
-        if (side === 'buy' && t.source === 'agent-curve' && t.market && this.onCurve(t)) {
+        if (this.useFlapNft(t)) {
+          r = await this.flapNft.previewBuy({ wallet: w.address, token: t.address, amountBnb: trim(amt), step });
+        } else if (side === 'buy' && t.source === 'agent-curve' && t.market && this.onCurve(t)) {
           r = await this.portal.previewBuy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, amountBnb: trim(amt), slippage, step });
         } else {
           r = await this.swap({ w, from: BNB_NATIVE, to: t.address, qty: amt, slippage, step });
@@ -555,6 +580,11 @@ export class LiveTrader extends EventEmitter {
       const qty = bal * Math.min(100, Number(amount)) / 100;
       step(`查询余额 ${trim(bal)}`, 0);
       if (!(qty > 0)) throw new Error('没有可卖出的余额');
+      if (this.useFlapNft(t)) {   // 只报价：Portal.quoteExactInput（from = 钱包）
+        const ex = await this.exactBal(w, t.address); const raw = (ex.raw * BigInt(Math.round(Math.min(100, Number(amount)) * 100))) / 10000n;
+        const out = +ethers.formatEther(await this.flapNft.quoteSell(t.address, w.address, raw));
+        return this.finish(order, { dryRun: true, venue: 'Flap Portal.swapExactInput（Agent ID 门槛，未上链）', expected: out }, null, { amountIn: qty, out });
+      }
       const r = await this.swap({ w, from: t.address, to: BNB_NATIVE, qty, slippage, step });
       return this.finish(order, r, null, { amountIn: qty, out: r.expected });
     } catch (e) {
@@ -748,6 +778,7 @@ export class LiveTrader extends EventEmitter {
       r = this.useGangV2(t) ? await this.gangV2.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, payQuote })
         : this.useGang(t) ? await this.gangTrade.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
         : this.useOpenFour(t) ? await this.openFourBuy({ w, t, amt, slippage, step })
+        : this.useFlapNft(t) ? await this.flapNft.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
         : this.usePortal(t, 'buy')
         ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step, payQuote, quoteRate: t.quoteAddress ? await this.gangV2.quoteRate(t.quoteAddress, { stale: 30_000 }).catch(() => null) : null })
         : await this.dexTrade({ t, w, side: 'buy', qty: amt, slippage, step });
@@ -763,6 +794,8 @@ export class LiveTrader extends EventEmitter {
         r = await this.gangTrade.sell({ wallet: w.address, token: t.address, pct, slippage, step });
       } else if (this.useOpenFour(t)) {
         r = await this.openFourSell({ w, t, pct, slippage, step });
+      } else if (this.useFlapNft(t)) {
+        r = await this.flapNft.sell({ wallet: w.address, token: t.address, pct, slippage, step });
       } else if (this.usePortal(t, 'sell')) {
         r = await this.portal.sell({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, pct, slippage, step, toBnb: this.settings.sellToBnb });
       } else {

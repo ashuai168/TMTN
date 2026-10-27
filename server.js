@@ -154,6 +154,12 @@ const signinCmd = (dir, inst) => (dir ? `BINANCE_BAW_DIR=${dir}${inst ? ` BINANC
 const loginView = (l) => (l ? { id: l.id, state: l.state, urlForWeb: l.urlForWeb, pairingCode: l.pairingCode, expireAt: l.expireAt, message: l.message, address: l.address || null } : null);
 const selfInfo = () => ({ slot: WALLET_SLOT, expect: process.env.WALLET_ADDRESS || null, login: loginView(trader.status?.login), authMessage: trader.status?.auth?.message || '', label: WALLET_LABEL, agentId: trader.status?.auth?.agentId || null, address: trader.wallets?.[0]?.address || null, bnb: trader.wallets?.[0]?.bnb ?? null, auth: trader.status?.auth?.state || 'checking', bawDir: BAW_DIR || null, signin: signinCmd(BAW_DIR, process.env.BINANCE_INSTANCE_ID) });
 const walletOn = (slot) => { const v = (trader.settings?.walletOn || {})[slot]; return v === undefined ? slot === WALLET_SLOT : v !== false; };   // 其他钱包默认不参与，要在钱包菜单里打开
+// Agent ID 门槛盘：每个钱包（本后端 + 其他钱包后端的地址）持有几个门槛 NFT。地址列表 60 秒缓存
+let walletAddrs = { at: 0, list: [] };
+async function nftHolders(nft) {
+  if (Date.now() - walletAddrs.at > 60_000) walletAddrs = { at: Date.now(), list: (await walletsView()).filter((w) => w.address || w.expect).map((w) => ({ slot: w.slot, label: w.label, address: w.address || w.expect })) };
+  return Promise.all(walletAddrs.list.map(async (w) => ({ ...w, n: await trader.flapNft.holds(nft, w.address).catch(() => null) })));
+}
 async function walletsView() {
   const out = [{ ...selfInfo(), self: true, reachable: true, on: walletOn(WALLET_SLOT) }];
   for (const p of WALLET_PEERS) {
@@ -289,7 +295,9 @@ app.get('/api/lookup/:a', async (req, res) => {
 });
 app.get('/api/token/:a', async (req, res) => {
   if (LIVE) await market.refresh(req.params.a);
-  const d = market.detail(req.params.a); d ? res.json(d) : res.status(404).json({ error: '代币不存在' });
+  const d = market.detail(req.params.a); if (!d) return res.status(404).json({ error: '代币不存在' });
+  if (LIVE && d.nftGate) d.nftGate = { ...d.nftGate, wallets: await nftHolders(d.nftGate.nft).catch(() => []) };
+  res.json(d);
 });
 // 地址 → 域名本地映射（前端定时拉取，ver 不变就返回空）
 // 代币头像代理缓存：/api/img?u=<url> → data/img/<sha1>.<ext>，命中直接读盘，浏览器端 immutable 长缓存
@@ -298,7 +306,7 @@ fs.mkdirSync(IMG_DIR, { recursive: true });
 const imgInflight = new Map(), imgFail = new Map();
 const IPFS_GW = ['https://flap.mypinata.cloud/ipfs/', 'https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
 // 只代理这些图床（含子域名），只走 https；别的地址一律拒绝（防止被当成访问内网 / 任意网站的跳板）。IMG_HOSTS 可追加（逗号分隔）
-const IMG_HOSTS = ['four.meme', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com', ...String(process.env.IMG_HOSTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)];
+const IMG_HOSTS = ['four.meme', 'space.id', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com', ...String(process.env.IMG_HOSTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)];
 const imgHostOk = (u) => { try { const x = new URL(u); return x.protocol === 'https:' && !x.username && !x.password && (!x.port || x.port === '443') && IMG_HOSTS.some((h) => x.hostname === h || x.hostname.endsWith('.' + h)); } catch { return false; } };
 // 只收位图：按文件头判断真实格式（不信对方的 Content-Type），SVG（可以带脚本）一律不收
 const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' };

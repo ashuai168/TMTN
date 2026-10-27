@@ -230,7 +230,7 @@ export class Tracker extends EventEmitter {
     }
     if (ok.length) task.stats.lastAt = Date.now();
     if (side === 'buy' && ok.length) task.stats.copies = (task.stats.copies || 0) + 1;   // 一次跟买（不管几个钱包成交）算一次
-    const row = this.record(task, ev, ok.length ? 'order' : 'fail', `${side === 'buy' ? `跟买 ${amt} BNB` : `跟卖 ${amt}%`}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : o.status === 'pending' ? '已提交待确认（已计入额度）' : '失败 ' + (o.reason || '')}`).join('；')}`, { results: list.map((o) => ({ wallet: o.wallet, status: o.status, tx: o.tx, reason: o.reason })) });
+    const row = this.record(task, ev, ok.length ? 'order' : list.length && list.every((o) => o?.skipped) ? 'skip' : 'fail',   /* skipped：钱包没有门槛 NFT（Flap Agent ID 门槛盘），没发交易 */ `${side === 'buy' ? `跟买 ${amt} BNB` : `跟卖 ${amt}%`}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : o.status === 'pending' ? '已提交待确认（已计入额度）' : '失败 ' + (o.reason || '')}`).join('；')}`, { results: list.map((o) => ({ wallet: o.wallet, status: o.status, tx: o.tx, reason: o.reason })) });
     if (side === 'buy' && ok.length) this.checkLimit(task, ev, false);
     this.saveTasks(); return row;
   }
