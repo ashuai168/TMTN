@@ -22,10 +22,6 @@
     <kbd>/</kbd>
     <div id="searchResults" class="search-results hidden"></div>
   </label>
-  <div class="pill"><i class="dot y"></i><span class="muted">WSS</span><b id="wssName">…</b><span class="g mono" id="wssMs"></span></div>
-  <div class="pill"><i class="dot g"></i><span class="muted">RPC</span><b id="rpcName">…</b><span class="g mono" id="rpcMs"></span></div>
-  <div class="pill mono muted" id="blockNo">#—</div>
-  <div class="pill mono muted" id="bnbPx">BNB —</div>
   <div class="pill" id="modeBadge">连接中…</div>
   <div class="authpill hidden" id="authPill"><i></i><span></span></div>
   <button class="pill fav-tg" id="favToggle" title="收藏栏（显示 / 隐藏）">⭐</button>
@@ -127,7 +123,7 @@
 </main>
 <!-- 左侧「钱包追踪」面板（覆盖在页面左边，可拖宽度、可关闭）+ 底部工具栏 -->
 <aside class="panel trk-panel hidden" id="trkPanel"><div class="lh trkp-h"><i class="dot y"></i><b class="lh-t">钱包追踪</b><span class="cnt" id="trkpCount">0</span><div class="lctrl"><input id="trkpMin" class="trkp-min" type="number" step="1" min="0" placeholder="≥ $" title="最小金额（美元）：小于这个金额的成交不显示，和追踪页的「最小金额」是同一个设置"/><button class="apill" id="trkpGo" title="打开追踪页（管理地址、跟单）">管理</button><button class="ibtn" id="trkpClose" title="收起这一栏"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div></div><div class="trkp-list" id="trkpList"></div><i class="trkp-drag" id="trkpDrag" title="拖动调整宽度"></i></aside>
-<footer class="botbar" id="botbar"><button class="bb-btn" id="bbTrack" title="打开 / 关闭左侧的钱包追踪面板"><span class="bb-ic">👁</span>钱包追踪<i class="bb-n" id="bbTrackN"></i></button><span class="spacer"></span><a class="bb-btn" id="latencyLink" href="latency.html" target="_blank" rel="noopener" style="text-decoration:none" title="下单耗时：每笔买卖从点击到上链花了多久，卡在哪一步"><span class="bb-ic">⏱</span>下单耗时</a><button class="bb-btn vm-btn" id="vmBtn" title="版本管理">TMTN v3.5</button><div class="vm-pop hidden" id="vmPop"></div></footer>
+<footer class="botbar" id="botbar"><button class="bb-btn" id="bbTrack" title="打开 / 关闭左侧的钱包追踪面板"><span class="bb-ic">👁</span>钱包追踪<i class="bb-n" id="bbTrackN"></i></button><div class="pill"><i class="dot y"></i><span class="muted">WSS</span><b id="wssName">…</b><span class="g mono" id="wssMs"></span></div><div class="pill"><i class="dot g"></i><span class="muted">RPC</span><b id="rpcName">…</b><span class="g mono" id="rpcMs"></span></div><div class="pill mono muted" id="blockNo">#—</div><div class="pill mono muted" id="bnbPx">BNB —</div><span class="spacer"></span><a class="bb-btn" id="latencyLink" href="latency.html" target="_blank" rel="noopener" style="text-decoration:none" title="下单耗时：每笔买卖从点击到上链花了多久，卡在哪一步"><span class="bb-ic">⏱</span>下单耗时</a><button class="bb-btn vm-btn" id="vmBtn" title="版本管理">TMTN v3.5</button><div class="vm-pop hidden" id="vmPop"></div></footer>
 <section class="track hidden" id="track">
   <div class="trk-top"><div class="trk-tabs"><button data-trtab="feed" class="on">追踪动态</button><button data-trtab="copy">跟单</button></div><span class="spacer"></span>
     <span class="muted trk-note">只追踪 Flap / Four / Gang V2 内盘成交（链上订阅）</span><button class="trk-kill" id="trkKill" title="一键暂停所有跟单任务">全部暂停</button></div>

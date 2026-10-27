@@ -1235,3 +1235,7 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .wl-in input { flex: 1; min-width: 0; }
 .wl-ck { display: flex; align-items: center; gap: 6px; margin: 6px 0; cursor: pointer; }
 #searchResults [data-wlook] { color: var(--text); }
+
+/* 网络状态胶囊（WSS / RPC / 区块 / BNB）挪到底栏 */
+.botbar .pill { height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11px; gap: 5px; }
+.botbar .pill.mono { display: flex; }
