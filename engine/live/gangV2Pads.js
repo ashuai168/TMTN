@@ -10,6 +10,7 @@ import { BNB_NATIVE } from './config.js';
 import { getRoute, setRoute, waitReceived } from './quoteRoutes.js';
 
 export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
+const trimBnb = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
 const USDT = '0x55d398326f99059fF775485246999027B3197955';   // BSC USDT（18 位小数）
 const ONDO_RE = /one side must be a supported stablecoin|Unsupported token pair for Ondo/i;
 const WBNB = '0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c';
@@ -196,13 +197,16 @@ export class GangV2 {
     const have = have0;
     if (payQuote != null) { const want = ethers.parseUnits(Number(payQuote).toFixed(Math.min(12, dec)), dec); need = want < have ? want : have; if (need <= 0n) throw new Error('钱包里没有这个盘的报价币'); }
     if (have < need) {
+      // 钱包里已有的报价币先用上，只把差额用 BNB 换（jak 2026-10-27：BNCB 盘优先用钱包里的 BNCB，不够再用 BNB 换）；多换 3% 抵滑点，多的留在钱包
       const before = have; const t0 = Date.now(); fresh = false;
-      if (isWbnb(q)) hashes.push(await this.send({ wallet, to: WBNB, valueWei: ethers.parseEther(String(amountBnb)), inputData: erc20.encodeFunctionData('deposit', []), label: 'BNB→WBNB 包装', step }));
+      const short = Number(amountBnb) * Number(need - have) / Number(need), shortBnb = trimBnb(Math.min(Number(amountBnb), isWbnb(q) ? short : short * 1.03));
+      if (have > 0n) step(`钱包里有 ${ethers.formatUnits(have, dec)} ${qSym}，不够 ${ethers.formatUnits(need, dec)}，用 ${shortBnb} BNB 换差额`, 0);
+      if (isWbnb(q)) hashes.push(await this.send({ wallet, to: WBNB, valueWei: ethers.parseEther(shortBnb), inputData: erc20.encodeFunctionData('deposit', []), label: 'BNB→WBNB 包装', step }));
       else if (await this.needsUsdt(q)) {   // Ondo 类报价币：BNB→USDT→报价币
-        const a = await this.swapWait({ wallet, from: BNB_NATIVE, to: USDT, qty: amountBnb, slippage, step, label: 'BNB→USDT' }); if (a.o.txHash) hashes.push(a.o.txHash);
+        const a = await this.swapWait({ wallet, from: BNB_NATIVE, to: USDT, qty: shortBnb, slippage, step, label: 'BNB→USDT' }); if (a.o.txHash) hashes.push(a.o.txHash);
         const b = await this.swapWait({ wallet, from: USDT, to: q, qty: ethers.formatUnits(a.got, 18), slippage, step, label: 'USDT→报价币' }); if (b.o.txHash) hashes.push(b.o.txHash);
       } else {
-        const sw = await baw.marketSwap({ fromTokenQty: String(amountBnb), fromToken: BNB_NATIVE, toToken: q, slippage });
+        const sw = await baw.marketSwap({ fromTokenQty: shortBnb, fromToken: BNB_NATIVE, toToken: q, slippage });
         if (!sw.orderId) throw new Error('BNB→报价币兑换没有返回 orderId');
         step(`BNB→报价币 已提交 ${sw.orderId}`, Date.now() - t0);
         const { o } = await this.waitArrival({ orderId: sw.orderId, token: q, wallet, before, label: 'BNB→报价币兑换' });
@@ -210,7 +214,7 @@ export class GangV2 {
       }
       let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(300); }
       if (got <= 0n) throw new Error('报价币没有到账，停止后续步骤');
-      need = got; step(`收到 ${ethers.formatUnits(got, dec)} ${qSym}`, Date.now() - t0);
+      need = have + got; step(`收到 ${ethers.formatUnits(got, dec)} ${qSym}`, Date.now() - t0);
     } else step(`钱包里已有足够${qSym}，直接使用 ${ethers.formatUnits(need, dec)}`, 0);
     if (fresh && alw0 >= need) step('授权额度够用，跳过授权', 0);
     else { const ap = await this.ensureAllowance({ wallet, token: q, spender: p, amount: need, label: `授权${qSym}`, step, kind: 'quote', symbol: qSym }); if (ap) hashes.push(ap); fresh = false; }

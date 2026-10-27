@@ -107,7 +107,8 @@ export class Portal {
 
   // 真实买入。BNB 底池：Portal.buy（原子）。其他底池：BNB→报价币 → approve → buyWithQuote（多笔交易，非原子）
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），跳过 BNB→报价币
-  async buy({ wallet, market, quoteAddress, quoteSym, amountBnb, slippage, step, payQuote = null }) {
+  // quoteRate：1 BNB ≈ 多少报价币（liveTrader 传入）。钱包里已有的报价币先用上，够就不换；不够只用 BNB 换差额（jak 2026-10-27）
+  async buy({ wallet, market, quoteAddress, quoteSym, amountBnb, slippage, step, payQuote = null, quoteRate = null }) {
     const hashes = [];
     if (isBnbQuote(quoteAddress)) {
       const value = ethers.parseEther(String(amountBnb));
@@ -125,8 +126,14 @@ export class Portal {
       step(`直接用钱包里的 ${ethers.formatUnits(got, dec)} ${quoteSym}`, 0);
     } else {
       const before = await qc.balanceOf(wallet);
+      const need = quoteRate > 0 ? ethers.parseUnits((Number(amountBnb) * quoteRate).toFixed(Math.min(12, dec)), dec) : 0n;
+      if (need > 0n && before >= need) { got = need; step(`钱包里已有足够 ${quoteSym}，直接使用 ${ethers.formatUnits(need, dec)}`, 0); }
+      else {
+      const short = need > 0n && before > 0n ? Math.min(Number(amountBnb), Number(amountBnb) * Number(need - before) / Number(need) * 1.03) : Number(amountBnb);
+      const qty = short.toFixed(18).replace(/\.?0+$/, '');
+      if (short < Number(amountBnb)) step(`钱包里有 ${ethers.formatUnits(before, dec)} ${quoteSym}，不够 ${ethers.formatUnits(need, dec)}，用 ${qty} BNB 换差额`, 0);
       const t = Date.now();
-      const sw = await baw.marketSwap({ fromTokenQty: String(amountBnb), fromToken: BNB_NATIVE, toToken: quoteAddress, slippage });
+      const sw = await baw.marketSwap({ fromTokenQty: qty, fromToken: BNB_NATIVE, toToken: quoteAddress, slippage });
       if (!sw.orderId) throw new Error(`BNB→${quoteSym} 兑换没有返回 orderId`);
       step(`BNB→${quoteSym} 已提交 ${sw.orderId}`, Date.now() - t);
       const o = await baw.pollOrder(sw.orderId);
@@ -135,6 +142,8 @@ export class Portal {
       got = await this.received(qc, wallet, before);
       if (got <= 0n) throw new Error(`BNB→${quoteSym} 已完成，但余额没有增加，停止后续步骤`);
       step(`收到 ${ethers.formatUnits(got, dec)} ${quoteSym}`, Date.now() - t);
+      if (short < Number(amountBnb)) got += before;   // 加上钱包里原有的那部分
+      }
     }
     for (const spender of [PORTAL, market]) await this.ensureAllowance({ wallet, token: quoteAddress, spender, amount: got, sym: quoteSym, step });
     const q = await this.quoteBuy(market, wallet, got);

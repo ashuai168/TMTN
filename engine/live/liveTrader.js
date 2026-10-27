@@ -534,7 +534,21 @@ export class LiveTrader extends EventEmitter {
   // 这个盘的报价币本身就够（Gang V2 / Flap 报价币盘）→ 直接用它买，省掉 BNB→报价币那一步；
   // 否则挑价值最高、够用的计价币（BNCB / GANG / USDT / FXIon …）先换出差额 BNB 再按原来的路线买
   async fundingPlan(w, t, amt) {
-    if (!(amt > 0) || (w.bnb || 0) >= amt + FUND_GAS) return null;
+    if (!(amt > 0)) return null;
+    const bnb = w.bnb || 0;
+    // 计价币盘（Gang V2 / Flap 非 BNB 盘）：先看钱包里有没有这个盘的报价币（jak 2026-10-27：BNCB 盘优先用钱包里的 BNCB，不够再用 BNB 换）。
+    // 实际怎么付由 gangV2Pads.buy / portal.buy 决定（够就直接用，不够只换差额），这里只算出来给报价和确认框显示
+    const qa = t.quoteAddress && (this.useGangV2(t) || (this.usePortal(t, 'buy') && String(t.quoteAddress).toLowerCase() !== QUOTE_TOKENS.WBNB.toLowerCase())) ? t.quoteAddress : null;
+    if (qa) {
+      const [raw, rate, dec] = await Promise.all([this.gangV2.balanceOf(qa, w.address), this.gangV2.quoteRate(qa, { stale: 30_000 }), this.gangV2.decimals(qa)]).catch(() => [0n, 0, 18]);
+      const n = Number(ethers.formatUnits(raw, dec)), sym = t.quote || '报价币';
+      if (n > 0 && rate > 0) {
+        const vb = n / rate;
+        if (vb >= amt) return { mode: 'direct', token: qa, symbol: sym, qty: amt * rate, bnb, note: `直接用钱包里现有的约 ${fmtQ(amt * rate)} ${sym} 付款（共有 ${fmtQ(n)}），不用 BNB 换` };
+        if (bnb >= (amt - vb) * 1.05 + FUND_GAS) return { mode: 'mixed', token: qa, symbol: sym, qty: n, bnb, note: `先用钱包里现有的 ${fmtQ(n)} ${sym}（约 ${vb.toFixed(4)} BNB），差额约 ${(amt - vb).toFixed(4)} BNB 换成 ${sym}` };
+      }
+    }
+    if (bnb >= amt + FUND_GAS) return null;
     const bnbUsd = this.market.bnbUsd || 0; if (!bnbUsd) return null;
     const set = this.quoteSet(); set.add(USDT.toLowerCase());
     const held = (await baw.walletBalance()).filter((r) => r.address && set.has(String(r.address).toLowerCase()) && Number(r.balance) > 0).map((r) => {
@@ -658,6 +672,7 @@ export class LiveTrader extends EventEmitter {
         if ((w.bnb || 0) < 0.0005) throw new Error(`BNB 只剩 ${(w.bnb || 0).toFixed(5)}，不够付 gas，没法用 ${f.symbol} 付款`);
         order.fund = { mode: f.mode, symbol: f.symbol, token: f.token, qty: f.qty }; step(f.note, 0);
         if (f.mode === 'direct') payQuote = f.qty;
+        else if (f.mode === 'mixed') { /* 买入时先用钱包里的报价币，差额用 BNB 换（gangV2Pads.buy / portal.buy 里做） */ }
         else {
           await this.swapReal({ from: f.token, to: BNB_NATIVE, qty: trim(f.qty), slippage: 2, step, label: `${f.symbol}→BNB（补足买入 BNB）` });
           await this.refreshBalance();
@@ -668,7 +683,7 @@ export class LiveTrader extends EventEmitter {
         : this.useGang(t) ? await this.gangTrade.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
         : this.useOpenFour(t) ? await this.openFourBuy({ w, t, amt, slippage, step })
         : this.usePortal(t, 'buy')
-        ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step , payQuote })
+        ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step, payQuote, quoteRate: t.quoteAddress ? await this.gangV2.quoteRate(t.quoteAddress, { stale: 30_000 }).catch(() => null) : null })
         : await this.swapReal({ from: BNB_NATIVE, to: t.address, qty: amt, slippage, step, label: `BNB→${t.symbol}` });
       if (!p.openedAt) p.openedAt = Date.now();
       p.boughtBnb += amt; p.costBnb += amt; p.amount += r.expected || 0;
