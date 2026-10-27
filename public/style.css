@@ -1187,3 +1187,17 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .snp-top .trk-new.snp-real { background: var(--r); color: #fff; border-color: var(--r); margin-right: 8px; }
 .tag.div.on, .chip.div.on { background: rgba(14, 203, 129, .16); color: #0ecb81; font-weight: var(--fw-strong); cursor: help; }
 .tag.div.off, .chip.div.off { background: rgba(132, 142, 156, .14); color: #848e9c; cursor: help; }
+
+/* CA 旁的 X 搜索按钮 🔍 */
+.xs-btn { display: inline-grid; place-items: center; padding: 0; line-height: 0; background: transparent; border: 1px solid #252d38; color: #9aa3ad; cursor: pointer; border-radius: 0; }
+.xs-btn svg { display: block; pointer-events: none; }
+.xs-btn:hover { color: #e9edf2; border-color: #9aa3ad; }
+.links .xs-head { width: 29px; height: 29px; box-sizing: border-box; }
+.xs-qb { width: 22px; height: 22px; margin-right: 4px; }
+.tc-n .tc-xs { width: 26px; height: 26px; border-color: #2a2a36; border-radius: 6px; margin-left: 4px; color: #6b7280; }
+.xs-hold { width: 18px; height: 18px; margin-left: 4px; vertical-align: -3px; border-color: transparent; }
+.xs-hold svg { width: 11px; height: 11px; }
+/* 头部按钮多了会把代币名挤没：名字至少留 200px、标签放不下就折行，按钮放不下就换到第二行 */
+.th-row .th-main { min-width: 200px; }
+.th-row .th-title { flex-wrap: wrap; row-gap: 4px; }
+.th-row .links { flex-wrap: wrap; justify-content: flex-end; row-gap: 6px; }
