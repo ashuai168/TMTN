@@ -530,7 +530,7 @@ export class LiveTrader extends EventEmitter {
     }).sort((a, b) => b.valueUsd - a.valueUsd);
   }
 
-  // BNB 不够时用钱包里的计价币付款（jak 2026-10-27 要求）。只做规划，不发交易：
+  // BNB 不够时用钱包里的计价币付款。只做规划，不发交易：
   // 这个盘的报价币本身就够（Gang V2 / Flap 报价币盘）→ 直接用它买，省掉 BNB→报价币那一步；
   // 否则挑价值最高、够用的计价币（BNCB / GANG / USDT / FXIon …）先换出差额 BNB 再按原来的路线买
   async fundingPlan(w, t, amt) {
