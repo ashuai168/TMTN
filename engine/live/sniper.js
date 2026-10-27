@@ -14,6 +14,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'node:fs'
 import { ethers } from 'ethers';
 import { dataFile } from './config.js';
 import { GANG_V2_LAUNCHPAD } from './gangChain.js';
+import { V3_TRADE } from './gangV3.js';
 
 const STATE = dataFile('snipe.json'), LOG = dataFile('snipe-log.jsonl');
 const readJson = (f, d) => { try { return JSON.parse(readFileSync(f, 'utf8')); } catch { return d; } };
@@ -101,14 +102,16 @@ export class Sniper extends EventEmitter {
     if (!this.enabled) return;
     const p = this.params, t0 = Date.now(), delay = (it.seenAt - it.createdAt * 1000) / 1000;
     if (this.done[it.address]) return;
-    if (it.track !== 'v2') return this.record(it, 'skip', 'Gang 老盘（0x315B）不狙');
+    if (it.track === 'v3fair') return this.record(it, 'skip', 'Gang V3 打新币（固定价认购）不狙');
+    if (it.track === 'v3' && !V3_TRADE) return this.record(it, 'skip', 'Gang V3 新盘：真实买卖还没开启（GANG_V3_TRADE=1），只记录');
+    if (it.track !== 'v2' && it.track !== 'v3') return this.record(it, 'skip', 'Gang 老盘（0x315B）不狙');
     if (!p.quotes.includes('*') && !p.quotes.includes(String(it.quoteSymbol || '').toUpperCase())) return this.record(it, 'skip', `报价币 ${it.quoteSymbol} 不在狙击范围（${p.quotes.join(' / ')}）`);
     if (delay > p.maxDelaySec) return this.record(it, 'skip', `发现太晚（出块后 ${delay.toFixed(1)} 秒 > ${p.maxDelaySec} 秒）`);
     if (this.isBlocked({ address: it.address, creator: it.creator })) return this.record(it, 'skip', '代币或开发者在屏蔽列表里');
     const td = this.today();
     if (p.maxTokensPerDay > 0 && td.tokens >= p.maxTokensPerDay) return this.record(it, 'skip', `今天已狙 ${td.tokens} 个（上限 ${p.maxTokensPerDay}）`);
     // 曲线状态 → 买 N% 要多少报价币 → 换成 BNB
-    const gv = this.trader.gangV2; gv.pads.set(it.address, GANG_V2_LAUNCHPAD);   // 新盘都建在 0x1B8F 上，下单时不用再挨个 pad 探测
+    const gv = this.trader.gangV2; gv.pads.set(it.address, it.pad || GANG_V2_LAUNCHPAD);   // 新盘都建在 0x1B8F 上，下单时不用再挨个 pad 探测
     const { c } = await gv.curve(it.address);
     const soldPct = Number((BigInt(c.sold) * 10000n) / SUPPLY) / 100;
     const tokens = (SUPPLY * BigInt(Math.round(p.pct * 100))) / 10000n;

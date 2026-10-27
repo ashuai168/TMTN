@@ -11,6 +11,7 @@ import { GangChain, QUOTE_DEC } from './gangChain.js';
 import { FlapChain } from './flapChain.js';
 import { GangPadChain } from './gangPadChain.js';
 import { GangV2 } from './gangV2Pads.js';
+import { V3_TRADE } from './gangV3.js';
 import { DexFeed, dexBars, compactCandles } from './dexFeed.js';
 import { NameCache } from './names.js';
 import { ShrineFeeds, tokenInfo } from './shrine.js';
@@ -206,7 +207,7 @@ export class LiveMarket extends EventEmitter {
     const [name, symbol] = await Promise.all([erc.name().catch(() => ''), erc.symbol().catch(() => '?')]);
     const q = String(c.quote).toLowerCase(), quoteSymbol = q === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' || c.quote === ethers.ZeroAddress ? 'BNB' : await this.gangChain.symbolOf(q);
     if (this.get(address)) return this.get(address);   // 读链期间订阅已经收录
-    this.upsertGang({ address: address.toLowerCase(), name, symbol, creator: String(c.creator).toLowerCase(), createdAt: Math.floor(Date.now() / 1000), graduated: !!c.graduated, raisedQuote: 0, progressPct: 0, quoteSymbol, quoteAddress: q, track: 'v2', taxed: !!c.taxed }, false);
+    this.upsertGang({ address: address.toLowerCase(), name, symbol, creator: String(c.creator).toLowerCase(), createdAt: Math.floor(Date.now() / 1000), graduated: !!c.graduated, raisedQuote: 0, progressPct: 0, quoteSymbol, quoteAddress: q, track: c.v3 ? 'v3' : 'v2', taxed: !!c.taxed }, false);
     return this.get(address);
   }
 
@@ -216,11 +217,11 @@ export class LiveMarket extends EventEmitter {
     const t = this.base(it.address);
     const qa = String(it.quoteAddress || '').toLowerCase();
     if (t._qDec == null && qa && QUOTE_DEC[qa]) t._qDec = QUOTE_DEC[qa];   // 已知的非 18 位报价币（XAUt 6 位、BEM 8 位）马上用，不等链上曲线
-    else if (t._qDec == null && qa && it.track === 'v2' && qa !== '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c') { this._gv2 ||= new GangV2(this.provider, null); this._gv2.decimals(qa).then((d) => { t._qDec ??= d; }).catch(() => {}); }
+    else if (t._qDec == null && qa && (it.track === 'v2' || it.track === 'v3') && qa !== '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c') { this._gv2 ||= new GangV2(this.provider, null); this._gv2.decimals(qa).then((d) => { t._qDec ??= d; }).catch(() => {}); }
     const raised = Number(it.raisedQuote ?? it.raisedBnb) || 0, pct = Number(it.progressPct) || 0;
     Object.assign(t, {
       source: 'gang', platform: 'gang', agentExclusive: true, symbol: it.symbol, name: it.name, quote: it.quoteSymbol || 'BNB', quoteAddress: it.quoteAddress || null, creator: it.creator,
-      creatorName: it.creatorHandle || null, feeBps: 100, sellFeeBps: 100, stage: it.graduated ? 'dex' : 'curve', migratedAt: it.graduatedAt ? it.graduatedAt * 1000 : t.migratedAt, raised: t._qDec && t._qDec !== 18 ? t.raised : raised, progress: pct, target: t._qDec && t._qDec !== 18 ? t.target : it.gradAmtQuote || (pct > 0 ? Math.round((raised / (pct / 100)) * 10) / 10 : (t.target || 15)),   /* 非 18 位报价币（XAUt）接口按 18 位给，数会小 1e12 倍，用链上读的 */ gangTrack: it.track || 'v1', remaining: t._v2Rem ?? null,   // 剩余可售：V2 从合约读，读到之前 / 老盘未知 = null（页面显示「—」）
+      creatorName: it.creatorHandle || null, feeBps: 100, sellFeeBps: 100, stage: it.graduated ? 'dex' : 'curve', migratedAt: it.graduatedAt ? it.graduatedAt * 1000 : t.migratedAt, raised: t._qDec && t._qDec !== 18 ? t.raised : raised, progress: pct, target: t._qDec && t._qDec !== 18 ? t.target : it.gradAmtQuote || (pct > 0 ? Math.round((raised / (pct / 100)) * 10) / 10 : (t.target || 15)),   /* 非 18 位报价币（XAUt）接口按 18 位给，数会小 1e12 倍，用链上读的 */ gangTrack: /^v3/.test(t.gangTrack || '') ? t.gangTrack : it.track || 'v1' /* 链上认出的 V3 不被接口的 v2 覆盖 */, remaining: t._v2Rem ?? null,   // 剩余可售：V2 从合约读，读到之前 / 老盘未知 = null（页面显示「—」）
      
       price: (t._qDec && t._qDec !== 18 ? 0 : Number(it.priceQuote ?? it.priceBnb)) || t.price, mcapUsd: (t._qDec && t._qDec !== 18 ? 0 : Number(it.fdvUsd)) || t.mcapUsd || 0, holders: it.holders ?? null,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0 volume: Number(it.volume24hBnb) || 0, pair: it.pair || null, tradeCount: it.trades || 0,
     });
@@ -245,13 +246,13 @@ export class LiveMarket extends EventEmitter {
       if (ts != null) { it.createdAt = ts; const t = this.get(it.address); if (t && it.fromChain && !apiFirst) t.createdAt = ts * 1000; }
       const lat = it.seenAt - it.createdAt * 1000;
       (this.gangLat ||= []).unshift({ symbol: it.symbol, address: it.address, block: it.block, createdAt: it.createdAt * 1000, seenAt: it.seenAt, latencyMs: lat, viaApiFirst: apiFirst }); this.gangLat.length = Math.min(this.gangLat.length, 20);
-      console.log(`[Gang 链上] 新盘 ${it.symbol}（${it.track === 'v2' ? 'V2 · ' + it.quoteSymbol : '老盘 · BNB'}）区块 ${it.block}，出块后 ${lat}ms 发现${apiFirst ? '（接口已先收录）' : ''}`);
+      console.log(`[Gang 链上] 新盘 ${it.symbol}（${it.track === 'v3' ? 'V3 · ' + it.quoteSymbol : it.track === 'v3fair' ? 'V3 打新 · ' + it.quoteSymbol : it.track === 'v2' ? 'V2 · ' + it.quoteSymbol : '老盘 · BNB'}）区块 ${it.block}，出块后 ${lat}ms 发现${apiFirst ? '（接口已先收录）' : ''}`);
     });
     if (this.tokens.has(this.key(it.address))) return;
     this.gang.seen.set(it.address, -1);
     this.upsertGang(it, true);
     const t = this.get(it.address);
-    if (t && it.track === 'v2') this.gangV2Curve(t).then(() => { if (!(t.price > 0) && t.launchPrice > 0) { t.price = t.launchPrice; const q = this.quoteUsd(t); if (q && !(t.mcapUsd > 0)) t.mcapUsd = t.price * 1e9 * q; } }).catch(() => {});
+    if (t && (it.track === 'v2' || it.track === 'v3')) this.gangV2Curve(t).then(() => { if (!(t.price > 0) && t.launchPrice > 0) { t.price = t.launchPrice; const q = this.quoteUsd(t); if (q && !(t.mcapUsd > 0)) t.mcapUsd = t.price * 1e9 * q; } }).catch(() => {});
   }
 
   // 链上 Flap 成交（virtualBuyFill / virtualSellFill）：金额是报价币单位，和其他平台一致；按 tx + 方向去重（shrine 若也推了同一笔不会重复）
@@ -420,7 +421,7 @@ export class LiveMarket extends EventEmitter {
   // 选中代币时拉详情：Agent 曲线走 Reader + fsi，其它走 shrine
   async refresh(address) {
     const t = this.get(address); if (!t) return;
-    if (t.source === 'gang' && t.gangTrack === 'v2') await this.gangV2Curve(t).catch(() => {});
+    if (t.source === 'gang' && (t.gangTrack === 'v2' || t.gangTrack === 'v3')) await this.gangV2Curve(t).catch(() => {});
     try {
       if (t.market && t.source === 'agent-curve') {
         const [d, trades, ticks] = await Promise.all([this.curve.detail(t.market), fsi.fetchTrades(t.market, 100).catch(() => []), fsi.fetchTicks(t.market, 200).catch(() => [])]);
@@ -507,7 +508,7 @@ export class LiveMarket extends EventEmitter {
       remaining: t.remaining, holders: t.holders, buys: t.buys, sells: t.sells, volume: t.volume, dexVol24: t.dexVol24 ?? null, dexBuys24: t.dexBuys24 ?? null, dexSells24: t.dexSells24 ?? null, dexCountMin: t.dexCountMin || 0, buyTax: t.buyTax, sellTax: t.sellTax,
       buyFeePct: t.source === 'four-agent' && t.feeBps == null ? null : this.buyFeePct(t), sellFeePct: this.sellFeePct(t), antiSniperPct: t.antiSniperPct || 0, antiSniper: !!t.antiSniper, lastTradeAt: t.lastTradeAt || 0, realToken: t.realToken !== false,
       chg: this.change(t),
-      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, gangDiv: t.gangDiv || null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
+      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, gangDiv: t.gangDiv || null, gangV3: t.gangV3 || null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
     };
   }
 
@@ -527,7 +528,8 @@ export class LiveMarket extends EventEmitter {
       const q = vq + real, tokRes = (vq * VT) / q;   // 恒定乘积：现价 = 报价币储备 / 代币储备
       if (tokRes > 0n) { t.price = Number(ethers.formatUnits(q, dec)) / Number(ethers.formatEther(tokRes)); const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }
     }
-    if (t.gangDiv?.taxed == null) t.gangDiv = { taxed: !!c.taxed, taxBps: c.taxed ? 100 : 0, vault: null, stats: null };   // 新盘接口还没收录时，按合约 curves().taxed 先判断分红
+    if (c.v3) { t.gangV3 = { ...c.v3, trade: V3_TRADE }; t.gangDiv = { taxed: c.taxed && c.v3.dividendBps > 0, taxBps: Math.max(c.v3.buyTaxBps, c.v3.sellTaxBps), vault: null, stats: t.gangDiv?.stats || null }; }   // V3：毕业后外盘收税，分红比例 > 0 才分红
+    else if (t.gangDiv?.taxed == null) t.gangDiv = { taxed: !!c.taxed, taxBps: c.taxed ? 100 : 0, vault: null, stats: null };   // 新盘接口还没收录时，按合约 curves().taxed 先判断分红
     t._v2Rem = c.graduated ? 0 : Math.max(0, Number(ethers.formatEther(soldAtGrad > sold ? soldAtGrad - sold : 0n)));
     t.remaining = t._v2Rem; t._v2At = Date.now(); t._chgAt = 0;
   }

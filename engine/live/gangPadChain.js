@@ -6,11 +6,13 @@ import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
 import { NODEREAL_WSS } from './config.js';
 import { WsLogs, PUBLIC_WSS } from './rpc.js';
+import { V3_PADS, v3Events } from './gangV3.js';
 
 const PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
 const T_BUY = '0x6e59ac1e0b7a4b5c385ffff3601e05644c2ed9d875089895ed1b88e9cf8c632a';
 const T_SELL = '0x00055e00ae56ca9d108326c7fd1ab1e6380614100b19bf3e4d1411240a726d86';
-const FILTER = { address: PADS, topics: [[T_BUY, T_SELL]] };
+// Gang V3 内盘的 Buy / Sell 事件 topic 和字段顺序都和 V2 一样（tax 恒为 0），发现 V3 内盘后加进地址列表、重连订阅
+const FILTER = { address: [...PADS, ...V3_PADS], topics: [[T_BUY, T_SELL]] };
 const f18 = (w) => Number(ethers.formatEther(BigInt('0x' + w)));
 
 export class GangPadChain extends EventEmitter {
@@ -19,6 +21,7 @@ export class GangPadChain extends EventEmitter {
     try { this.status.lastBlock = await this.provider.getBlockNumber(); } catch (e) { this.status.pollError = e.shortMessage || e.message; }
     this.sub = new WsLogs({ label: 'gang成交', urls: [...NODEREAL_WSS, PUBLIC_WSS], filters: [FILTER], onLog: (l) => this.handle(l, true), status: this.status }).start();
     this.pollLoop();
+    v3Events.on('pad', (a) => { if (!FILTER.address.some((x) => x.toLowerCase() === a)) { FILTER.address.push(a); if (this.sub) { this.sub.drop(this.sub.ws); this.sub.connect(0); } } });
   }
   async pollLoop() {
     for (;;) {

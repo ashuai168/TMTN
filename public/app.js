@@ -103,6 +103,9 @@ const divTip = (t) => {
     + (d.vault ? `\n分红金库：${d.vault}` : '')
     + (d.stats ? `\n累计已分 ${n(st.total)} ${q}${u(st.totalUsd)} · 近 7 天 ${n(st.d7)} ${q}${u(st.d7Usd)}\n每持 1 万枚累计 ${n(st.per10k)} ${q} · 参与分红持仓 ${K(Number(st.totalShares) || 0)} 枚${Number(st.apr) > 0 ? `\n年化估算 ${(st.apr * 100).toFixed(0)}%（近 7 天折算，不代表未来）` : ''}` : '');
 };
+// Gang V3（GangLaunchpad）：曲线和 V2 一样，毕业后外盘收买卖税；默认只报价
+const v3Tip = (t) => { const v = t.gangV3; return v ? `Gang V3 税收币：内盘只收 1% 手续费；毕业后外盘买税 ${v.buyTaxBps / 100}% / 卖税 ${v.sellTaxBps / 100}%，其中分红 ${v.dividendBps / 100}%${v.trade ? '' : '。真实买卖未开启（只报价）'}` : 'Gang V3'; };
+const gangKind = (t) => (t.gangTrack === 'v3' ? `<i class="tag gangy v3" title="${esc(v3Tip(t))}">V3${t.gangV3 && !t.gangV3.trade ? ' · 只报价' : ''}</i>` : t.gangTrack === 'v3fair' ? '<i class="tag gangy v3" title="Gang V3 打新：固定价认购，满 1 万份开盘；暂不支持在这里买卖">V3 打新</i>' : t.gangTrack === 'v2' && t.stage === 'curve' ? '<i class="tag gangy">Gang V2</i>' : '<i class="tag gangy">Gang 内盘</i>');
 const divChip = (t, cls = 'tag') => (t.gangDiv?.taxed == null ? '' : `<i class="${cls} div ${t.gangDiv.taxed ? 'on' : 'off'}" title="${esc(divTip(t))}">${t.gangDiv.taxed ? '分红' : '不分红'}</i>`);
 // 买入再卖出的预计损耗（不含价格变动）：买入费 + 卖出费（按买入后剩下的部分）+ 约 0.00017 BNB gas
 const roundTrip = (t, amount) => { const b = t.buyFeePct, s = t.sellFeePct; if (b == null || s == null || !(amount > 0)) return null; const left = amount * (1 - b / 100); const cost = amount * b / 100 + left * s / 100 + 0.00017; return { cost, pct: (cost / amount) * 100 }; };
@@ -113,7 +116,7 @@ const chgTxt = (v) => (v == null || !isFinite(v) ? '<span class="muted">—</spa
 const tagsHtml = (t) => {
   const st = t.stage === 'curve' ? '<i class="tag b">内盘</i>' : t.stage === 'dex' ? '<i class="tag g">已迁移</i>' : '<i class="tag gray">已撤池</i>';
   const kind = t.platform === 'four' ? (t.agentExclusive !== false ? '<i class="tag r">Agent 专属</i>' : '<i class="tag r">Four 内盘</i>')
-    : t.platform === 'gang' ? (t.gangTrack === 'v2' && t.stage === 'curve' ? '<i class="tag gangy">Gang V2</i>' : '<i class="tag gangy">Gang 内盘</i>')
+    : t.platform === 'gang' ? gangKind(t)
     : (t.source && t.source !== 'agent-curve' ? '<i class="tag p">Flap 内盘</i>' : '<i class="tag p">Agent 曲线</i>');
   return st + kind + `<i class="tag y">${t.quote} 池</i>` + taxChip(t) + divChip(t) + (t.chg?.h1 != null ? `<i class="tag chg" title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</i>` : '');
 };
@@ -870,7 +873,7 @@ function renderMyPos(t) {
   const ps = S.positions.filter((p) => p.token === t.address);
   const sum = (k) => ps.reduce((a, p) => a + (p[k] || 0), 0);
   const hr = LIVE() ? holdRow(t) : null;   /* 实盘：和一键买卖、我的持仓用同一份持仓快照（报价币已按 BNB 价换算成美元） */
-  const plat = t.platform === 'four' ? 'Four · Agent ID 专属' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? `Gang V2 · 计价 ${esc(t.quote || '')}` : 'Gang · Agent ID 专属') : 'Flap · Agent 曲线';
+  const plat = t.platform === 'four' ? 'Four · Agent ID 专属' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `Gang ${t.gangTrack === 'v3fair' ? 'V3 打新' : 'V3'} · 计价 ${esc(t.quote || '')}` : t.gangTrack === 'v2' ? `Gang V2 · 计价 ${esc(t.quote || '')}` : 'Gang · Agent ID 专属') : 'Flap · Agent 曲线';
   const tag = LIVE() ? `${plat} · 资格以合约为准` : t.platform === 'four' ? `Four：${eligible(wallet(S.activeWallet), t).ok ? '钱包已在白名单' : '钱包不在白名单'}` : `${plat}`;
   const usd = (v) => (v == null ? '—' : '$' + v.toFixed(2)), sgn = (v) => (v == null ? '—' : `<b class="${v >= 0 ? 'g' : 'r'}">${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}</b>`);
   let amt, rows;
@@ -898,9 +901,9 @@ function renderInfo(t) {
   if (!t) { $('#tokenInfo').innerHTML = ''; return; }
   const el = eligible(wallet(S.activeWallet), t);
   const box = (k, v) => `<div class="addrbox"><span>${k}</span><b data-copy="${v}" title="点击复制">${v}</b></div>`;
-  $('#tokenInfo').innerHTML = `<h4>${t.platform === 'four' ? 'Binance Agent 专属代币信息' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? 'Gang V2 代币信息' : 'Gang 代币信息') : 'Flap Agent 曲线代币信息'}</h4>
+  $('#tokenInfo').innerHTML = `<h4>${t.platform === 'four' ? 'Binance Agent 专属代币信息' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? 'Gang V3 代币信息' : t.gangTrack === 'v2' ? 'Gang V2 代币信息' : 'Gang 代币信息') : 'Flap Agent 曲线代币信息'}</h4>
     ${box('代币', t.address)}${t.vault ? box(LIVE() ? 'Market' : 'Vault', t.vault) : ''}${t.creator ? box('创建者', t.creator) : ''}
-    <div class="kv"><span>平台</span><b class="sans">${t.platform === 'four' ? 'OpenFour（four.meme）' : t.platform === 'gang' ? (t.gangTrack === 'v2' ? `gang.fun V2（报价币 ${esc(t.quote)}，买卖要先换币，非原子）` : 'gang.fun（Agent ID 专属，合约 0x315B…23A7）') : 'Flap（flap.sh）'}</b></div>
+    <div class="kv"><span>平台</span><b class="sans">${t.platform === 'four' ? 'OpenFour（four.meme）' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `gang.fun V3（GangLaunchpad，报价币 ${esc(t.quote)}）${t.gangV3 ? ' · ' + esc(v3Tip(t)) : ''}` : t.gangTrack === 'v2' ? `gang.fun V2（报价币 ${esc(t.quote)}，买卖要先换币，非原子）` : 'gang.fun（Agent ID 专属，合约 0x315B…23A7）') : 'Flap（flap.sh）'}</b></div>
     <div class="kv"><span>预设</span><b class="sans">${t.preset} <span class="muted mono">${t.presetId}</span></b></div>
     <div class="kv"><span>计价资产</span><b>${t.quote}${t.quote !== 'BNB' ? '（Core 同笔兑换）' : ''}</b></div>
     <div class="kv"><span>状态</span><b class="sans ${t.stage === 'curve' ? 'b' : t.stage === 'dex' ? 'g' : 'r'}">${t.stage === 'curve' ? `内盘 ${t.progress.toFixed(2)}%` : t.stage === 'dex' ? '已迁移 PancakeSwap' : '已撤池'}</b></div>

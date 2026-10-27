@@ -10,12 +10,15 @@ import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
 import { NODEREAL_WSS } from './config.js';
 import { WsLogs, PUBLIC_WSS } from './rpc.js';
+import { T_V3_CREATED, T_FAIR_CREATED, isV3Pad, verifyV3Pad } from './gangV3.js';
 
 export const GANG_OLD_PAD = '0x315Ba2e8952D06094CC636b2B84229FA32fb23A7';
 export const GANG_V2_LAUNCHPAD = '0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E';
 const T_OLD = '0xe57a519fe6a031fac5d360f4b8ce246c86dd280b40dc37b68c0a7cc7394ef9c0';
 const T_V2 = '0xd23a447045c377a966a79f59983bae21db7b92fead61df8ace4aea5628043791';
 const FILTER = { address: [GANG_OLD_PAD, GANG_V2_LAUNCHPAD], topics: [[T_OLD, T_V2]] };
+// Gang V3（GangLaunchpad）主网地址还没公布：按新 Created topic 订阅全链，发出事件的合约在 handle 里核对是不是官方的（gangV3.verifyV3Pad）
+const FILTER_V3 = { topics: [[T_V3_CREATED, T_FAIR_CREATED]] };
 const coder = ethers.AbiCoder.defaultAbiCoder();
 const KNOWN_QUOTES = { '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c': 'BNB', '0x0c6302401aa5325c2e36f170f52c00b1d220b405': 'GANG', '0x4902c5ebc598265ed2212b559b042de8a5eeec3f': 'BNCB', '0x21caef8a43163eea865baee23b9c2e327696a3bf': 'XAUt', '0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a': 'BEM' };
 // 不是 18 位小数的报价币（gang.fun 接口和成交事件都按 18 位给数，要按这里换算）；不在表里的新报价币由 liveMarket 读链上 decimals()
@@ -32,7 +35,7 @@ export class GangChain extends EventEmitter {
 
   async start() {
     try { this.status.lastBlock = await this.provider.getBlockNumber(); } catch (e) { this.status.lastError = e.shortMessage || e.message; }
-    this.sub = new WsLogs({ label: 'gang', urls: [...NODEREAL_WSS.slice().reverse(), PUBLIC_WSS] /* 和 Four 的订阅错开，先用另一个 key */, filters: [FILTER], onLog: (log) => this.handle(log).catch(() => {}), status: this.status }).start();
+    this.sub = new WsLogs({ label: 'gang', urls: [...NODEREAL_WSS.slice().reverse(), PUBLIC_WSS] /* 和 Four 的订阅错开，先用另一个 key */, filters: [FILTER, FILTER_V3], onLog: (log) => this.handle(log).catch(() => {}), status: this.status }).start();
     this.status.mode = 'wss';
     this.pollLoop();
   }
@@ -48,6 +51,7 @@ export class GangChain extends EventEmitter {
         while (from <= head) {
           const to = Math.min(head, from + 1999);
           for (const log of await this.provider.getLogs({ ...FILTER, fromBlock: from, toBlock: to })) await this.handle(log);
+          for (const log of await this.provider.getLogs({ ...FILTER_V3, fromBlock: from, toBlock: to }).catch(() => [])) await this.handle(log);   // 不带地址的查询有的节点不支持，失败就只靠订阅
           this.status.lastBlock = to; from = to + 1;
         }
         if (!this.sub?.live) this.status.pollError = null;
@@ -59,7 +63,9 @@ export class GangChain extends EventEmitter {
     const token = addr(log.topics[1]).toLowerCase();
     if (this.seen.has(token)) return; this.seen.add(token);
     const seenAt = Date.now();
-    const v2 = log.topics[0] === T_V2;
+    const v3 = log.topics[0] === T_V3_CREATED || log.topics[0] === T_FAIR_CREATED, fair = log.topics[0] === T_FAIR_CREATED;
+    if (v3 && !isV3Pad(log.address) && !(await verifyV3Pad(this.provider, log.address, token))) return;   // 第一次看到这个内盘要核对 owner（一次 eth_call，约 0.2 秒）
+    const v2 = log.topics[0] === T_V2 || v3;   // V3 事件的前几个字段（topics = [token, creator, quote]，data 开头 name / symbol / logo）和 V2 一样
     let name = '', symbol = '', logo = null, quoteAddress = null;
     try {
       if (v2) { const d = coder.decode(['string', 'string', 'string'], log.data); [name, symbol, logo] = [d[0], d[1], d[2] || null]; quoteAddress = addr(log.topics[3]).toLowerCase(); }
@@ -74,7 +80,7 @@ export class GangChain extends EventEmitter {
     this.status.found++; this.status.lastAt = seenAt; this.status.lastBlock = Math.max(this.status.lastBlock, log.blockNumber);
     const it = {
       address: token, name, symbol, creator: addr(log.topics[2]).toLowerCase(), createdAt, graduated: false, raisedQuote: 0, progressPct: 0,
-      quoteSymbol, quoteAddress: v2 ? quoteAddress : null, logo: logo ? new URL(logo, 'https://gang.fun').href : null, track: v2 ? 'v2' : 'v1',
+      quoteSymbol, quoteAddress: v2 ? quoteAddress : null, logo: logo ? new URL(logo, 'https://gang.fun').href : null, track: fair ? 'v3fair' : v3 ? 'v3' : v2 ? 'v2' : 'v1', pad: v3 ? log.address.toLowerCase() : null,
       fromChain: true, block: log.blockNumber, tx: log.transactionHash, seenAt, timeP,
     };
     this.emit('token', it);

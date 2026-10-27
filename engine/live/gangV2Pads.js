@@ -8,6 +8,7 @@ import * as baw from './baw.js';
 import { capFor, capLabel, sendApproval } from './approvals.js';
 import { BNB_NATIVE } from './config.js';
 import { getRoute, setRoute, waitReceived } from './quoteRoutes.js';
+import { V3_PADS, isV3Pad, v3PadAbi, normCurve, assertV3Trade } from './gangV3.js';   // Gang V3：曲线公式、buy / sell 和 V2 相同，curves() 多两个字段
 
 export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
 const trimBnb = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
@@ -35,10 +36,15 @@ export class GangV2 {
   // 这个币在哪个 pad 上（creator ≠ 0 的那个），带曲线状态
   async curve(token) {
     const p = this.pads.get(token.toLowerCase());
-    const tryPad = async (a) => { const c = await this.call(a, pad, 'curves', [token]).catch(() => null); return c && c.creator !== ethers.ZeroAddress ? c : null; };
+    const tryPad = async (a) => {
+      if (isV3Pad(a)) { const c = await this.call(a, v3PadAbi, 'curves', [token]).catch(() => null); return c && c.creator !== ethers.ZeroAddress ? normCurve(c) : null; }   // V3：c.v3 = 买卖税 / 分红比例
+      const c = await this.call(a, pad, 'curves', [token]).catch(() => null); return c && c.creator !== ethers.ZeroAddress ? c : null;
+    };
     if (p) { const c = await tryPad(p); if (c) return { pad: p, c }; }
-    for (const a of V2_PADS) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return { pad: a, c }; } }
-    throw new Error('不是 gang.fun V2 合约上的代币');
+    for (const a of [...V2_PADS, ...V3_PADS]) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return { pad: a, c }; } }
+    // V3 内盘上的「打新」币（kindOf = 2）没有曲线：固定价认购，本工具不做
+    for (const a of V3_PADS) { const k = await this.call(a, v3PadAbi, 'kindOf', [token]).then((x) => x[0]).catch(() => 0n); if (k === 2n) throw Object.assign(new Error('这是 Gang V3「打新」币（固定价认购，不是曲线），暂不支持在这里买卖，请到 gang.fun 操作'), { code: 'V3_FAIR' }); }
+    throw new Error('不是 gang.fun V2 / V3 合约上的代币');
   }
 
   quoteToken(c) { return isWbnb(c.quote) ? WBNB : c.quote; }
@@ -190,7 +196,7 @@ export class GangV2 {
   // 真实买入：先拿报价币（已有足够的就直接用）→ 授权 → 报价 + 模拟 → buy
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
   async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
-    const { pad: p, c } = await this.curve(token); this.notGraduated(c); const q = this.quoteToken(c); const hashes = [];
+    const { pad: p, c } = await this.curve(token); this.notGraduated(c); if (c.v3) assertV3Trade();   // V3 默认只报价 const q = this.quoteToken(c); const hashes = [];
     // 并行读（狙击要快）：小数位、报价币余额、授权额度、剩余额度一次读完；钱包里报价币够用时后面不再重读曲线
     const [dec, have0, alw0, room0] = await Promise.all([isWbnb(q) ? 18 : this.decimals(q), this.balanceOf(q, wallet), this.call(q, erc20, 'allowance', [wallet, p]).then((x) => x[0]).catch(() => 0n), this.call(p, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null)]);
     const qSym = isWbnb(q) ? 'WBNB' : '报价币'; let fresh = true;
@@ -226,13 +232,13 @@ export class GangV2 {
     if (r.tokens <= 0n) throw new Error('报价为 0：可能已到每个钱包 1% 上限，或盘已毕业');
     const data = pad.encodeFunctionData('buy', [token, need, minOut(r.tokens, slippage)]);
     try { await this.provider.call({ from: wallet, to: p, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
-    hashes.push(await this.send({ wallet, to: p, inputData: data, label: 'Gang V2 buy', step }));
+    hashes.push(await this.send({ wallet, to: p, inputData: data, label: c.v3 ? 'Gang V3 buy' : 'Gang V2 buy', step }));
     return { venue: `Gang V2 · BNB→${qSym}→buy（非原子）`, expected: Number(ethers.formatEther(r.tokens)), txHash: hashes.at(-1), hashes };
   }
 
   // 真实卖出：授权代币（本次数量）→ sell → 收到的报价币换回 BNB（WBNB 直接解包）
   async sell({ wallet, token, pct, slippage, step, toBnb = true }) {
-    const { pad: p, c } = await this.curve(token); this.notGraduated(c); const q = this.quoteToken(c); const hashes = [];
+    const { pad: p, c } = await this.curve(token); this.notGraduated(c); if (c.v3) assertV3Trade(); const q = this.quoteToken(c); const hashes = [];
     const bal = await this.balanceOf(token, wallet); if (bal <= 0n) throw new Error('没有可卖出的余额');
     const amt = pct >= 100 ? bal : (bal * BigInt(Math.round(pct * 100))) / 10000n;
     const ap = await this.ensureAllowance({ wallet, token, spender: p, amount: amt, label: '授权卖出', step, kind: 'sell' }); if (ap) hashes.push(ap);
@@ -240,7 +246,7 @@ export class GangV2 {
     const data = pad.encodeFunctionData('sell', [token, amt, minOut(r.out, slippage)]);
     try { await this.provider.call({ from: wallet, to: p, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
     const before = await this.balanceOf(q, wallet);
-    try { hashes.push(await this.send({ wallet, to: p, inputData: data, label: 'Gang V2 sell', step })); }
+    try { hashes.push(await this.send({ wallet, to: p, inputData: data, label: c.v3 ? 'Gang V3 sell' : 'Gang V2 sell', step })); }
     catch (e) {
       // 卖出那笔要在币安 App 里确认（或已提交、结果未知）：报价币要等确认后才到账。交给上层 followUp 在确认后接着换回 BNB；
       // 以前这里直接抛出，换回 BNB 那一步就被跳过了，GANG / WBNB / BNCB 留在钱包里

@@ -15,6 +15,7 @@ import { Portal } from './portal.js';
 import * as openFour from './openFour.js';
 import { GangTrade } from './gangTrade.js';
 import { GangV2 } from './gangV2Pads.js';
+import { V3_TRADE } from './gangV3.js';
 import { DexDirect } from './dexDirect.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
 import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt } from './quoteRoutes.js';
@@ -367,9 +368,10 @@ export class LiveTrader extends EventEmitter {
   // gang.fun 老盘（BNB 计价，合约 0x315B…）内盘：直接 buy/sell；V2 报价币盘还不支持
   // onCurve：行情说在内盘，且下单时没在链上发现已发射（checkMigrated 设的 t.migrated；行情接口常比链上晚几十秒）
   onCurve(t) { return t.stage === 'curve' && !t.migrated; }
-  useGang(t) { return t.source === 'gang' && this.onCurve(t) && t.gangTrack !== 'v2'; }
+  useGang(t) { return t.source === 'gang' && this.onCurve(t) && !['v2', 'v3', 'v3fair'].includes(t.gangTrack); }
   // gang.fun V2 报价币盘：先把 BNB 换成报价币再买，卖出后换回 BNB（非原子）
-  useGangV2(t) { return t.source === 'gang' && this.onCurve(t) && t.gangTrack === 'v2'; }
+  // V3（GangLaunchpad）曲线和 V2 同一套 buy / sell，也走这里（gangV2Pads 认 V3 内盘；真实买卖要 GANG_V3_TRADE=1）；V3 打新币走这里会报「不支持」
+  useGangV2(t) { return t.source === 'gang' && this.onCurve(t) && ['v2', 'v3', 'v3fair'].includes(t.gangTrack); }
 
   useOpenFour(t) { return t.source === 'four-agent' && this.onCurve(t); }
 
@@ -377,6 +379,7 @@ export class LiveTrader extends EventEmitter {
 
   route(t, side) {
     if (this.useGang(t)) return `Gang 内盘 · ${side === 'buy' ? 'buy' : 'sell'}（BNB，一笔完成）· baw contract-call（每个钱包最多买总量 1%）`;
+    if (this.useGangV2(t) && t.gangTrack !== 'v2') return t.gangTrack === 'v3fair' ? 'Gang V3 打新币 · 暂不支持' : `Gang V3 内盘 · ${side === 'buy' ? `BNB→${t.quote}→buy` : `sell→${t.quote}→BNB`}（和 V2 同一套，非原子）${V3_TRADE ? '' : ' · 只报价（GANG_V3_TRADE 未开启）'}`;
     if (this.useGangV2(t)) return side === 'buy' ? `Gang V2 内盘 · BNB→${t.quote}→buy（非原子，2～3 笔交易）· 每个钱包最多 1%` : `Gang V2 内盘 · sell→${t.quote}→BNB（非原子，2～3 笔交易）`;
     if (this.useOpenFour(t)) return `Four Agent 专属内盘 · OpenFour Core.${side} · baw contract-call（每个钱包最多买总量 1%）`;
     if (this.usePortal(t, side) && side === 'sell') return `Flap Agent Curve · Portal.sell${t.quote === 'BNB' ? '' : ` → ${t.quote} → BNB`}`;
@@ -387,7 +390,7 @@ export class LiveTrader extends EventEmitter {
   // 链上确认是否已发射（迁移）到 PancakeSwap：Gang V2 看曲线的 graduated；其他平台看 PancakeSwap V2 上有没有带储备的池子。
   // 只在内盘报价 / 下单失败后调用。确认了就记 t.migrated 并把状态改成外盘，后面的报价、下单直接走外盘
   async checkMigrated(t) {
-    const yes = t.source === 'gang' && t.gangTrack === 'v2' ? !!(await this.gangV2.curve(t.address)).c.graduated : !!(await this.dex.pool(t.address, t.quoteAddress));
+    const yes = t.source === 'gang' && (t.gangTrack === 'v2' || t.gangTrack === 'v3') ? !!(await this.gangV2.curve(t.address)).c.graduated : !!(await this.dex.pool(t.address, t.quoteAddress));
     if (yes && !t.migrated) { t.migrated = true; t.stage = 'dex'; t.progress = 100; this.quoteCache.clear(); this.market.emit('migrate', this.market.summary(t)); }
     return yes;
   }
