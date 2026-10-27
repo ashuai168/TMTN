@@ -220,7 +220,7 @@ if (LIVE && WALLET_SLOT === 1) {
   tracker.on('reload', () => broadcast({ type: 'trackReload' }));   // 历史回补完成：页面重新拉追踪数据
   setTimeout(() => tracker.backfillPending(), 20_000);   // 启动后补一次还没回补过的追踪地址（最近 24 小时，只写历史，不跟单）
 }
-// ---------- Gang 新盘狙击（只在实盘主后端；默认关闭 + 模拟，本人在追踪页「Gang 狙击」里打开）----------
+// ---------- Gang 新盘狙击（只在实盘主后端；默认关闭 + 模拟，本人在顶栏「狙击」模块里打开）----------
 let sniper = null;
 if (LIVE && WALLET_SLOT === 1) {
   const { Sniper } = await import('./engine/live/sniper.js');
@@ -232,7 +232,7 @@ const needSniper = (res) => { if (!sniper) { res.status(400).json({ error: '只�
 app.get('/api/snipe', (req, res) => { if (!needSniper(res)) return; res.json({ ...sniper.view(), log: sniper.log.slice(0, 300) }); });
 app.post('/api/snipe', (req, res) => {   // { params } 改参数；{ enabled: true/false } 开 / 关（急停 = enabled:false）
   if (!needSniper(res)) return; const b = req.body || {};
-  try { if (b.params) sniper.update(b.params); if (b.enabled !== undefined) sniper.setEnabled(b.enabled === true); res.json(sniper.view()); } catch (e) { res.status(400).json({ error: e.message }); }
+  try { if (b.params) sniper.update(b.params); if (b.forget) sniper.forget(b.forget); if (b.enabled !== undefined) sniper.setEnabled(b.enabled === true); res.json(sniper.view()); } catch (e) { res.status(400).json({ error: e.message }); }
 });
 const needTracker = (res) => { if (!tracker) { res.status(400).json({ error: '只有实盘主后端支持追踪 / 跟单' }); return false; } return true; };
 app.get('/api/track', (req, res) => { if (!needTracker(res)) return; res.json({ ...tracker.targetsView(), feed: tracker.feed.slice(0, 300) }); });
