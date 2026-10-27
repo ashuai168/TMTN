@@ -956,7 +956,7 @@ export class LiveTrader extends EventEmitter {
     let t0 = Date.now();
     const i = await openFour.info(t.address, w.address);
     if (i.route !== 'contract-call') throw new Error(`这个盘现在不能走内盘买入（route=${i.route}，${i.curve?.phase?.name || ''}）`);
-    // 计价币盘（非 WBNB）：钱包里的计价币够这笔就直接用它付，不够就用 BNB 付、Core 在同一笔里换（jak 2026-10-27：Gang / Flap / Four 同一个逻辑）
+    // 计价币盘（非 WBNB）：钱包里的计价币够这笔就直接用它付，不够就用 BNB 付、Core 在同一笔里换（Gang / Flap / Four 同一个逻辑）
     const bps = Math.round(slippage * 100), qa = i.quote?.address && !i.quote.isWrappedNative ? i.quote.address : null;
     let pay = null;
     if (qa) {
