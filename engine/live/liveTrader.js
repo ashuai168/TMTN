@@ -357,6 +357,7 @@ export class LiveTrader extends EventEmitter {
     if (this.useOpenFour(t)) return `Four Agent 专属内盘 · OpenFour Core.${side} · baw contract-call（每个钱包最多买总量 1%）`;
     if (this.usePortal(t, side) && side === 'sell') return `Flap Agent Curve · Portal.sell${t.quote === 'BNB' ? '' : ` → ${t.quote} → BNB`}`;
     if (this.usePortal(t, side)) return `Flap Agent Curve · ${t.quote === 'BNB' ? 'Portal.buy（BNB，原子）' : `BNB→${t.quote}→Portal.buyWithQuote（非原子）`}`;
+    if (t.source === 'dex') return `币安 Web3 DEX 聚合 · baw market-order ${side === 'buy' ? 'BNB→代币' : '代币→BNB'}（普通外盘代币，聚合自己选池子）`;
     return `币安 Web3 DEX 聚合 · baw market-order ${side === 'buy' ? 'BNB→代币' : '代币→BNB'}${t.platform === 'four' && this.onCurve(t) ? '（可能打不到内盘）' : ''}（聚合没收录新池子时直连 PancakeSwap V2）`;
   }
 
@@ -377,6 +378,7 @@ export class LiveTrader extends EventEmitter {
         : await this.swapReal({ from: t.address, to: BNB_NATIVE, qty, slippage, step, label: `${t.symbol}→BNB` });
     } catch (e) {
       if (['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code) || /insufficient|余额不足|仍在处理/i.test(e.message)) throw e;
+      if (t.source === 'dex') throw e;   // 普通外盘代币：最深的池子不一定是 PancakeSwap V2（GENIUS 的 V2 池只有不到 $1），不直连
       if (!(await this.dex.pool(t.address, t.quoteAddress).catch(() => null))) throw e;
       step(`币安聚合没成交（${String(e.message).slice(0, 80)}），改为直连 PancakeSwap V2`, 0);
       return side === 'buy' ? this.dex.buy({ wallet: w.address, token: t.address, quoteAddress: t.quoteAddress, amountBnb: trim(qty), slippage, step, taxPct: t.buyTax || 0 })
@@ -478,7 +480,8 @@ export class LiveTrader extends EventEmitter {
         let q = null, err = null;
         try { q = await baw.marketQuote({ fromTokenQty: trim(qty), fromToken: side === 'buy' ? BNB_NATIVE : token, toToken: side === 'buy' ? token : BNB_NATIVE, slippage }); } catch (e) { err = e; }
         let out = Number(q?.toCoinAmount || 0), route = base.route;
-        if (!(out > 0)) {   // 币安聚合报不出价（刚迁移、还没收录新池子）：用 PancakeSwap V2 链上报价，下单时也会直连
+        if (!(out > 0) && t.source === 'dex') { if (err) throw err; }   // 普通外盘代币不用 PancakeSwap V2 报价兜底（同 dexTrade）
+        else if (!(out > 0)) {   // 币安聚合报不出价（刚迁移、还没收录新池子）：用 PancakeSwap V2 链上报价，下单时也会直连
           const sellQty = side === 'sell' ? await this.exactBal(w, t.address).then((x) => ethers.formatUnits((x.raw * BigInt(Math.round(Math.min(100, Number(amount)) * 100))) / 10000n, x.dec)).catch(() => trim(qty)) : null;
           const d = await this.dex.quote({ token: t.address, quoteAddress: t.quoteAddress, side, amount: side === 'buy' ? qty : sellQty, taxPct: (side === 'buy' ? t.buyTax : t.sellTax) || 0 }).catch(() => null);
           if (!d) { if (err) throw err; } else { out = d.out; route = `PancakeSwap V2 直连 · ${side === 'buy' ? (d.pool.isBnb ? 'BNB→代币' : 'BNB→报价币→代币') : (d.pool.isBnb ? '代币→BNB' : '代币→报价币→BNB')}（币安聚合还没收录这个池子）`; }

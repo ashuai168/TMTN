@@ -691,7 +691,7 @@ function renderHead() {
         <div class="th-sub"><span>代币 <span class="mono">${short(t.address, 8, 6)}</span> <span class="copy" data-copy="${t.address}">⧉</span></span><span>创建者 ${whoHtml(t.creator, t.creatorName || NAMES[String(t.creator || '').toLowerCase()])}</span>${t.firstBuyer ? `<span>首买 <a href="https://bscscan.com/address/${esc(t.firstBuyer)}" target="_blank" rel="noopener" title="${esc(t.firstBuyer)}">${whoHtml(t.firstBuyer, t.firstBuyerName || NAMES[t.firstBuyer.toLowerCase()])}</a></span>` : ''}</div>
         <div class="th-sub"><span>预设 ${t.preset}</span><span title="${fullTime(t.createdAt)}">${age(t.createdAt)} 前创建</span></div>
       </div>
-      <div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-head')}<a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}</div>${ruleBanner(t.address)}
+      <div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-head')}<a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : t.platform === 'dex' ? 'DexScreener' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}</div>${ruleBanner(t.address)}
       <div class="th-price"><div class="p">$${sub(t.priceUsd)}</div><div class="s">每枚 · ${sub(t.price)} ${esc(t.quote || 'BNB')}</div></div>
     </div>
     <div class="stats">
@@ -924,7 +924,7 @@ function renderBottom() {
       html = !HOLD.data ? '<div class="empty">持仓读取中…</div>' : shown.length ? `<table><tr><th class="l">代币</th>${multi ? '<th class="l">钱包</th>' : ''}<th class="l">平台 / 状态</th><th>数量</th><th title="按本程序（8788）的现价估值">余额</th><th>成本</th><th>已卖出</th><th>盈亏</th><th>操作</th></tr>
         <tr class="dim"><td class="l"><b>合计</b></td>${multi ? '<td></td>' : ''}<td></td><td></td><td><b>$${T.v.toFixed(2)}</b><div class="hsub">${bnb(T.vb)} BNB</div></td><td>$${T.c.toFixed(2)}</td><td></td><td>${sgn(T.p, (v) => '$' + v.toFixed(2))}${T.c > 0 ? ' <span class="hsub">' + sgn((T.p / T.c) * 100, (v) => v.toFixed(1) + '%') + '</span>' : ''}</td><td></td></tr>
         ${shown.map((r) => `<tr class="${r.token.toLowerCase() === sel ? 'mine' : ''}"><td class="l"><span class="side" data-a="${r.token}" style="cursor:pointer" title="打开这个币">${logoHtml({ ...r, address: r.token }, 'xs')}<b>${esc(r.symbol)}</b></span></td>${multi ? `<td class="l"><b class="me">${esc(r.wlabel || '')}</b></td>` : ''}
-        <td class="l"><i class="pbadge">${r.platform === 'four' ? 'Four' : r.platform === 'gang' ? 'Gang' : 'Flap'}</i> ${stg(r)}</td><td>${K(r.amount)}<div class="hsub">${r.supplyPct != null ? r.supplyPct.toFixed(3) + '%' : ''}</div></td>
+        <td class="l"><i class="pbadge">${r.platform === 'four' ? 'Four' : r.platform === 'gang' ? 'Gang' : r.platform === 'dex' ? 'DEX' : 'Flap'}</i> ${stg(r)}</td><td>${K(r.amount)}<div class="hsub">${r.supplyPct != null ? r.supplyPct.toFixed(3) + '%' : ''}</div></td>
         <td>${r.valueBnb != null ? `<b>$${(r.valueUsd || 0).toFixed(2)}</b><div class="hsub">${bnb(r.valueBnb)} BNB</div>` : `<span class="y" title="${esc(r.warn || '')}">— ⚠</span>`}</td>
         <td title="${usdTip(r)}">$${(r.costUsd || 0).toFixed(2)}<div class="hsub">${bnb(r.costBnb)} BNB</div></td><td title="${usdTip(r)}">$${(r.soldUsd || 0).toFixed(2)}</td>
         <td title="${usdTip(r)}">${r.pnlUsd == null ? `<span class="muted" title="${esc(r.warn || '')}">—</span>` : sgn(r.pnlUsd, (v) => '$' + v.toFixed(2))}${r.pnlPct != null ? ' <span class="hsub">' + sgn(r.pnlPct, (v) => v.toFixed(1) + '%') + '</span>' : ''}</td>
@@ -1002,7 +1002,7 @@ function renderMyPos(t) {
   const ps = S.positions.filter((p) => p.token === t.address);
   const sum = (k) => ps.reduce((a, p) => a + (p[k] || 0), 0);
   const hr = LIVE() ? holdRow(t) : null;   /* 实盘：和一键买卖、我的持仓用同一份持仓快照（报价币已按 BNB 价换算成美元） */
-  const plat = t.platform === 'four' ? 'Four · Agent ID 专属' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `Gang ${t.gangTrack === 'v3fair' ? (t.stage === 'dex' ? '打新 · 已发射（外盘）' : 'V3 打新') : 'V3'} · 计价 ${esc(t.quote || '')}` : t.gangTrack === 'v2' ? `Gang V2 · 计价 ${esc(t.quote || '')}` : 'Gang · Agent ID 专属') : 'Flap · Agent 曲线';
+  const plat = t.platform === 'four' ? 'Four · Agent ID 专属' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `Gang ${t.gangTrack === 'v3fair' ? (t.stage === 'dex' ? '打新 · 已发射（外盘）' : 'V3 打新') : 'V3'} · 计价 ${esc(t.quote || '')}` : t.gangTrack === 'v2' ? `Gang V2 · 计价 ${esc(t.quote || '')}` : 'Gang · Agent ID 专属') : t.platform === 'dex' ? `外盘代币 · 计价 ${esc(t.quote || '')}` : 'Flap · Agent 曲线';
   const tag = LIVE() ? `${plat} · 资格以合约为准` : t.platform === 'four' ? `Four：${eligible(wallet(S.activeWallet), t).ok ? '钱包已在白名单' : '钱包不在白名单'}` : `${plat}`;
   const usd = (v) => (v == null ? '—' : '$' + v.toFixed(2)), sgn = (v) => (v == null ? '—' : `<b class="${v >= 0 ? 'g' : 'r'}">${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}</b>`);
   let amt, rows;
@@ -1030,12 +1030,12 @@ function renderInfo(t) {
   if (!t) { $('#tokenInfo').innerHTML = ''; return; }
   const el = eligible(wallet(S.activeWallet), t);
   const box = (k, v) => `<div class="addrbox"><span>${k}</span><b data-copy="${v}" title="点击复制">${v}</b></div>`;
-  $('#tokenInfo').innerHTML = `<h4>${t.platform === 'four' ? 'Binance Agent 专属代币信息' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? 'Gang V3 代币信息' : t.gangTrack === 'v2' ? 'Gang V2 代币信息' : 'Gang 代币信息') : 'Flap Agent 曲线代币信息'}</h4>
+  $('#tokenInfo').innerHTML = `<h4>${t.platform === 'four' ? 'Binance Agent 专属代币信息' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? 'Gang V3 代币信息' : t.gangTrack === 'v2' ? 'Gang V2 代币信息' : 'Gang 代币信息') : t.platform === 'dex' ? '外盘代币信息' : 'Flap Agent 曲线代币信息'}</h4>
     ${box('代币', t.address)}${t.vault ? box(LIVE() ? 'Market' : 'Vault', t.vault) : ''}${t.creator ? box('创建者', t.creator) : ''}
-    <div class="kv"><span>平台</span><b class="sans">${t.platform === 'four' ? 'OpenFour（four.meme）' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `gang.fun V3（GangLaunchpad，报价币 ${esc(t.quote)}）${t.gangV3 ? ' · ' + esc(v3Tip(t)) : ''}` : t.gangTrack === 'v2' ? `gang.fun V2（报价币 ${esc(t.quote)}，买卖要先换币，非原子）` : 'gang.fun（Agent ID 专属，合约 0x315B…23A7）') : 'Flap（flap.sh）'}</b></div>
+    <div class="kv"><span>平台</span><b class="sans">${t.platform === 'four' ? 'OpenFour（four.meme）' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `gang.fun V3（GangLaunchpad，报价币 ${esc(t.quote)}）${t.gangV3 ? ' · ' + esc(v3Tip(t)) : ''}` : t.gangTrack === 'v2' ? `gang.fun V2（报价币 ${esc(t.quote)}，买卖要先换币，非原子）` : 'gang.fun（Agent ID 专属，合约 0x315B…23A7）') : t.platform === 'dex' ? `普通外盘代币（最深池 ${esc(t.preset.replace(/^外盘代币 · /, ''))}，币安聚合买卖）` : 'Flap（flap.sh）'}</b></div>
     <div class="kv"><span>预设</span><b class="sans">${t.preset} <span class="muted mono">${t.presetId}</span></b></div>
     <div class="kv"><span>计价资产</span><b>${t.quote}${t.quote !== 'BNB' ? '（Core 同笔兑换）' : ''}</b></div>
-    <div class="kv"><span>状态</span><b class="sans ${t.stage === 'curve' ? 'b' : t.stage === 'dex' ? 'g' : 'r'}">${t.stage === 'curve' ? `内盘 ${t.progress.toFixed(2)}%` : t.stage === 'dex' ? '已迁移 PancakeSwap' : '已撤池'}</b></div>
+    <div class="kv"><span>状态</span><b class="sans ${t.stage === 'curve' ? 'b' : t.stage === 'dex' ? 'g' : 'r'}">${t.stage === 'curve' ? `内盘 ${t.progress.toFixed(2)}%` : t.platform === 'dex' ? `外盘 · 流动性 $${Math.round(t.liqUsd || 0).toLocaleString()}` : t.stage === 'dex' ? '已迁移 PancakeSwap' : '已撤池'}</b></div>
     <div class="kv"><span>交易资格</span><b class="sans ${el.ok ? 'g' : 'r'}">${el.ok ? '你的钱包可交易' : '你的钱包' + el.why}</b></div>
     ${LIVE() ? `<div class="kv"><span>已筹 / 上限</span><b>${amt(t.raised)} / ${amt(t.target)} ${esc(t.quote)}</b></div>`
       : `<div class="kv"><span>总量 / 内盘出售</span><b>1.00B / 800M</b></div><div class="kv"><span>每钱包上限</span><b>${t.platform === 'four' || t.platform === 'gang' ? '总量 1%（10M）' : '不限'}</b></div>`}`;
@@ -1319,7 +1319,7 @@ document.addEventListener('click', async (e) => {
     e.preventDefault();
     if (!LIVE()) return toast({ status: 'failed', symbol: '模拟盘', reason: '模拟代币没有真实链上页面' });
     const t = S.tokens.get(S.selected); if (!t) return;
-    const url = { four: t.platform === 'four' ? `https://four.meme/token/${t.address}` : t.platform === 'gang' ? `https://gang.fun/token/${t.address.toLowerCase()}` /* Gang（老盘和 V2）：直接打开这个币在 gang.fun 的页面 */ : t.source === 'flap-nft' ? `https://flap.sh/bnb/${t.address}/taxinfo?lang=zh` /* 门槛盘：直接打开 Flap 税收详情 */ : 'https://flap.sh/apps/agent-bonding-curve?lang=zh' /* Flap：打开 Agent Bonding Curve 页面 */, bsc: `https://bscscan.com/token/${t.address}`, gmgn: `https://gmgn.ai/bsc/token/${t.address}` }[d.ext];
+    const url = { four: t.platform === 'four' ? `https://four.meme/token/${t.address}` : t.platform === 'gang' ? `https://gang.fun/token/${t.address.toLowerCase()}` /* Gang（老盘和 V2）：直接打开这个币在 gang.fun 的页面 */ : t.platform === 'dex' ? `https://dexscreener.com/bsc/${t.address}` : t.source === 'flap-nft' ? `https://flap.sh/bnb/${t.address}/taxinfo?lang=zh` /* 门槛盘：直接打开 Flap 税收详情 */ : 'https://flap.sh/apps/agent-bonding-curve?lang=zh' /* Flap：打开 Agent Bonding Curve 页面 */, bsc: `https://bscscan.com/token/${t.address}`, gmgn: `https://gmgn.ai/bsc/token/${t.address}` }[d.ext];
     return window.open(url, '_blank', 'noopener');
   }
   if (d.close !== undefined) return el.closest('.modal').classList.add('hidden');

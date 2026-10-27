@@ -20,7 +20,7 @@ import { ShrineFeeds, tokenInfo } from './shrine.js';
 import * as fsi from './fsi.js';
 import { cache } from './cache.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
-import { getRoute } from './quoteRoutes.js';
+import { getRoute, MIN_LIQ_USD } from './quoteRoutes.js';
 const FOUR_REG = dataFile('fourTokens.json');
 const FLAP_REG = dataFile('flapCreated.json');
 const BOOT = Date.now();
@@ -295,17 +295,38 @@ export class LiveMarket extends EventEmitter {
     this.meta.get(url, (m) => { Object.assign(t, m); this.emit('detail', t.address); });
   }
 
-  // 搜索粘贴地址：已在列表直接返回；否则查 Four 链上，查到就加进列表
+  // 搜索粘贴地址：已在列表直接返回；否则查 Four 链上，查到就加进列表；都不是内盘时按普通外盘代币收录（lookupDex）
   async lookup(address) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return null;
     let t = this.get(address);
+    const ds = t ? null : cache.fetchJson('https://api.dexscreener.com/tokens/v1/bsc/' + address.toLowerCase(), 15).catch(() => null);   // 和链上查找同时发出，外盘代币不用多等
     if (!t && await this.four.lookup(address)) t = this.get(address);
     if (!t) t = await this.lookupGangV2(address).catch(() => null);
     if (!t && await this.flapNft.check(address, { plain: true }).catch(() => null)) t = this.get(address);
     if (!t) t = await this.lookupFair(address).catch(() => null);
+    if (!t) t = await this.lookupDex(address, await ds).catch(() => null);
     if (!t) return null;
     t.pinned = true;               // 手动打开的盘不被自动淘汰
     return this.summary(t);
+  }
+
+  // 普通外盘代币（GENIUS、EWYB 这类不在任何内盘平台的币）：DexScreener 最深的池子流动性 ≥ QUOTE_MIN_LIQ_USD（默认 $2 万）才收录，
+  // 计价 = 那个池子的另一边。K 线 / 现价走 dexCandles（DexScreener + GeckoTerminal，不读链），买卖走币安聚合（不直连 PancakeSwap V2，见 liveTrader.dexTrade）
+  async lookupDex(address, rows) {
+    const a = address.toLowerCase();
+    const ps = (Array.isArray(rows) ? rows : []).filter((p) => String(p.baseToken?.address).toLowerCase() === a && +p.priceUsd && !String(p.pairAddress).includes(':') && !['fourmeme', 'flapsh'].includes(p.dexId))
+      .sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0));
+    const p = ps[0]; if (!p || !((p.liquidity?.usd || 0) >= MIN_LIQ_USD)) return null;
+    const qa = String(p.quoteToken?.address || '').toLowerCase(), wb = qa === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
+    if (!wb && !['USDT', 'USDC', 'USD1'].includes(String(p.quoteToken?.symbol).toUpperCase()) && +p.priceNative > 0) this.qUsd[qa] ||= +p.priceUsd / +p.priceNative;   // 计价币美元价先用这个池子推出来，qpx 之后会刷新
+    if (this.get(a)) return this.get(a);
+    const t = this.base(a), sup = +p.fdv && +p.priceUsd ? +p.fdv / +p.priceUsd : 1e9;
+    Object.assign(t, { source: 'dex', platform: 'dex', symbol: p.baseToken.symbol || '?', name: p.baseToken.name || '', quote: wb ? 'BNB' : p.quoteToken.symbol, quoteAddress: qa,
+      createdAt: p.pairCreatedAt || Date.now(), stage: 'dex', progress: 100, maxSupply: sup, image: p.info?.imageUrl || null, pinned: true,
+      pair: p.pairAddress, dexPool: p.pairAddress, dexLiqUsd: p.liquidity.usd, dexMcapUsd: +p.marketCap || +p.fdv || 0, dexPriceUsd: +p.priceUsd, dexDex: `${p.dexId}${p.labels?.length ? ' ' + p.labels.join('/') : ''}`,
+      website: p.info?.websites?.[0]?.url || '', twitter: p.info?.socials?.find((x) => x.type === 'twitter')?.url || '', telegram: p.info?.socials?.find((x) => x.type === 'telegram')?.url || '' });
+    const q = this.quoteUsd(t); if (q) t.price = +p.priceUsd / q;
+    return t;
   }
 
   // Gang V2 新盘：本后端的订阅还没看到、但主后端已经发来狙击订单时（钱包 2 等），直接读链上曲线把它加进列表
@@ -720,6 +741,8 @@ export class LiveMarket extends EventEmitter {
           if (rows?.length) { const k = this.qScale(t); t.candles = []; for (const r of rows) if (r.price > 0) this.pushCandle(t, r.ts, r.price * k, r.bnb * k); t._chgAt = 0; }
         }
         if (t.stage === 'dex') await this.dexRefresh(t);   // 已发射：接上外盘池子的成交
+      } else if (t.source === 'dex') {
+        await this.dexCandles(t);   // 普通外盘代币：只有外盘 K 线（不读链上 Swap 日志，最深的池子不一定是 PancakeSwap V2）
       } else if (t.source === 'four-agent') {
         // 已由链上事件实时更新，不再请求 shrine（经常 429）。有 MySQL 缓存时：用库里从创建起的全部成交重建 K 线和成交列表（重启后也完整），10 分钟一次，第一次最多等 3 秒
         if (cache.my && (!t.fourHistAt || Date.now() - t.fourHistAt > 600_000)) { t.fourHistAt = Date.now(); await Promise.race([this.fourHistory(t).then(() => this.emit('detail', t.address)), new Promise((r) => setTimeout(r, 3000))]).catch(() => {}); }
@@ -777,7 +800,7 @@ export class LiveMarket extends EventEmitter {
     const priceUsd = t.price * this.quoteUsd(t); const liqUsd = t.dexLiqUsd || (t.raised || 0) * this.quoteUsd(t);
     return {
       address: t.address, symbol: t.symbol, name: t.name, platform: t.platform, source: t.source, agentExclusive: !!t.agentExclusive, market: t.market,
-      preset: t.source === 'gang' ? 'Gang（Agent 专属）' : t.source === 'agent-curve' ? 'Flap Agent Curve' : t.source === 'flap-nft' ? (t.nftGate?.plain ? 'Flap · 普通盘' : t.nftGate?.known ? 'Flap · Agent ID 门槛' : 'Flap · NFT 门槛') : t.platform === 'four' ? (t.agentExclusive ? 'Binance Agent ID Exclusive' : 'Four.meme') : 'Flap',
+      preset: t.source === 'gang' ? 'Gang（Agent 专属）' : t.source === 'agent-curve' ? 'Flap Agent Curve' : t.source === 'dex' ? `外盘代币 · ${t.dexDex || 'DEX'}` : t.source === 'flap-nft' ? (t.nftGate?.plain ? 'Flap · 普通盘' : t.nftGate?.known ? 'Flap · Agent ID 门槛' : 'Flap · NFT 门槛') : t.platform === 'four' ? (t.agentExclusive ? 'Binance Agent ID Exclusive' : 'Four.meme') : 'Flap',
       presetId: t.presetId || '', quote: t.quote, quoteAddress: t.quoteAddress, creator: t.creator, firstBuyer: t.firstBuy?.trader || '', firstBuyerName: t.firstBuy ? this.names.peek(t.firstBuy.trader) : null, vault: t.market || '', createdAt: t.createdAt, officialTest: false,
       stage: t.stage, price: t.price, priceUsd, mcapUsd: t.dexMcapUsd ? t.dexMcapUsd : t.source === 'four-agent' ? (t.price || this.fourP0 || 0) * (t.maxSupply || 1e9) * this.quoteUsd(t) : t.mcapUsd || (priceUsd > 0 ? priceUsd * (t.maxSupply || 1e9) : 0),   /* 没有市值但有价格（报价币价格后到）：按现价 × 总量补上 */ mcapEst: t.source === 'four-agent' && !t.price && !!this.fourP0, liqUsd, quoteUsd: this.quoteUsd(t), raised: t.raised, target: t.target, progress: t.progress || 0,
       remaining: t.remaining, holders: t.holders, buys: t.buys, sells: t.sells, volume: t.volume, dexVol24: t.dexVol24 ?? null, dexBuys24: t.dexBuys24 ?? null, dexSells24: t.dexSells24 ?? null, dexCountMin: t.dexCountMin || 0, buyTax: t.buyTax, sellTax: t.sellTax,
