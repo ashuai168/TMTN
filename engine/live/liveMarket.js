@@ -70,7 +70,7 @@ export class LiveMarket extends EventEmitter {
     this.flapNft = new FlapNft(this.provider);
     this.flapNft.on('gated', (g, o) => this.upsertFlapNft(g, o).catch(() => {}));
     this.flapNft.on('ungated', (g) => { const t = this.get(g.token); if (t?.nftGate) { t.nftGate = { ...t.nftGate, removed: true }; this.emit('detail', t.address); } });
-    this.flapNft.on('trade', (tr) => this.onFlapNftTrade(tr));
+    this.flapNft.on('trade', (tr) => { const t = this.get(tr.token); if (t) { t._nftEvery = 6000; t._nftAt = 0; } this.onFlapNftTrade(tr); });   // 有成交：下一轮马上读状态
     this.flapNft.on('dex', (g) => { const t = this.get(g.token); if (t && t.stage === 'curve') { t.stage = 'dex'; t.progress = 100; this.emit('migrate', this.summary(t)); } });
     this.flapChain.on('created', () => { try { this.curve.tick?.(); } catch { /* 下一轮 Reader 轮询也会扫到 */ } });
     this.meta = new MetaFetcher();
@@ -275,7 +275,12 @@ export class LiveMarket extends EventEmitter {
     if (this.nftBusy) return; this.nftBusy = true;
     try {
       for (const t of [...this.tokens.values()].filter((x) => x.source === 'flap-nft')) {
-        if (t.stage === 'curve') try { await this.applyFlapNftState(t, await this.flapNft.state(t.address)); await this.flapNftTax(t); } catch { /* 下一轮 */ }
+        // 状态没变的盘逐步放慢（6 秒 → 12 → 24 → 最多 60 秒），一变或链上推送来一笔成交就回到 6 秒。以前几十个没人买的内盘每 6 秒都读一遍
+        if (t.stage === 'curve' && Date.now() - (t._nftAt || 0) >= (t._nftEvery || 6000) - 500) try {
+          const st = await this.flapNft.state(t.address), h = `${st.status}|${st.reserve}|${st.circulating}`;
+          t._nftAt = Date.now(); t._nftEvery = h === t._nftH ? Math.min(60_000, (t._nftEvery || 6000) * 2) : 6000; t._nftH = h;
+          await this.applyFlapNftState(t, st); await this.flapNftTax(t);
+        } catch { /* 下一轮 */ }
         // 名字没读到就重试（已迁移的也要：以前只重试内盘，迁移盘读失败一次就一直显示「?」）
         if ((!t.name || t.symbol === '?' || !t.metaUrl) && Date.now() - (t.metaTryAt || 0) > 30_000) await this.flapNftMeta(t).catch(() => {});
       }

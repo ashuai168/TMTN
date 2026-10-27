@@ -65,7 +65,7 @@ export class WsLogs {
 }
 
 // 付费的自定义节点（.env 的 RPC_URL，如 Chainstack）每分钟最多用 RPC_URL_MAX_PER_MIN 次（默认 250，约每月 1000 万次），所有用途合计；
-// 超了这一分钟就先用别的节点（别的都不可用时仍会用它），免得公共节点限流时 eth_call 全涌过去把月额度吃光
+// 超了这一分钟行情读取就不再用它（交易不受限），免得公共节点限流时 eth_call 全涌过去把月额度吃光
 const capUrl = () => process.env.RPC_URL || '', capMax = () => Number(process.env.RPC_URL_MAX_PER_MIN || 250);
 let capMin = 0, capUsed = 0;
 const capped = (u) => { if (!u || u !== capUrl() || /nodereal/i.test(u)) return false; const m = Math.floor(Date.now() / 60_000); if (m !== capMin) { capMin = m; capUsed = 0; } return capUsed >= capMax(); };
@@ -93,7 +93,8 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
     const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now && !capped(n.url)), warm = pool.filter((n) => n.cool <= now);
     const nr = ok.filter((n) => n.nr);
     if (nr.length > 1) { this.rr = (this.rr + 1) % nr.length; const rot = nr.slice(this.rr).concat(nr.slice(0, this.rr)); let k = 0; for (let i = 0; i < ok.length; i++) if (ok[i].nr) ok[i] = rot[k++]; }
-    if (!ok.length && warm.length) return warm;
+    if (!ok.length && warm.length && this.label === '交易') return warm;   // 只有交易可以突破每分钟上限；行情读取宁可慢一点也不吃付费额度
+    if (!ok.length) { const rest = pool.filter((n) => !capped(n.url)); if (rest.length) return rest.sort((a, b) => a.cool - b.cool).slice(0, 2); }
     return ok.length ? ok : [...(pool.length ? pool : this.nodes)].sort((a, b) => a.cool - b.cool).slice(0, 2);
   }
   // 调用位置要在入口处抓（到 _send 时已经过了 ethers 的请求队列，调用栈里没有业务代码了）
