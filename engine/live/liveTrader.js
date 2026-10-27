@@ -40,7 +40,6 @@ export class LiveTrader extends EventEmitter {
       autoSendGangMigrated: !!AUTO_TRANSFER_TO && loadSaved().autoSendGangMigrated === true,
       qbPresets: loadSaved().qbPresets || null,
       sellToBnb: loadSaved().sellToBnb !== false,
-      autoQ2b: normQ2b(loadSaved().autoQ2b, true),   // 定时把 BNCB / GANG 换成 BNB：默认关，只能本人在页面打开（见 q2bTick）
       preApproveCap: loadSaved().preApproveCap !== false, walletOn: loadSaved().walletOn || {} };   /* 多钱包「参与下单」开关，重启后保留 */   // 预先授权（较大固定额度，用户可在页面关闭）；关掉 = 只授权本次数量   // 卖出后自动把报价币（BNCB / GANG / 币股…）换回 BNB，默认开，可在交易设置里关   // 一键买卖面板的预设金额 / 比例（页面上编辑，存 live-settings.json）   // Gang 发射（毕业）后自动转出，同样只能本人打开   // Four 发射后自动转出（同样只能本人在页面打开）
     this.claimable = []; this.claimRetry = new Map(); this.claiming = new Set(); this.inflight = new Set();
     this.preapproving = new Set();
@@ -64,7 +63,6 @@ export class LiveTrader extends EventEmitter {
     clearInterval(this.lockTimer); this.lockTimer = setInterval(() => this.lockStatus(true).catch(() => {}), 5_000);   // 钱包锁状态后台每 5 秒刷新，下单时直接用
     clearInterval(this.claimTimer); this.claimTimer = setInterval(() => this.scanClaims(), 60_000); setTimeout(() => this.scanClaims(), 20_000);
     clearInterval(this.ruleTimer); this.ruleTimer = setInterval(() => this.ruleTick().catch((e) => console.error('tokenRule:', e.message)), 2_000);
-    clearInterval(this.q2bTimer); this.q2bTimer = setInterval(() => this.q2bTick().catch((e) => console.error('定时换 BNB:', e.message)), 60_000);
   }
 
   // 顶栏显示的 baw 登录状态：baw wallet status（CONNECTED 才算已登录）+ wallet agent-id（.ai 域名）
@@ -573,31 +571,30 @@ export class LiveTrader extends EventEmitter {
   }
 
   // 一键把某个计价币全部换回 BNB：点击这一刻读余额；登录、钱包锁、同币在途检查和普通订单一样；已提交但结果未知按「待确认」跟踪
-  // qty（精确字符串）不给 = 全部余额；定时任务（q2bTick）传「余额 − 保留量」，source / via 标出是定时的
-  async quoteToBnb({ token, slippage = 1, qty = null, source = '手动', via = '计价币换回 BNB' }) {
+  async quoteToBnb({ token, slippage = 1 }) {
     const w = this.wallets[0];
     const order = { id: randomBytes(5).toString('hex'), ts: Date.now(), walletId: w?.id, wallet: w?.label || 'baw', token, symbol: '?', platform: 'quote',
-      side: 'sell', amount: qty ? 0 : 100, slippage, source, via, status: 'pending', steps: [], dryRun: false };
+      side: 'sell', amount: 100, slippage, source: '手动', via: '计价币换回 BNB', status: 'pending', steps: [], dryRun: false };
     this.orders.unshift(order); if (this.orders.length > 300) this.orders.length = 300;
     const step = (name, ms, x) => { order.steps.push({ name, ms: Math.round(ms) }); if (x?.tx) { order.pendingTx = x.tx; order.stage = x.stage || 'broadcast'; } this.emit('order', order); };
     try {
       if (!w) throw new Error('没有钱包');
-      if (!this.quoteSet().has(String(token).toLowerCase()) && !Object.values(Q2B_TOKENS).some((a) => a.toLowerCase() === String(token).toLowerCase())) throw new Error('不是计价币');
+      if (!this.quoteSet().has(String(token).toLowerCase())) throw new Error('不是计价币');
       if (DRY_RUN) throw new Error('当前是 DRY_RUN 模式，不会发出交易');
       if (this.status.auth.state !== 'ok') throw new Error('币安钱包未登录，请先登录');
       if (this.inflight.has(token)) throw Object.assign(new Error('这个币有一笔订单还在处理中，请勿重复下单'), { code: 'BUSY' });
       if ((await baw.walletLock().catch(() => 'UNKNOWN')) === 'LOCKED') throw new Error('钱包里有一笔交易在等你在币安 App 里确认或拒绝，处理完之前不能下新单（这次没有发出任何交易）');
       this.inflight.add(token);
       try {
-        const { symbol } = await this.quoteBal(token); const ex = await this.exactBal(w, token); const sellStr = qty && Number(qty) < Number(ex.str) ? qty : ex.str; const balance = Number(sellStr); order.symbol = symbol; order.route = `${symbol}→BNB`;
+        const { symbol } = await this.quoteBal(token); const ex = await this.exactBal(w, token); const balance = Number(ex.str); order.symbol = symbol; order.route = `${symbol}→BNB`;
         if (!(balance > 0)) throw new Error(`钱包里没有 ${symbol}`);
-        step(`当前余额 ${ex.str} ${symbol}（链上精确值）${sellStr !== ex.str ? `，这次换 ${sellStr}` : ''}`, 0);
+        step(`当前余额 ${ex.str} ${symbol}（链上精确值）`, 0);
         let r;
         if (token.toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase()) {
-          const bal = await (this.market.tradeProvider || this.market.provider).call({ to: token, data: new ethers.Interface(['function balanceOf(address) view returns (uint256)']).encodeFunctionData('balanceOf', [w.address]) }).then((x) => BigInt(x)) - (sellStr !== ex.str ? ex.raw - ethers.parseUnits(sellStr, ex.dec) : 0n);   // 定时任务给了数量：只解包这部分
+          const bal = await (this.market.tradeProvider || this.market.provider).call({ to: token, data: new ethers.Interface(['function balanceOf(address) view returns (uint256)']).encodeFunctionData('balanceOf', [w.address]) }).then((x) => BigInt(x));
           const hash = await this.portal.send({ wallet: w.address, to: token, inputData: new ethers.Interface(['function withdraw(uint256)']).encodeFunctionData('withdraw', [bal]), label: 'WBNB→BNB 解包', step });
           r = { venue: 'WBNB.withdraw', expected: Number(ethers.formatEther(bal)), txHash: hash, hashes: [hash] };
-        } else r = await this.swapReal({ from: token, to: BNB_NATIVE, qty: sellStr, slippage, step, label: `${symbol}→BNB` });
+        } else r = await this.swapReal({ from: token, to: BNB_NATIVE, qty: ex.str, slippage, step, label: `${symbol}→BNB` });
         Object.assign(order, { status: 'filled', venue: r.venue, tx: r.txHash, txs: r.hashes, reason: r.note || null, amountIn: balance, out: r.expected, latencyMs: Date.now() - order.ts });
       } finally { this.inflight.delete(token); }
       this.quoteCache.clear(); this.refreshBalance(); this.syncAt = 0;
@@ -612,46 +609,6 @@ export class LiveTrader extends EventEmitter {
       this.emit('order', order); return order;
     }
   }
-
-  // 定时把 BNCB / GANG 换成 BNB（jak 2026-10-27 要求）。默认关，只能本人在页面「设置 → 定时换 BNB」里打开（Claude 不下单）。
-  // 每 mins 分钟一轮；每个币：链上余额 − 保留量，按市价约值 ≥ minBnb 才换，走和「换回 BNB」按钮同一条路（baw 聚合路由，Ondo 类经 USDT，计价币流动性检查照旧）。
-  // 保留量是给「BNB 不够用计价币买」和 Gang 报价币盘（GANG 计价）留的；未登录 / 只报价模式 / 钱包在等 App 确认时这一轮先跳过，下一分钟再看。
-  async q2bTick(force = false) {
-    const c = this.settings.autoQ2b; if ((!c.on && !force) || this.q2bRunning) return null;
-    const st = this.q2bState ||= { lastAt: Number(loadSaved().autoQ2bLastAt) || 0, last: loadSaved().autoQ2bLast || null };
-    if (!force && Date.now() - st.lastAt < c.mins * 60_000) return null;
-    const w = this.wallets[0];
-    const skip = !w ? '没有钱包' : DRY_RUN ? 'DRY_RUN 模式不下单' : this.status.auth.state !== 'ok' ? '币安钱包未登录' : (await baw.walletLock().catch(() => 'UNKNOWN')) === 'LOCKED' ? '钱包在等你在币安 App 里确认' : null;
-    if (skip) { if (force) throw new Error(skip); return null; }
-    this.q2bRunning = true; st.lastAt = Date.now(); saveSetting('autoQ2bLastAt', st.lastAt);
-    const lines = [];
-    try {
-      for (const [sym, addr] of Object.entries(Q2B_TOKENS)) {
-        if (!c.tokens[sym]) continue;
-        try {
-          if (this.inflight.has(addr)) { lines.push(`${sym} 有订单在处理，这轮跳过`); continue; }
-          const ex = await this.exactBal(w, addr), keep = ethers.parseUnits(Number(c.keep[sym] || 0).toFixed(ex.dec), ex.dec);
-          const raw = ex.raw > keep ? ex.raw - keep : 0n, qty = ethers.formatUnits(raw, ex.dec);
-          if (raw === 0n) { lines.push(`${sym} 余额 ${fmtQ(Number(ex.str))}，不超过保留 ${c.keep[sym] || 0}，不换`); continue; }
-          let bnb = sym === 'WBNB' ? Number(qty) : (this.market.qUsd?.[addr.toLowerCase()] || 0) * Number(qty) / (this.market.bnbUsd || NaN);
-          if (!(bnb > 0)) bnb = Number((await baw.marketQuote({ fromTokenQty: qty, fromToken: addr, toToken: BNB_NATIVE, slippage: c.slippage }))?.toCoinAmount || 0);
-          if (bnb < c.minBnb) { lines.push(`${sym} 可换 ${fmtQ(Number(qty))}（约 ${bnb.toFixed(4)} BNB），低于门槛 ${c.minBnb} BNB，不换`); continue; }
-          const o = await this.quoteToBnb({ token: addr, slippage: c.slippage, qty, source: '定时换 BNB', via: '定时换回 BNB' });
-          lines.push(`${sym} ${fmtQ(Number(qty))} → ${o.status === 'filled' ? `${Number(o.out || 0).toFixed(4)} BNB` : o.status === 'pending' ? '已提交，等确认' : `失败：${o.reason}`}`);
-          if (o.status === 'pending') break;   // 在等 App 确认 / 结果未知：剩下的下一轮再换
-        } catch (e) { lines.push(`${sym} 出错：${e.message}`); }
-      }
-    } finally { this.q2bRunning = false; }
-    st.last = { at: st.lastAt, lines: lines.length ? lines : ['没有勾选要换的币'] }; saveSetting('autoQ2bLast', st.last);
-    console.log(`[定时换 BNB] ${st.last.lines.join('；')}`);
-    this.emit('notice', { kind: 'q2b', text: `定时换 BNB（${WALLET_LABEL}）：${st.last.lines.join('；')}` });
-    return st.last;
-  }
-  q2bView() {
-    const c = this.settings.autoQ2b, st = this.q2bState || { lastAt: Number(loadSaved().autoQ2bLastAt) || 0, last: loadSaved().autoQ2bLast || null };
-    return { wallet: WALLET_LABEL, cfg: c, last: st.last, running: !!this.q2bRunning, nextAt: c.on ? Math.max(Date.now(), st.lastAt + c.mins * 60_000) : null };
-  }
-  setQ2b(x) { this.settings.autoQ2b = normQ2b({ ...this.settings.autoQ2b, ...x, keep: { ...this.settings.autoQ2b.keep, ...(x?.keep || {}) }, tokens: { ...this.settings.autoQ2b.tokens, ...(x?.tokens || {}) } }); saveSetting('autoQ2b', this.settings.autoQ2b); console.log(`[settings] 定时换 BNB ${this.settings.autoQ2b.on ? '打开' : '关闭'} ${JSON.stringify(this.settings.autoQ2b)}`); return this.q2bView(); }
 
   // 待确认订单的后续：有 txHash 就等回执（最多 10 分钟）；在等 App 确认的，等钱包解锁后再看结果
   async followUp(order, e) {
@@ -926,18 +883,6 @@ LiveTrader.prototype.setMaxTrade = function (v) {
   saveSetting('maxTradeBnb', n);
   return n;
 };
-
-// 定时换 BNB 的币和设置：校验不过直接报错（页面显示）；读旧文件时 loose = true，坏值换成默认
-// WBNB 默认不勾：Gang 狙击买入时多包的 WBNB 会留着下次直接用（jak 2026-10-27 加上 WBNB，配合保留量用）
-const Q2B_TOKENS = { BNCB: QUOTE_TOKENS.BNCB, GANG: '0x0C6302401Aa5325C2e36f170F52C00b1D220B405', WBNB: QUOTE_TOKENS.WBNB };
-const Q2B_DEFAULT_OFF = new Set(['WBNB']);
-function normQ2b(x, loose = false) {
-  x = x && typeof x === 'object' ? x : {};
-  const num = (v, d, lo, hi, name) => { if (v === undefined || v === null || v === '') return d; const n = Number(v); if (Number.isFinite(n) && n >= lo && n <= hi) return n; if (loose) return d; throw new Error(`${name}要在 ${lo}～${hi} 之间`); };
-  const keep = {}, tokens = {};
-  for (const s of Object.keys(Q2B_TOKENS)) { keep[s] = num(x.keep?.[s], 0, 0, 1e15, `${s} 保留量`); tokens[s] = x.tokens?.[s] === undefined ? !Q2B_DEFAULT_OFF.has(s) : x.tokens[s] !== false; }
-  return { on: x.on === true, mins: Math.round(num(x.mins, 60, 5, 1440, '间隔（分钟）')), minBnb: num(x.minBnb, 0.01, 0, 100, '最小金额（BNB）'), slippage: num(x.slippage, 1, 0.1, 5, '滑点（%）'), keep, tokens };
-}
 
 const FUND_GAS = 0.002;   // 用计价币补 BNB 时给 gas 留的 BNB
 const fmtQ = (n) => (n >= 100 ? n.toFixed(2) : n >= 1 ? n.toFixed(4) : n.toPrecision(4));

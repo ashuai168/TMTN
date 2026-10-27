@@ -475,24 +475,6 @@ app.post('/api/swap', async (req, res) => { if (!LIVE) return res.status(400).js
 app.get('/api/blocklist', (req, res) => res.json(blocklist.view()));
 app.post('/api/blocklist', (req, res) => { try { const v = blocklist.set(req.body.kind, req.body.address, !!req.body.on, req.body.label); broadcast({ type: 'blocklist', data: v }); res.json(v); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/config', (req, res) => { agent.setConfig(req.body); if (LIVE && Number(req.body?.quickBuy) > 0) trader.saveSetting('quickBuy', Number(req.body.quickBuy)); res.json(agent.config); });
-// 定时换 BNB（BNCB / GANG → BNB）：钱包 1 的页面上改一次，同时转发给 WALLET_PEERS 里的其他钱包后端（各自按自己的余额定时执行）。
-// GET 返回每个钱包的设置和上一轮结果；own=1 只要本后端的（给主后端汇总用）。run=1 是本人点「立即执行一轮」
-app.get('/api/auto-q2b', async (req, res) => {
-  if (!LIVE) return res.status(400).json({ error: '只有实盘可用' });
-  const out = [{ slot: WALLET_SLOT, ...trader.q2bView() }];
-  if (req.query.own !== '1') for (const p of WALLET_PEERS) { try { out.push({ slot: p.slot, ...(await peerFetch(p, '/api/auto-q2b?own=1')) }); } catch (e) { out.push({ slot: p.slot, wallet: p.label || `钱包 ${p.slot}`, error: e.message }); } }
-  res.json(req.query.own === '1' ? out[0] : out);
-});
-app.post('/api/auto-q2b', async (req, res) => {
-  if (!LIVE) return res.status(400).json({ error: '只有实盘可用' });
-  const { run, own, ...cfg } = req.body || {};
-  let mine; try { mine = Object.keys(cfg).length ? trader.setQ2b(cfg) : trader.q2bView(); } catch (e) { return res.status(400).json({ error: e.message }); }
-  const out = [{ slot: WALLET_SLOT, ...mine }];
-  if (!own) for (const p of WALLET_PEERS) { try { out.push({ slot: p.slot, ...(await peerFetch(p, '/api/auto-q2b', { ...cfg, run, own: true }, run ? 200_000 : 5000)) }); } catch (e) { out.push({ slot: p.slot, wallet: p.label || `钱包 ${p.slot}`, error: e.message }); } }
-  if (run) { try { await trader.q2bTick(true); } catch (e) { out[0].error = e.message; } Object.assign(out[0], trader.q2bView()); }
-  broadcast({ type: 'settings', data: trader.settings });
-  res.json(own ? out[0] : out);
-});
 app.post('/api/settings', (req, res) => {
   const { maxTradeBnb, sendTo, ...rest } = req.body;   // 转出地址只能在服务器配置里改，页面不能改
   if (maxTradeBnb !== undefined) { if (!LIVE) return res.status(400).json({ error: '只有实盘模式有单笔上限' }); try { trader.setMaxTrade(maxTradeBnb); } catch (e) { return res.status(400).json({ error: e.message }); } }
@@ -556,7 +538,6 @@ if (LIVE) setInterval(() => new Set([...wss.clients].map((c) => c.sub).filter(Bo
 market.on('detail', (a) => { for (const c of wss.clients) if (c.readyState === 1 && c.sub === a) c.send(JSON.stringify({ type: 'detail', full: true, data: market.detail(a) })); });
 // 订单结束（成交或失败）后马上重读链上余额，3 / 5 / 20 秒后再读一次，等区块和 baw 索引跟上
 const resync = async () => { trader.syncAt = 0; if (holdings) holdings.histAt = 0; await trader.refreshBalance?.().catch(() => {}); await trader.syncHoldings?.().catch(() => {}); };
-if (LIVE) trader.on('notice', (n) => broadcast({ type: 'notice', data: n }));
 trader.on('order', (o) => { broadcast({ type: 'order', data: o }); if (LIVE && ['filled', 'failed', 'unknown'].includes(o.status)) { for (const ms of [3000, 5000, 20000]) setTimeout(() => resync(), ms); for (const ms of [1500, 6000, 15000]) setTimeout(refreshHoldSnap, ms); } });
 trader.on('autoTransfer', (o) => broadcast({ type: 'autoTransfer', data: o }));
 trader.on('rules', (r) => broadcast({ type: 'rules', data: r }));
