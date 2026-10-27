@@ -370,6 +370,12 @@ function renderAuth() {
     }
     // 所有钱包都关了「参与下单」（不是没登录）：提示原因，已登录的钱包给一个「参与下单」按钮直接打开
     const noneOn = !on.length && (S.walletsInfo || []).some((w) => w.auth === 'ok');
+    if (noneOn) {   // 有钱包已登录、只是都关了「参与下单」：不弹遮罩，只在顶栏黄色提示（点下单时也会提示）
+      modal.classList.add('hidden'); pill.classList.add('warn');
+      pill.querySelector('span').textContent = '没有钱包参与下单 · 点顶栏钱包菜单打开';
+      pill.title = (S.walletsInfo || []).map((w) => `${w.label} ${w.agentId || ''}：${w.auth === 'ok' ? '已登录' : '未登录'}，不参与下单`).join('\n');
+      return;
+    }
     pill.classList.add('bad'); pill.querySelector('span').textContent = noneOn ? '没有钱包参与下单' : '币安钱包都未登录';
     modal.classList.remove('hidden'); loadNetCheck();
     const k = 'mw|' + (S.walletsInfo || []).map((w) => w.slot + w.auth + (w.on ? 1 : 0)).join(','); if (modal.dataset.k === k) return; modal.dataset.k = k;
@@ -1079,6 +1085,7 @@ function orderAmount(wid) {
 
 async function submitOrder({ token = S.selected, side = S.side, wallets = [...S.selWallets], amountFor = orderAmount, slots = null, label = null } = {}) {
   const t = S.tokens.get(token); if (!t) return;
+  if (MW() && !onWallets().length) return toast({ status: 'failed', symbol: t.symbol, reason: '没有钱包参与下单：在顶栏钱包菜单或下单区的钱包按钮里打开「参与下单」' });
   if (side === 'buy' && S.amtMode === 'pct' && amountFor === orderAmount) {   // 下单前按最新报价重新换算，避免用到旧的金额
     const v = parseFloat($('#amount').value);
     let c = { bnb: 0 };
