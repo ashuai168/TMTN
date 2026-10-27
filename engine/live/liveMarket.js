@@ -20,6 +20,7 @@ import { ShrineFeeds, tokenInfo } from './shrine.js';
 import * as fsi from './fsi.js';
 import { cache } from './cache.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { getRoute } from './quoteRoutes.js';
 const FOUR_REG = dataFile('fourTokens.json');
 const FLAP_REG = dataFile('flapCreated.json');
 const BOOT = Date.now();
@@ -29,8 +30,27 @@ const num = (v) => { if (v == null || v === '') return null; if (typeof v === 'n
 const sec2ms = (v) => { const x = Number(v); return !x ? Date.now() : x < 1e12 ? x * 1000 : x; };
 const isAgentish = (l) => l.agentExclusive === true || l.agent === true || l.isAgent === true || (Array.isArray(l.tags) && l.tags.some((t) => /agent/i.test(t)));
 
+// 报价币美元价兜底：gang.fun 对 FXIon 等 Ondo 币给 quoteUsd=0、DexScreener 偶尔失败 / 限流时，直接读路线表里最深池子（只读 slot0 / getReserves）
+// 池子另一边是稳定币按 $1，是 WBNB 按 BNB 价；别的配对币不算（返回 0）
+const STABLE = new Set(['USDT', 'USDC', 'USD1', 'U', 'BUSD', 'FDUSD']);
+const POOL_ABI = ['function token0() view returns (address)', 'function token1() view returns (address)', 'function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint32,bool)', 'function getReserves() view returns (uint112,uint112,uint32)'];
+const DEC_ABI = ['function decimals() view returns (uint8)'];
+async function poolPriceUsd(provider, addr, bnbUsd) {
+  const k = String(addr).toLowerCase(), bp = getRoute(k)?.bestPool; if (!bp?.pair) return 0;
+  const w = String(bp.with || '').toUpperCase(), wUsd = STABLE.has(w) ? 1 : w === 'WBNB' || w === 'BNB' ? bnbUsd : 0; if (!(wUsd > 0)) return 0;
+  const pool = new ethers.Contract(bp.pair, POOL_ABI, provider);
+  const [t0, t1] = (await Promise.all([pool.token0(), pool.token1()])).map((a) => a.toLowerCase());
+  if (t0 !== k && t1 !== k) return 0;
+  const [d0, d1] = (await Promise.all([t0, t1].map((a) => new ethers.Contract(a, DEC_ABI, provider).decimals()))).map(Number);
+  let p1per0;   // 1 个 token0 值多少 token1（已按小数位换算）
+  try { const sq = Number((await pool.slot0())[0]) / 2 ** 96; p1per0 = sq * sq * 10 ** (d0 - d1); }
+  catch { const [r0, r1] = await pool.getReserves(); p1per0 = (Number(r1) / 10 ** d1) / (Number(r0) / 10 ** d0); }
+  if (!(p1per0 > 0) || !isFinite(p1per0)) return 0;
+  return (t0 === k ? p1per0 : 1 / p1per0) * wUsd;
+}
+
 export class LiveMarket extends EventEmitter {
-  quoteUsd(t) { const q = String(t?.quote || 'BNB').toUpperCase(); if (q === 'BNB' || q === 'WBNB') return this.bnbUsd; if (['USDT','USDC','USD1'].includes(q)) return 1; return this.qUsd[String(t.quoteAddress || '').toLowerCase()] || 0; }
+  quoteUsd(t) { const q = String(t?.quote || 'BNB').toUpperCase(); if (q === 'BNB' || q === 'WBNB') return this.bnbUsd; if (['USDT','USDC','USD1'].includes(q)) return 1; const a = String(t.quoteAddress || '').toLowerCase(), v = this.qUsd[a]; if (!(v > 0) && a && this.qpx && !this._qpxSoon && Date.now() - (this._qpxAt || 0) > 30_000) { this._qpxAt = Date.now(); this._qpxSoon = setTimeout(() => { this._qpxSoon = null; this.qpx(); }, 2000); } return v || 0; }   // 新出现的报价币没价格：2 秒后补查一次（30 秒最多一次），不等 60 秒轮询
   constructor() {
     super();
     // 两套节点：行情 / 持仓 / 监控这类不赶时间的读取走公共节点优先（省 NodeReal 额度）；下单、确认、卖前余额这条交易链路走 NodeReal 优先
@@ -81,7 +101,8 @@ export class LiveMarket extends EventEmitter {
     const blk = async () => { const t0 = Date.now(); try { this.block = await this.provider.getBlockNumber(); this.rpcMs = Date.now() - t0; this.rpcError = null; } catch (e) { this.rpcError = e.shortMessage || e.message; } };
     const px = async () => { try { const j = await (await fetch(BNB_PRICE_URL)).json(); if (+j.price) this.bnbUsd = +j.price; } catch { /* 保留上次 */ } };
     const qpx = async () => { const qs = new Set(); for (const t of this.tokens.values()) if (t.quoteAddress && t.quote && !['BNB','WBNB','USDT','USDC','USD1'].includes(String(t.quote).toUpperCase())) qs.add(String(t.quoteAddress).toLowerCase());
-      for (const a of qs) { try { const j = await (await fetch('https://api.dexscreener.com/latest/dex/tokens/' + a)).json(); const ps = (j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === a && +x.priceUsd).sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0)); if (ps[0]) this.qUsd[a] = +ps[0].priceUsd; } catch { /* 保留上次 */ } } };
+      for (const a of qs) { try { const j = await (await fetch('https://api.dexscreener.com/latest/dex/tokens/' + a, { signal: AbortSignal.timeout(6000) })).json(); const ps = (j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === a && +x.priceUsd).sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0)); if (ps[0]) this.qUsd[a] = +ps[0].priceUsd; } catch { /* 保留上次 */ }
+        if (!(this.qUsd[a] > 0)) { try { const v = await poolPriceUsd(this.provider, a, this.bnbUsd); if (v > 0) this.qUsd[a] = v; } catch { /* 下次再试 */ } } } };   // DexScreener 没给出价格：读链上池子兜底
     this.qpx = qpx; blk(); px(); setTimeout(qpx, 3000);
     this.timers = [setInterval(blk, 3000), setInterval(px, 30_000), setInterval(qpx, 60_000), setInterval(() => this.warm(), 8000), setInterval(() => this.flapHolders(), 90_000), setInterval(() => this.flapNftTick(), 6000)];
     setTimeout(() => this.flapHolders(), 15_000);
