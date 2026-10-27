@@ -188,10 +188,10 @@ export class GangV2 {
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
   async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
     const { pad: p, c } = await this.curve(token); const q = this.quoteToken(c); const hashes = [];
-    const dec = await this.decimals(q); const qSym = isWbnb(q) ? 'WBNB' : '报价币';
+    const [dec, have0] = await Promise.all([isWbnb(q) ? 18 : this.decimals(q), this.balanceOf(q, wallet)]); const qSym = isWbnb(q) ? 'WBNB' : '报价币';   // 并行读，狙击要快
     // 只用来判断钱包里现有报价币够不够（够就直接用这么多）；不够时下面按实际到账数量买。用 30 秒内的汇率，省掉 1～2 次 baw 报价
     let need = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * await this.quoteRate(q, { stale: 30_000 })).toFixed(Math.min(12, dec)), dec);
-    const have = await this.balanceOf(q, wallet);
+    const have = have0;
     if (payQuote != null) { const want = ethers.parseUnits(Number(payQuote).toFixed(Math.min(12, dec)), dec); need = want < have ? want : have; if (need <= 0n) throw new Error('钱包里没有这个盘的报价币'); }
     if (have < need) {
       const before = have; const t0 = Date.now();
@@ -211,8 +211,8 @@ export class GangV2 {
       need = got; step(`收到 ${ethers.formatUnits(got, dec)} ${qSym}`, Date.now() - t0);
     } else step(`钱包里已有足够${qSym}，直接使用 ${ethers.formatUnits(need, dec)}`, 0);
     const ap = await this.ensureAllowance({ wallet, token: q, spender: p, amount: need, label: `授权${qSym}`, step, kind: 'quote', symbol: qSym }); if (ap) hashes.push(ap);
-    const { c: c2 } = await this.curve(token);
-    const r = this.buyQuote(c2, need, await this.room(token, wallet).catch(() => null));
+    const [{ c: c2 }, room] = await Promise.all([this.curve(token), this.call(p, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null)]);
+    const r = this.buyQuote(c2, need, room);
     if (r.tokens <= 0n) throw new Error('报价为 0：可能已到每个钱包 1% 上限，或盘已毕业');
     const data = pad.encodeFunctionData('buy', [token, need, minOut(r.tokens, slippage)]);
     try { await this.provider.call({ from: wallet, to: p, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }

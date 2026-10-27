@@ -224,10 +224,16 @@ if (LIVE && WALLET_SLOT === 1) {
 let sniper = null;
 if (LIVE && WALLET_SLOT === 1) {
   const { Sniper } = await import('./engine/live/sniper.js');
-  sniper = new Sniper({ market, trader, placeOrder, isBlocked: (t) => blocklist.has(t), log: (m) => console.log(m) });
+  const { wbnbTopUp } = await import('./engine/live/sniper.js');
+  // 预备 WBNB：本钱包直接做，其他钱包发给它们自己的后端（/api/snipe/float）
+  const floatFn = (target, slots) => Promise.all(slots.map((slot) => slot === WALLET_SLOT ? wbnbTopUp(trader, target, LIVE_TRADE)
+    : (() => { const p = WALLET_PEERS.find((x) => x.slot === slot); return p ? peerFetch(p, '/api/snipe/float', { target }, 60_000).catch((e) => ({ wallet: p.label || `钱包 ${slot}`, error: e.message })) : { wallet: `钱包 ${slot}`, skip: '没有这个钱包' }; })()));
+  sniper = new Sniper({ market, trader, placeOrder, floatFn, isBlocked: (t) => blocklist.has(t), log: (m) => console.log(m) });
   sniper.on('state', (v) => broadcast({ type: 'snipeState', data: v }));
   sniper.on('log', (r) => { broadcast({ type: 'snipeLog', data: r }); if (r.kind !== 'skip') console.log(`[狙击] ${r.symbol} ${r.kind}：${r.reason}`); });
 }
+// 每个钱包后端都有：把自己钱包的 WBNB 补到 target（主后端的狙击调用；只在 LIVE_TRADE=1 时真的包装）
+app.post('/api/snipe/float', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘可用' }); try { const { wbnbTopUp } = await import('./engine/live/sniper.js'); res.json(await wbnbTopUp(trader, Math.min(2, Math.max(0, Number(req.body?.target) || 0)), LIVE_TRADE)); } catch (e) { res.status(400).json({ error: e.message }); } });
 const needSniper = (res) => { if (!sniper) { res.status(400).json({ error: '只有实盘主后端支持狙击' }); return false; } return true; };
 app.get('/api/snipe', (req, res) => { if (!needSniper(res)) return; res.json({ ...sniper.view(), log: sniper.log.slice(0, 300) }); });
 app.post('/api/snipe', (req, res) => {   // { params } 改参数；{ enabled: true/false } 开 / 关（急停 = enabled:false）

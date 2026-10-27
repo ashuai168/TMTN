@@ -30,7 +30,7 @@ export const HARD_MAX_BUY = 0.3;   // 无论参数怎么填，每个钱包单笔
 export const SNIPE_DEFAULTS = {
   pct: 1, wallets: [1, 2], quotes: ['BNB', 'XAUT'], maxBnbPerBuy: 0.08, dailyCapBnb: 0.5, maxTokensPerDay: 5,
   maxDelaySec: 8, maxSoldPct: 15, partial: true, slippage: 15, buffer: 5, dryRun: true,
-  autoSell: true, tiers: [{ mult: 2, pct: 50 }], stopLossPct: 0, sellSlippage: 20, holdHours: 72,
+  wbnbFloat: 0.15, autoSell: true, tiers: [{ mult: 2, pct: 50 }], stopLossPct: 0, sellSlippage: 20, holdHours: 72,
 };
 
 // 曲线上从已卖出 sold 再买 tokens 个，要付多少报价币（含 1% 平台费）。和 gangV2Pads.buyQuote 同一套公式
@@ -42,9 +42,9 @@ export function costFor({ virtualQuote, realQuote = 0n, sold = 0n }, tokens) {
 }
 
 export class Sniper extends EventEmitter {
-  constructor({ market, trader, placeOrder, isBlocked, log }) {
+  constructor({ market, trader, placeOrder, isBlocked, floatFn, log }) {
     super();
-    Object.assign(this, { market, trader, placeOrder, isBlocked: isBlocked || (() => false), logFn: log || (() => {}) });
+    Object.assign(this, { market, trader, placeOrder, floatFn, isBlocked: isBlocked || (() => false), logFn: log || (() => {}) });
     const s = readJson(STATE, {});
     this.enabled = s.enabled === true; this.params = this.clean({ ...SNIPE_DEFAULTS, ...(s.params || {}) });
     this.days = s.days || {}; this.done = s.done || {}; this.pos = s.pos || {};   // pos：狙到的币（自动卖出盯着的持仓）   // done：已经处理过（下单 / 模拟）的币，不重复狙
@@ -58,6 +58,7 @@ export class Sniper extends EventEmitter {
     setInterval(() => { if (this.enabled) this.trader.gangV2?.provider?.getBlockNumber?.().catch(() => {}); }, 10_000).unref?.();
     const warmRates = () => { if (!this.enabled) return; for (const q of this.params.quotes) if (QUOTE_ADDR[q]) this.trader.gangV2?.quoteRate(QUOTE_ADDR[q], { stale: 120_000 }).catch(() => {}); };
     setInterval(warmRates, 20_000).unref?.(); setTimeout(warmRates, 3000);
+    setInterval(() => this.topUp(), 60_000).unref?.(); setTimeout(() => this.topUp(), 15_000);
     setInterval(() => this.checkSells().catch((e) => this.logFn(`[狙击] 自动卖出检查出错：${e.message}`)), 3000).unref?.();
   }
 
@@ -69,7 +70,7 @@ export class Sniper extends EventEmitter {
       maxBnbPerBuy: n(p.maxBnbPerBuy, 0.08, 0, HARD_MAX_BUY), dailyCapBnb: n(p.dailyCapBnb, 0.5, 0, 20), maxTokensPerDay: Math.round(n(p.maxTokensPerDay, 5, 0, 200)),
       maxDelaySec: n(p.maxDelaySec, 8, 1, 120), maxSoldPct: n(p.maxSoldPct, 15, 0, 80), partial: p.partial !== false, slippage: n(p.slippage, 15, 1, 50), buffer: n(p.buffer, 5, 0, 30), dryRun: p.dryRun !== false,
       autoSell: p.autoSell !== false, tiers: (Array.isArray(p.tiers) ? p.tiers : [{ mult: 2, pct: 50 }]).map((x) => ({ mult: n(x?.mult, 0, 0, 1000), pct: n(x?.pct, 0, 0, 100) })).filter((x) => x.mult >= 1.05 && x.pct >= 1).sort((a, b) => a.mult - b.mult).slice(0, 3),
-      stopLossPct: n(p.stopLossPct, 0, 0, 99), sellSlippage: n(p.sellSlippage, 20, 1, 50), holdHours: n(p.holdHours, 72, 1, 720),
+      wbnbFloat: n(p.wbnbFloat, 0.15, 0, 2), stopLossPct: n(p.stopLossPct, 0, 0, 99), sellSlippage: n(p.sellSlippage, 20, 1, 50), holdHours: n(p.holdHours, 72, 1, 720),
     };
   }
   save() {
@@ -80,7 +81,7 @@ export class Sniper extends EventEmitter {
   // 今天的用量：真实和模拟分开记（模拟不占真实额度），按当前模式取
   today(sim = this.params.dryRun) { const d = (this.days[day()] ||= { bnb: 0, tokens: 0 }); if (!sim) return d; return (d.sim ||= { bnb: 0, tokens: 0 }); }
   view() { return { enabled: this.enabled, params: this.params, today: this.today(), stats: this.stats, recent: this.recent.slice(0, 20), typical: this.typical(), positions: this.posView(), hardMax: HARD_MAX_BUY, liveTrade: !this.trader?.status?.dryRun }; }
-  setEnabled(v) { this.enabled = !!v; this.save(); this.logFn(`[狙击] ${this.enabled ? `已开启（${this.params.dryRun ? '模拟' : '真实下单'}）` : '已关闭'}`); return this.view(); }
+  setEnabled(v) { this.enabled = !!v; this.save(); if (this.enabled) setTimeout(() => this.topUp(), 500); this.logFn(`[狙击] ${this.enabled ? `已开启（${this.params.dryRun ? '模拟' : '真实下单'}）` : '已关闭'}`); return this.view(); }
   update(params) { this.params = this.clean({ ...this.params, ...(params || {}) }); this.save(); return this.view(); }
 
   // BNB 盘（虚拟储备 5 BNB）的参考成本：前面已经被买走 0% / 5% / 10% / 20% 时，再买 N% 要多少 BNB
@@ -142,6 +143,7 @@ export class Sniper extends EventEmitter {
     const refund = amt * (nW - ok.length); if (refund > 0) td.bnb = Math.max(0, td.bnb - refund);
     if (!ok.length) td.tokens = Math.max(0, td.tokens - 1);
     this.stats.orders += ok.length; this.stats.fails += list.length - ok.length; this.stats.bnb += amt * ok.length;
+    setTimeout(() => this.topUp(), 8000);   // 这次用掉了 WBNB，补回来
     if (ok.length) open(ok.map((o) => o.walletSlot).filter((x) => x > 0).length ? ok.map((o) => o.walletSlot).filter((x) => x > 0) : p.wallets, false);
     this.save();
     return this.record(it, ok.length ? 'order' : 'fail', `狙击买入 ${amt} BNB${note}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : o.status === 'pending' ? '已提交待确认（已计入额度）' : '失败 ' + (o.reason || '')}`).join('；')}`,
@@ -193,4 +195,36 @@ export class Sniper extends EventEmitter {
     return this.record(it, ok.length ? 'order' : 'fail', `自动卖出 ${s.pct}%：${s.why}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : o.status === 'pending' ? '已提交待确认' : '失败 ' + (o.reason || '')}`).join('；')}`,
       { side: 'sell', pct: s.pct, mult: v.last?.mult, results: list.map((o) => ({ wallet: o.wallet, status: o.status, tx: o.tx, reason: o.reason, out: o.out })) });
   }
+
+  // ---------- 预备 WBNB ----------
+  // BNB 盘每次狙击原本是「包装 BNB→WBNB」+「buy」两笔交易（实测各约 1.8 秒广播 + 0.7 秒上链）；钱包里事先有 WBNB 就只发 buy 一笔，快约 3 秒。
+  // 真实狙击开着时，每 60 秒和每次狙击后检查每个钱包的 WBNB：低于目标一半就用 BNB 包装补到目标（留 0.02 BNB 付 gas）。包装 1:1，随时可在持仓页换回
+  async topUp() {
+    const p = this.params;
+    if (!this.enabled || p.dryRun || !(p.wbnbFloat > 0) || !this.floatFn || this.topping) return;
+    this.topping = true;
+    try {
+      for (const r of await this.floatFn(p.wbnbFloat, p.wallets)) {
+        if (r.wrapped) this.record({ symbol: 'WBNB' }, 'prep', `${r.wallet || ''} 预备 WBNB：原有 ${(+r.have).toFixed(4)}，包装 ${(+r.wrapped).toFixed(4)} BNB${r.tx ? '' : ''}`, { results: [{ wallet: r.wallet, status: 'filled', tx: r.tx }] });
+        else if (r.error) this.record({ symbol: 'WBNB' }, 'fail', `${r.wallet || ''} 预备 WBNB 失败：${r.error}`);
+      }
+    } catch (e) { this.logFn(`[狙击] 预备 WBNB 出错：${e.message}`); } finally { this.topping = false; }
+  }
+}
+
+// 本后端自己的钱包：WBNB 低于 target 的一半时包装补到 target。只在 LIVE_TRADE=1、已登录、钱包没被锁时做
+export async function wbnbTopUp(trader, target, liveTrade) {
+  const w = trader.wallets?.[0], label = w?.label || '';
+  if (!liveTrade) return { wallet: label, skip: 'LIVE_TRADE 未开' };
+  if (!w?.address || trader.status?.auth?.state !== 'ok') return { wallet: label, skip: '未登录' };
+  const have = Number(ethers.formatEther(await trader.gangV2.balanceOf(WBNB, w.address)));
+  if (have >= target / 2) return { wallet: label, have };
+  await trader.refreshBalance();
+  const amt = +Math.min(target - have, (w.bnb || 0) - 0.02).toFixed(6);
+  if (!(amt >= 0.005)) return { wallet: label, have, skip: 'BNB 不够包装' };
+  if ((await trader.lockStatus()) === 'LOCKED') return { wallet: label, have, skip: '钱包在等 App 确认' };
+  try {
+    const tx = await trader.portal.send({ wallet: w.address, to: WBNB, valueWei: ethers.parseEther(String(amt)), inputData: new ethers.Interface(['function deposit() payable']).encodeFunctionData('deposit', []), label: '狙击预备 WBNB', step: () => {} });
+    return { wallet: label, have, wrapped: amt, tx };
+  } catch (e) { return { wallet: label, have, error: e.message }; }
 }
