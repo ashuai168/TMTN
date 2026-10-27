@@ -274,7 +274,7 @@ function renderAll() {
   if (S.view === 'pulse' && Date.now() - lastPulse > 1000) { renderPulse(); lastPulse = Date.now(); }
   if (Date.now() - lastList > 900) { renderList(); lastList = Date.now(); }
   renderStatus(); renderHead(); renderRight();
-  if (['pos', 'assets'].includes(S.bottomTab)) renderBottom();
+  if (['pos', 'allpos', 'assets'].includes(S.bottomTab)) renderBottom();
 }
 
 function parseRoute() {
@@ -617,7 +617,7 @@ function renderStatus() {
 // 交易页顶部：我的余额 / 盈亏（与战壕卡片同一套数据：价格 × 数量 × 计价币 USD）
 // 持仓行（和「持仓」页同一份数据：市值、成本都折成 BNB，报价币盘按汇率换算）。交易页每 15 秒最多拉一次
 // 持仓快照：服务器每 5 秒推一次（下单后马上推），本地也存一份，刷新页面后立刻有数，不用等接口
-function setHoldSnap(d) { if (!d) return; HOLD.data = d; HOLD.at = Date.now(); try { localStorage.setItem('holdSnap', JSON.stringify(d)); } catch { /* 太大或无痕模式就算了 */ } scheduleRender(); if (S.view === 'hold') renderHold(); renderQB(); if (S.selected && S.tokens.has(S.selected)) renderMyPos(S.tokens.get(S.selected)); if (S.bottomTab === 'pos') renderBottom(); }
+function setHoldSnap(d) { if (!d) return; HOLD.data = d; HOLD.at = Date.now(); try { localStorage.setItem('holdSnap', JSON.stringify(d)); } catch { /* 太大或无痕模式就算了 */ } scheduleRender(); if (S.view === 'hold') renderHold(); renderQB(); if (S.selected && S.tokens.has(S.selected)) renderMyPos(S.tokens.get(S.selected)); if (S.bottomTab === 'pos' || S.bottomTab === 'allpos') renderBottom(); }
 function holdRow(t) {
   if (!HOLD.data) { try { HOLD.data = JSON.parse(localStorage.getItem('holdSnap') || 'null'); HOLD.stale = true; } catch { /* ignore */ } }
   return HOLD.data?.rows?.find((r) => r.token.toLowerCase() === String(t.address).toLowerCase()) || null;
@@ -784,6 +784,31 @@ $('#toLatest').addEventListener('click', () => chart.timeScale().scrollToRealTim
 const qAmt = (v, q) => `${!(v > 0) ? '0' : q === 'BNB' || v < 1000 ? bnb(v, 4) : K(v)} ${esc(q)}`;   // 报价币金额：BNB 保留小数，大数（GANG 等）用 K / M
 const usdAmt = (v) => (v == null || !isFinite(v) ? '—' : '$' + (v < 0.1 ? v.toFixed(4) : v.toFixed(2)));
 const txLink = (tx) => (!tx ? '—' : LIVE() ? `<a href="https://bscscan.com/tx/${tx}" target="_blank" rel="noopener">${short(tx, 8, 6)} ↗</a>` : `${short(tx, 8, 6)} ↗`);
+// 「所有持仓」标签：按钱包拆开的持仓行（只要还持有的）。其他钱包按本后端（8788）的价格重新估值，和这里看到的行情一致
+function allPosRows() {
+  if (!HOLD.data) { try { HOLD.data = JSON.parse(localStorage.getItem('holdSnap') || 'null'); } catch { /* ignore */ } }   // 刚打开页面：先用上次的快照
+  const d = HOLD.data; if (!d) return [];
+  const ws = d.wallets?.length ? d.wallets : [{ slot: 0, label: '', rows: d.rows || [] }];
+  const own = new Map((ws[0].rows || []).map((r) => [String(r.token).toLowerCase(), r])), bu = d.bnbUsd || S.bnbUsd || 0;
+  const out = [];
+  ws.forEach((w, i) => { for (const r0 of w.rows || []) {
+    if (!(r0.amount > 0)) continue;
+    const r = { ...r0, slot: w.slot, wlabel: w.label };
+    if (i > 0 && r0.valueBnb != null) {   // 对方的数值通过了它自己的校验才重算；拿不到本后端价格就保持原样
+      const o = own.get(String(r0.token).toLowerCase()), t = S.tokens.get(r0.token);
+      const px = o?.priceBnb > 0 ? o.priceBnb : t?.price > 0 && r0.quoteRate > 0 ? t.price * r0.quoteRate : null;
+      if (px) { r.valueBnb = r0.amount * px; r.valueUsd = r.valueBnb * bu; if (r0.pnlBnb != null) r.pnlBnb = r.valueBnb + (r0.soldBnb || 0) - (r0.costBnb || 0); if (r0.pnlUsd != null) r.pnlUsd = r.valueUsd + (r0.soldUsd || 0) - (r0.costUsd || 0); if (r.pnlUsd != null && r0.costUsd > 0) r.pnlPct = (r.pnlUsd / r0.costUsd) * 100; }
+    }
+    out.push(r);
+  } });
+  return out.sort((a, b) => (b.valueUsd ?? -1) - (a.valueUsd ?? -1));
+}
+$('#bottomBody').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-asell]'); if (!b) return; e.preventDefault(); e.stopPropagation();
+  const [slot, w, tk, pct] = b.dataset.asell.split(':'), multi = (HOLD.data?.wallets?.length || 0) > 1;
+  const lbl = multi ? HOLD.data.wallets.find((x) => x.slot === +slot)?.label : null;
+  submitOrder({ token: tk, side: 'sell', wallets: [w], amountFor: () => +pct, ...(multi && +slot ? { slots: [+slot], label: lbl } : {}) });
+});
 function renderBottom() {
   const b = $('#bottomBody'); const t = S.tokens.get(S.selected);
   const mineSet = new Set(S.wallets.map((w) => 'user:' + w.id));
@@ -834,6 +859,24 @@ function renderBottom() {
         ${rows.map((p) => `<tr><td><span class="side">${logoHtml({ ...p, address: p.token }, 'xs')}<a href="#" data-a="${p.token}">${esc(p.symbol)}</a></span></td><td class="l">${p.wallet}</td><td>${K(p.amount)}</td><td>${bnb(p.valueBnb)}</td><td>${bnb(p.costBnb)}</td><td>${bnb(p.boughtBnb)} / ${bnb(p.soldBnb)}</td>
         <td class="${p.pnlBnb >= 0 ? 'g' : 'r'}">${p.pnlBnb >= 0 ? '+' : ''}${bnb(p.pnlBnb)}</td><td class="${p.pnlPct >= 0 ? 'g' : 'r'}">${p.amount > 0 ? pctS(p.pnlPct) : '已清仓'}</td><td class="l">${p.stage === 'curve' ? '内盘' : p.stage === 'dex' ? '已迁移' : '已撤池'}</td>
         <td>${p.amount > 0 ? `<button class="qb" style="display:inline;color:var(--r);border-color:rgba(246,70,93,.4);background:var(--r-bg)" data-sell="${p.walletId}:${p.token}:50">卖50%</button> <button class="qb" style="display:inline;color:var(--r);border-color:rgba(246,70,93,.4);background:var(--r-bg)" data-sell="${p.walletId}:${p.token}:100">清仓</button>` : ''}</td></tr>`).join('')}</table>` : (cl ? '' : '<div class="empty">暂无持仓</div>'));
+      break;
+    }
+    case 'allpos': {
+      // 所有持仓：每个钱包各自一行（同一个币两个钱包都有就两行），点卖出只卖那一个钱包的
+      const rows = allPosRows(), shown = rows.filter((r) => r.valueBnb == null || r.valueBnb >= 0.0005), hid = rows.length - shown.length;
+      const multi = (HOLD.data?.wallets?.length || 0) > 1, sel = S.selected?.toLowerCase();
+      const T = shown.reduce((a, r) => ({ v: a.v + (r.valueUsd || 0), vb: a.vb + (r.valueBnb || 0), c: a.c + (r.costUsd || 0), p: a.p + (r.pnlUsd || 0) }), { v: 0, vb: 0, c: 0, p: 0 });
+      cnt = shown.length + ' 个持仓' + (hid ? `（另有 ${hid} 个小额未显示）` : '');
+      const stg = (r) => (r.stage === 'claim' ? '<span class="y">可领取</span>' : r.stage === 'curve' ? '内盘' : r.stage === 'dex' ? '<span class="g">已迁移</span>' : '已撤池');
+      const sellBtn = (r, pct, txt) => `<button class="qb" style="display:inline;color:var(--r);border-color:rgba(246,70,93,.4);background:var(--r-bg)" data-asell="${r.slot || 0}:${r.walletId}:${r.token}:${pct}">${txt}</button>`;
+      html = !HOLD.data ? '<div class="empty">持仓读取中…</div>' : shown.length ? `<table><tr><th class="l">代币</th>${multi ? '<th class="l">钱包</th>' : ''}<th class="l">平台 / 状态</th><th>数量</th><th title="按本程序（8788）的现价估值">余额</th><th>成本</th><th>已卖出</th><th>盈亏</th><th>操作</th></tr>
+        <tr class="dim"><td class="l"><b>合计</b></td>${multi ? '<td></td>' : ''}<td></td><td></td><td><b>$${T.v.toFixed(2)}</b><div class="hsub">${bnb(T.vb)} BNB</div></td><td>$${T.c.toFixed(2)}</td><td></td><td>${sgn(T.p, (v) => '$' + v.toFixed(2))}${T.c > 0 ? ' <span class="hsub">' + sgn((T.p / T.c) * 100, (v) => v.toFixed(1) + '%') + '</span>' : ''}</td><td></td></tr>
+        ${shown.map((r) => `<tr class="${r.token.toLowerCase() === sel ? 'mine' : ''}"><td class="l"><span class="side" data-a="${r.token}" style="cursor:pointer" title="打开这个币">${logoHtml({ ...r, address: r.token }, 'xs')}<b>${esc(r.symbol)}</b></span></td>${multi ? `<td class="l"><b class="me">${esc(r.wlabel || '')}</b></td>` : ''}
+        <td class="l"><i class="pbadge">${r.platform === 'four' ? 'Four' : r.platform === 'gang' ? 'Gang' : 'Flap'}</i> ${stg(r)}</td><td>${K(r.amount)}<div class="hsub">${r.supplyPct != null ? r.supplyPct.toFixed(3) + '%' : ''}</div></td>
+        <td>${r.valueBnb != null ? `<b>$${(r.valueUsd || 0).toFixed(2)}</b><div class="hsub">${bnb(r.valueBnb)} BNB</div>` : `<span class="y" title="${esc(r.warn || '')}">— ⚠</span>`}</td>
+        <td title="${usdTip(r)}">$${(r.costUsd || 0).toFixed(2)}<div class="hsub">${bnb(r.costBnb)} BNB</div></td><td title="${usdTip(r)}">$${(r.soldUsd || 0).toFixed(2)}</td>
+        <td title="${usdTip(r)}">${r.pnlUsd == null ? `<span class="muted" title="${esc(r.warn || '')}">—</span>` : sgn(r.pnlUsd, (v) => '$' + v.toFixed(2))}${r.pnlPct != null ? ' <span class="hsub">' + sgn(r.pnlPct, (v) => v.toFixed(1) + '%') + '</span>' : ''}</td>
+        <td>${r.isQuote ? sellBtn(r, 100, '换回 BNB') : sellBtn(r, 50, '卖50%') + ' ' + sellBtn(r, 100, '清仓')}</td></tr>`).join('')}</table>` : `<div class="empty">${HOLD.err ? esc(HOLD.err) : '暂无持仓'}</div>`;
       break;
     }
     case 'orders': case 'fills': {
@@ -981,7 +1024,7 @@ function orderAmount(wid) {
   return S.amtMode === 'bnb' ? v : (S.pctBnb || 0);
 }
 
-async function submitOrder({ token = S.selected, side = S.side, wallets = [...S.selWallets], amountFor = orderAmount } = {}) {
+async function submitOrder({ token = S.selected, side = S.side, wallets = [...S.selWallets], amountFor = orderAmount, slots = null, label = null } = {}) {
   const t = S.tokens.get(token); if (!t) return;
   if (side === 'buy' && S.amtMode === 'pct' && amountFor === orderAmount) {   // 下单前按最新报价重新换算，避免用到旧的金额
     const v = parseFloat($('#amount').value);
@@ -998,7 +1041,7 @@ async function submitOrder({ token = S.selected, side = S.side, wallets = [...S.
   const go = async () => {
     const btn = $('#submit'); btn.classList.add('busy');
     topPop({ status: 'pending', side, symbol: t.symbol, amountIn: side === 'buy' ? items[0].amount : items[0].amount });
-    try { await Promise.all(items.map((x) => api('/api/order', { wallets: [x.w], token, side, amount: x.amount, slippage: S.slippage, symbol: t.symbol, ...(pctMW > 0 ? { pctSupply: pctMW } : {}) }))); }
+    try { await Promise.all(items.map((x) => api('/api/order', { wallets: [x.w], token, side, amount: x.amount, slippage: S.slippage, symbol: t.symbol, ...(pctMW > 0 ? { pctSupply: pctMW } : {}), ...(slots ? { slots } : {}) }))); }
     catch (e) { toast({ status: 'failed', reason: e.message, symbol: t.symbol }); topPop({ status: 'failed', side, reason: e.message, symbol: t.symbol }); }
     btn.classList.remove('busy');
   };
@@ -1006,7 +1049,7 @@ async function submitOrder({ token = S.selected, side = S.side, wallets = [...S.
   $('#confirmBody').innerHTML = `
     <div class="kv"><span>代币</span><b>${esc(t.symbol)}</b></div>
     <div class="kv"><span>方向</span><b class="${side === 'buy' ? 'g' : 'r'}">${side === 'buy' ? '买入' : '卖出'}</b></div>
-    ${items.map((x) => `<div class="kv"><span>${wallet(x.w).label}</span><b>${side === 'buy' ? x.amount + ' BNB' : x.amount + '%'}</b></div>`).join('')}
+    ${items.map((x) => `<div class="kv"><span>${label || wallet(x.w).label}</span><b>${side === 'buy' ? x.amount + ' BNB' : x.amount + '%'}</b></div>`).join('')}
     <div class="kv"><span>滑点</span><b>${S.slippage}%</b></div>
     <div class="kv"><span>税率 买/卖</span><b class="${taxHi(t) ? 'r' : ''}">${pctTxt(t.buyFeePct)} / ${pctTxt(t.sellFeePct)}</b></div>
     ${taxHi(t) && side === 'buy' ? (() => { const rt = roundTrip(t, items[0]?.amount); return `<div class="note" style="color:#f6465d">⚠ 当前税率 买 ${pctTxt(t.buyFeePct)} / 卖 ${pctTxt(t.sellFeePct)}${rt ? `，买入再卖出预计损耗约 ${rt.pct.toFixed(1)}%（${bnb(rt.cost, 5)} BNB，不含价格变动）` : ''}</div>`; })() : ''}

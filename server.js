@@ -463,7 +463,7 @@ async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, vi
 }
 app.post('/api/order', async (req, res) => {
   const b = req.body || {};
-  try { res.json(await placeOrder({ wallets: b.wallets?.length ? b.wallets : ['big'], token: b.token, side: b.side, amount: b.amount, slippage: b.slippage, via: b.via, clientTs: b.clientTs, pctSupply: b.pctSupply, source: b.source || '手动', symbol: b.symbol || null })); }
+  try { res.json(await placeOrder({ wallets: b.wallets?.length ? b.wallets : ['big'], token: b.token, side: b.side, amount: b.amount, slippage: b.slippage, via: b.via, clientTs: b.clientTs, pctSupply: b.pctSupply, slots: Array.isArray(b.slots) && b.slots.length ? b.slots.map(Number) : null, source: b.source || '手动', symbol: b.symbol || null })); }
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
