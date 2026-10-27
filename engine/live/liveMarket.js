@@ -523,11 +523,10 @@ export class LiveMarket extends EventEmitter {
     // 报价币不一定是 18 位（XAUt 是 6 位）：开盘价、已筹、目标都按报价币自己的小数位换算
     const dec = t._qDec ??= await this._gv2.decimals(c.quote).catch(() => 18), real = BigInt(c.realQuote || 0);
     t.launchPrice = Number(ethers.formatUnits(vq, dec)) / Number(ethers.formatEther(VT));
-    if (dec !== 18) {
-      t.raised = Number(ethers.formatUnits(real, dec)); t.target = Number(ethers.formatUnits(grad, dec));
-      const q = vq + real, tokRes = (vq * VT) / q;   // 恒定乘积：现价 = 报价币储备 / 代币储备
-      if (tokRes > 0n) { t.price = Number(ethers.formatUnits(q, dec)) / Number(ethers.formatEther(tokRes)); const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }
-    }
+    if (dec !== 18) { t.raised = Number(ethers.formatUnits(real, dec)); t.target = Number(ethers.formatUnits(grad, dec)); }
+    // 恒定乘积：现价 = 报价币储备 / 代币储备。非 18 位报价币每次都用链上价；18 位的只在还没有成交价时补
+    const q = vq + real, tokRes = (vq * VT) / q;
+    if (!c.graduated && tokRes > 0n && (dec !== 18 || !(t.price > 0))) { t.price = Number(ethers.formatUnits(q, dec)) / Number(ethers.formatEther(tokRes)); const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }
     if (c.v3) { t.gangV3 = { ...c.v3, trade: V3_TRADE }; t.gangDiv = { taxed: c.taxed && c.v3.dividendBps > 0, taxBps: Math.max(c.v3.buyTaxBps, c.v3.sellTaxBps), vault: null, stats: t.gangDiv?.stats || null }; }   // V3：毕业后外盘收税，分红比例 > 0 才分红
     else if (t.gangDiv?.taxed == null) t.gangDiv = { taxed: !!c.taxed, taxBps: c.taxed ? 100 : 0, vault: null, stats: null };   // 新盘接口还没收录时，按合约 curves().taxed 先判断分红
     t._v2Rem = c.graduated ? 0 : Math.max(0, Number(ethers.formatEther(soldAtGrad > sold ? soldAtGrad - sold : 0n)));
