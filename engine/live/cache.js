@@ -7,6 +7,11 @@ import { env } from './config.js';
 const MYSQL_URL = env('MYSQL_URL', '');
 const REDIS_URL = env('REDIS_URL', '');
 const RETRY_MS = 30_000;
+// 刚启动的 2 分钟里（数据库容器可能和程序一起刚起来）连不上就 5 秒后再试，之后 30 秒
+const T0 = Date.now(), retryMs = () => (Date.now() - T0 < 120_000 ? 5_000 : RETRY_MS);
+// 正在连的时候，调用方最多等这么久，等不到就先走原来的路径（不让一次慢连接卡住行情 / 历史）
+const WAIT_MS = 300;
+const waitFor = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), WAIT_MS))]);
 const lc = (a) => String(a || '').toLowerCase();
 const log = (m) => console.log(`[缓存] ${m}`);
 
@@ -39,7 +44,7 @@ class Cache {
     this.stats.errors++; this.stats.lastError = `${where}: ${e?.message || e}`;
     if (/ECONNREFUSED|ETIMEDOUT|ECONNRESET|PROTOCOL_CONNECTION_LOST|closed state|Connection is closed|ENOTFOUND|EHOSTUNREACH/i.test(String(e?.code || '') + String(e?.message || ''))) {
       if (where.startsWith('redis')) { this.rd?.disconnect?.(); this.rd = null; this.rdAt = Date.now(); } else { this.my?.end?.().catch(() => {}); this.my = null; this.myAt = Date.now(); }
-      log(`${where} 连不上，先走原来的路径，${RETRY_MS / 1000} 秒后再试：${e?.message || e}`);
+      log(`${where} 连不上，先走原来的路径，${retryMs() / 1000} 秒后再试：${e?.message || e}`);
     }
     return null;
   }
@@ -47,11 +52,12 @@ class Cache {
   // MySQL 连接池；连不上返回 null（30 秒内不重试）
   async mysql() {
     if (!MYSQL_URL) return null; if (this.my) return this.my;
-    if (Date.now() - this.myAt < RETRY_MS) return null;
-    return (this.myP ||= (async () => {
+    if (this.myP) return waitFor(this.myP);
+    if (Date.now() - this.myAt < retryMs()) return null;
+    return (this.myP = (async () => {
       try {
         const { default: mysql } = await import('mysql2/promise');
-        const pool = mysql.createPool({ uri: MYSQL_URL, connectionLimit: 4, connectTimeout: 1500, enableKeepAlive: true, supportBigNumbers: true, bigNumberStrings: false });
+        const pool = mysql.createPool({ uri: MYSQL_URL, connectionLimit: 4, connectTimeout: 5000, enableKeepAlive: true, supportBigNumbers: true, bigNumberStrings: false });
         for (const s of SCHEMA) await pool.query(s);
         this.my = pool; log('MySQL 已连接'); return pool;
       } catch (e) { this.myAt = Date.now(); this.stats.lastError = `mysql: ${e.message}`; log(`MySQL 不可用，先不用缓存：${e.code === 'ERR_MODULE_NOT_FOUND' ? '没装 mysql2（npm install）' : e.message}`); return null; }
@@ -62,11 +68,12 @@ class Cache {
 
   async redis() {
     if (!REDIS_URL) return null; if (this.rd) return this.rd;
-    if (Date.now() - this.rdAt < RETRY_MS) return null;
-    return (this.rdP ||= (async () => {
+    if (this.rdP) return waitFor(this.rdP);
+    if (Date.now() - this.rdAt < retryMs()) return null;
+    return (this.rdP = (async () => {
       try {
         const { default: Redis } = await import('ioredis');
-        const r = new Redis(REDIS_URL, { lazyConnect: true, connectTimeout: 1000, commandTimeout: 500, maxRetriesPerRequest: 0, enableOfflineQueue: false, retryStrategy: () => null });
+        const r = new Redis(REDIS_URL, { lazyConnect: true, connectTimeout: 3000, commandTimeout: 500, maxRetriesPerRequest: 0, enableOfflineQueue: false, retryStrategy: () => null });
         r.on('error', () => {});   // 错误在调用处处理
         r.on('end', () => { if (this.rd === r) { this.rd = null; this.rdAt = Date.now(); } });
         await r.connect(); await r.ping();
