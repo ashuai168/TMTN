@@ -866,7 +866,7 @@ function posTradesHtml(hr, t) {
   if (!list.length) return '';
   const supply = t?.maxSupply || (hr.amount > 0 && hr.supplyPct > 0 ? (hr.amount * 100) / hr.supplyPct : 1e9);
   const mc = (x) => (x.tokens > 0 && x.bnb > 0 ? ((x.usd ?? x.bnb * S.bnbUsd) / x.tokens) * supply : null);
-  return `<table class="ttable"><tr><th>时间</th><th class="l">方向</th><th>数量</th><th>金额 (BNB)</th><th title="成交时的市值：成交单价 × 总量">市值</th>${ws ? '<th class="l">钱包</th>' : ''}<th class="l">交易</th></tr>${list.map((x) => `<tr><td class="dim">${new Date(x.ts).toLocaleString('zh-CN', { hour12: false })}</td><td class="l ${x.side === 'buy' ? 'g' : 'r'}">${x.side === 'buy' ? '买入' : '卖出'}</td><td>${K(x.tokens)}</td><td>${bnb(x.bnb, 5)}</td><td>${mc(x) != null ? usd(mc(x)) : '—'}</td>${ws ? `<td class="l"><b class="me">${esc(x.wl || '')}</b></td>` : ''}<td class="l">${txLink(x.tx)}</td></tr>`).join('')}</table>`;
+  return `<table class="ttable"><tr><th>时间</th><th class="l">方向</th><th>数量</th><th title="按成交当时的 BNB/USDT 价格换算；悬停看 BNB">金额 (USDT)</th><th title="成交时的市值：成交单价 × 总量">市值</th>${ws ? '<th class="l">钱包</th>' : ''}<th class="l">交易</th></tr>${list.map((x) => `<tr><td class="dim">${new Date(x.ts).toLocaleString('zh-CN', { hour12: false })}</td><td class="l ${x.side === 'buy' ? 'g' : 'r'}">${x.side === 'buy' ? '买入' : '卖出'}</td><td>${K(x.tokens)}</td><td title="${bnb(x.bnb, 5)} BNB">${usdAmt(x.usd ?? (S.bnbUsd ? x.bnb * S.bnbUsd : null))}</td><td>${mc(x) != null ? usd(mc(x)) : '—'}</td>${ws ? `<td class="l"><b class="me">${esc(x.wl || '')}</b></td>` : ''}<td class="l">${txLink(x.tx)}</td></tr>`).join('')}</table>`;
 }
 function renderBottom() {
   const b = $('#bottomBody'); const t = S.tokens.get(S.selected);
