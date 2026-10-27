@@ -29,7 +29,7 @@ export const HARD_MAX_BUY = 0.3;   // 无论参数怎么填，每个钱包单笔
 
 export const SNIPE_DEFAULTS = {
   pct: 1, wallets: [1, 2], quotes: ['BNB', 'XAUT'], maxBnbPerBuy: 0.08, dailyCapBnb: 0.5, maxTokensPerDay: 5,
-  maxDelaySec: 8, maxSoldPct: 15, partial: true, slippage: 15, buffer: 5, dryRun: true,
+  maxDelaySec: 8, maxSoldPct: 15, partial: true, slippage: 35, buffer: 5, dryRun: true,
   wbnbFloat: 0.15, autoSell: true, tiers: [{ mult: 2, pct: 50 }], stopLossPct: 0, sellSlippage: 20, holdHours: 72,
 };
 
@@ -68,7 +68,7 @@ export class Sniper extends EventEmitter {
       pct: n(p.pct, 1, 0.01, 1), wallets: (Array.isArray(p.wallets) ? p.wallets : [1]).map(Number).filter((x) => x > 0),
       quotes: (Array.isArray(p.quotes) ? p.quotes : ['BNB', 'XAUT']).map((x) => String(x).toUpperCase().slice(0, 12)).filter(Boolean),   // 报价币符号；'*' = 全部（非 BNB 盘要先用 baw 换报价币，慢几秒）
       maxBnbPerBuy: n(p.maxBnbPerBuy, 0.08, 0, HARD_MAX_BUY), dailyCapBnb: n(p.dailyCapBnb, 0.5, 0, 20), maxTokensPerDay: Math.round(n(p.maxTokensPerDay, 5, 0, 200)),
-      maxDelaySec: n(p.maxDelaySec, 8, 1, 120), maxSoldPct: n(p.maxSoldPct, 15, 0, 80), partial: p.partial !== false, slippage: n(p.slippage, 15, 1, 50), buffer: n(p.buffer, 5, 0, 30), dryRun: p.dryRun !== false,
+      maxDelaySec: n(p.maxDelaySec, 8, 1, 120), maxSoldPct: n(p.maxSoldPct, 15, 0, 80), partial: p.partial !== false, slippage: n(p.slippage, 35, 1, 50), buffer: n(p.buffer, 5, 0, 30), dryRun: p.dryRun !== false,
       autoSell: p.autoSell !== false, tiers: (Array.isArray(p.tiers) ? p.tiers : [{ mult: 2, pct: 50 }]).map((x) => ({ mult: n(x?.mult, 0, 0, 1000), pct: n(x?.pct, 0, 0, 100) })).filter((x) => x.mult >= 1.05 && x.pct >= 1).sort((a, b) => a.mult - b.mult).slice(0, 3),
       wbnbFloat: n(p.wbnbFloat, 0.15, 0, 2), stopLossPct: n(p.stopLossPct, 0, 0, 99), sellSlippage: n(p.sellSlippage, 20, 1, 50), holdHours: n(p.holdHours, 72, 1, 720),
     };
