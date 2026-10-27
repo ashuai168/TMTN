@@ -33,6 +33,7 @@ export const v3Events = new EventEmitter();   // 'pad' (address)：发现新的 
 
 const checking = new Map();
 // 链上看到 V3 Created 事件的合约：是不是 gang 官方的内盘（owner / pendingOwner 是部署钱包或多签，且认这个币）
+export const v3Pending = () => Promise.all([...checking.values()]);
 export function verifyV3Pad(provider, pad, token) {
   const a = String(pad).toLowerCase(); if (isV3Pad(a)) return Promise.resolve(true);
   if (checking.has(a)) return checking.get(a);

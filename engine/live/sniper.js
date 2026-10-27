@@ -83,7 +83,7 @@ export class Sniper extends EventEmitter {
   today(sim = this.params.dryRun) { const d = (this.days[day()] ||= { bnb: 0, tokens: 0 }); if (!sim) return d; return (d.sim ||= { bnb: 0, tokens: 0 }); }
   view() { return { enabled: this.enabled, params: this.params, today: this.today(), stats: this.stats, recent: this.recent.slice(0, 20), typical: this.typical(), positions: this.posView(), hardMax: HARD_MAX_BUY, liveTrade: !this.trader?.status?.dryRun }; }
   setEnabled(v) { this.enabled = !!v; this.save(); if (this.enabled) setTimeout(() => this.topUp(), 500); this.logFn(`[狙击] ${this.enabled ? `已开启（${this.params.dryRun ? '模拟' : '真实下单'}）` : '已关闭'}`); return this.view(); }
-  update(params) { this.params = this.clean({ ...this.params, ...(params || {}) }); this.save(); return this.view(); }
+  update(params) { this.params = this.clean({ ...this.params, ...(params || {}) }); this.v3Paused = null; this.save(); return this.view(); }
 
   // BNB 盘（虚拟储备 5 BNB）的参考成本：前面已经被买走 0% / 5% / 10% / 20% 时，再买 N% 要多少 BNB
   typical() {
@@ -104,6 +104,7 @@ export class Sniper extends EventEmitter {
     if (this.done[it.address]) return;
     if (it.track === 'v3fair') return this.record(it, 'skip', 'Gang V3 打新币（固定价认购）不狙');
     if (it.track === 'v3' && !V3_TRADE) return this.record(it, 'skip', 'Gang V3 新盘：真实买卖还没开启（GANG_V3_TRADE=1），只记录');
+    if (it.track === 'v3' && this.v3Paused) return this.record(it, 'skip', `Gang V3 狙击已自动暂停：${this.v3Paused}（核对后在狙击设置里重新保存即可恢复）`);
     if (it.track !== 'v2' && it.track !== 'v3') return this.record(it, 'skip', 'Gang 老盘（0x315B）不狙');
     if (!p.quotes.includes('*') && !p.quotes.includes(String(it.quoteSymbol || '').toUpperCase())) return this.record(it, 'skip', `报价币 ${it.quoteSymbol} 不在狙击范围（${p.quotes.join(' / ')}）`);
     if (delay > p.maxDelaySec) return this.record(it, 'skip', `发现太晚（出块后 ${delay.toFixed(1)} 秒 > ${p.maxDelaySec} 秒）`);
@@ -147,10 +148,23 @@ export class Sniper extends EventEmitter {
     if (!ok.length) td.tokens = Math.max(0, td.tokens - 1);
     this.stats.orders += ok.length; this.stats.fails += list.length - ok.length; this.stats.bnb += amt * ok.length;
     setTimeout(() => this.topUp(), 8000);   // 这次用掉了 WBNB，补回来
+    if (it.track === 'v3') this.checkV3Fill(it, ok);
     if (ok.length) open(ok.map((o) => o.walletSlot).filter((x) => x > 0).length ? ok.map((o) => o.walletSlot).filter((x) => x > 0) : p.wallets, false);
     this.save();
     return this.record(it, ok.length ? 'order' : 'fail', `狙击买入 ${amt} BNB${note}：${list.map((o) => `${o.wallet || ''} ${o.status === 'filled' ? '成交' : o.status === 'pending' ? '已提交待确认（已计入额度）' : '失败 ' + (o.reason || '')}`).join('；')}`,
       { ...base, totalMs: Date.now() - it.createdAt * 1000, results: list.map((o) => ({ wallet: o.wallet, status: o.status, tx: o.tx, reason: o.reason, out: o.out, latencyMs: o.latencyMs })) });
+  }
+
+  // Gang V3 主网合约在上线前没法核对真实成交：每笔 V3 狙击成交后读回执，交易成功且收到了这个币（代币合约的 Transfer）才算对；
+  // 不对就暂停 V3 狙击（V2 照常）并推一条失败记录提醒。暂停只在内存里，重启或重新保存狙击设置后恢复
+  async checkV3Fill(it, ok) {
+    const T = ethers.id('Transfer(address,address,uint256)'), pv = this.trader.gangV2.provider;
+    for (const o of ok.filter((x) => x.status === 'filled' && x.tx)) {
+      const rc = await pv.getTransactionReceipt(o.tx).catch(() => null);
+      const got = rc?.status === 1 && rc.logs.some((l) => l.address.toLowerCase() === it.address && l.topics[0] === T && BigInt(l.data) > 0n);
+      if (rc && !got) { this.v3Paused = `${it.symbol} 的狙击单 ${o.tx.slice(0, 10)}… 没收到代币`; this.record(it, 'fail', `Gang V3 成交核对不通过，已暂停 V3 狙击：${this.v3Paused}`); return; }
+    }
+    if (ok.some((x) => x.status === 'filled')) this.record(it, 'order', 'Gang V3 成交核对通过（链上收到代币）');
   }
 
   // ---------- 自动卖出 ----------

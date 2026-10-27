@@ -106,6 +106,10 @@ const divTip = (t) => {
 // Gang V3（GangLaunchpad）：曲线和 V2 一样，毕业后外盘收买卖税；默认只报价
 const v3Tip = (t) => { const v = t.gangV3; return v ? `Gang V3 税收币：内盘只收 1% 手续费；毕业后外盘买税 ${v.buyTaxBps / 100}% / 卖税 ${v.sellTaxBps / 100}%，其中分红 ${v.dividendBps / 100}%${v.trade ? '' : '。真实买卖未开启（只报价）'}` : 'Gang V3'; };
 const gangKind = (t) => (t.gangTrack === 'v3' ? `<i class="tag gangy v3" title="${esc(v3Tip(t))}">V3${t.gangV3 && !t.gangV3.trade ? ' · 只报价' : ''}</i>` : t.gangTrack === 'v3fair' ? '<i class="tag gangy v3" title="Gang V3 打新：固定价认购，满 1 万份开盘；暂不支持在这里买卖">V3 打新</i>' : t.gangTrack === 'v2' && t.stage === 'curve' ? '<i class="tag gangy">Gang V2</i>' : '<i class="tag gangy">Gang 内盘</i>');
+// 战壕卡片：Gang 盘标出是哪一版（老盘 V1 / V2 / V3 / V3 打新），角标也写成 G1 / G2 / G3
+const gangVer = (t) => ({ v3: 'V3', v3fair: 'V3 打新', v2: 'V2' }[t.gangTrack] || 'V1');
+const gangVerChip = (t) => (t.platform !== 'gang' ? '' : `<i class="chip gv ${/^v3/.test(t.gangTrack || '') ? 'v3' : ''}" title="${esc(t.gangTrack === 'v3' ? v3Tip(t) : 'gang.fun ' + gangVer(t))}">Gang ${gangVer(t)}</i>`);
+const gangBadge = (t) => (/^v3/.test(t.gangTrack || '') ? 'G3' : t.gangTrack === 'v2' ? 'G2' : 'G1');
 const divChip = (t, cls = 'tag') => (t.gangDiv?.taxed == null ? '' : `<i class="${cls} div ${t.gangDiv.taxed ? 'on' : 'off'}" title="${esc(divTip(t))}">${t.gangDiv.taxed ? '分红' : '不分红'}</i>`);
 // 买入再卖出的预计损耗（不含价格变动）：买入费 + 卖出费（按买入后剩下的部分）+ 约 0.00017 BNB gas
 const roundTrip = (t, amount) => { const b = t.buyFeePct, s = t.sellFeePct; if (b == null || s == null || !(amount > 0)) return null; const left = amount * (1 - b / 100); const cost = amount * b / 100 + left * s / 100 + 0.00017; return { cost, pct: (cost / amount) * 100 }; };
@@ -2174,11 +2178,11 @@ function tcCard(t, k) {
   const fb = t.firstBuyer ? (t.firstBuyerName || nameOf({ trader: t.firstBuyer }) || short(t.firstBuyer, 4, 4)) : '';
   const route = curve ? `${esc(t.quote || 'BNB')} | ${amtFmt(t.raised)}/${amtFmt(t.target)} → ${prog.toFixed(1)}%` : `${esc(t.quote || 'BNB')} | 已迁移 DEX`;
   return `<div class="tcard ${plat} ${hp ? 'held' : ''} " data-pa="${t.address}">
-    <div class="tc-l"><div class="tc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: 'G' }[plat]}</i></div>
+    <div class="tc-l"><div class="tc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: gangBadge(t) }[plat]}</i></div>
       <div class="tc-prog"><i style="width:${curve ? prog : 100}%"></i></div><div class="tc-dev ${isMe(t.creator) ? 'me' : ''}" title="创建者（Dev）：${esc(t.creator || '')}${isMe(t.creator) ? '（我）' : ''}">${esc(dev)}</div></div>
     <div class="tc-m">
       <div class="tc-n"><b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b>${t.name && t.name !== t.symbol ? `<span>${esc(t.name)}</span>` : ''}<button class="tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button></div>
-      <div class="tc-chips">${taxChip(t, 'chip')}${divChip(t, 'chip')}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
+      <div class="tc-chips">${taxChip(t, 'chip')}${divChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
       <div class="tc-meta"><span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tc-route ${curve ? '' : 'dex'}">${route}</div>
       <div class="tc-who">${fb ? `<span class="g">👑</span> 首买 ${isMe(t.firstBuyer) ? `<b class="me">${esc(fb)}</b>${meTag(t.firstBuyer)}` : esc(fb)}` : ''}${hp ? `<span class="y" title="我的钱包持有（不是首买地址）">我持有 ${K(hp.amount)}${hp.pct != null ? ` · ${hp.pct.toFixed(2)}%` : ''}</span>` : ''}</div>
@@ -2195,12 +2199,12 @@ function tlCard(t) {
   const dev = t.creatorName || (t.creator ? short(t.creator, 6, 4) : '');
   const route = curve ? `${amtFmt(t.raised)}/${amtFmt(t.target)} ${esc(t.quote || 'BNB')} · ${prog.toFixed(1)}%` : `已迁移 DEX · ${esc(t.quote || 'BNB')}`;
   return `<div class="tlc ${plat} ${t.address === S.selected ? 'sel' : ''}" data-pa="${t.address}" title="${esc(t.name || t.symbol)}${dev ? ' · Dev ' + esc(dev) : ''}">
-    <div class="tlc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: 'G' }[plat]}</i></div>
+    <div class="tlc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: gangBadge(t) }[plat]}</i></div>
     <div class="tlc-m">
       <div class="tlc-r1"><b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b>${t.name && t.name !== t.symbol ? `<span class="tlc-nm">${esc(t.name)}</span>` : ''}
         <span class="tlc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算' : '市值'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</span>
         <button class="tlc-ic tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tlc-ic tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button></div>
-      <div class="tlc-r2">${taxChip(t, 'chip')}${divChip(t, 'chip')}<i class="chip q">${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent</i>' : ''}<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span>1h ${chgTxt(t.chg.h1)}</span>` : ''}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
+      <div class="tlc-r2">${taxChip(t, 'chip')}${divChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent</i>' : ''}<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span>1h ${chgTxt(t.chg.h1)}</span>` : ''}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tlc-r3"><div class="tlc-bar ${curve ? '' : 'dex'}"><i style="width:${curve ? prog : 100}%"></i></div><span class="tlc-rt">${route}</span>
         <span class="tlc-buy ${st ? 'st-' + st : ''}" data-tqb="${t.address}:${k}" title="${esc(tcBuyTip(t, k))}（金额在战壕对应列设置）">${TC_ST[st] || '⚡' + tcBuyLabel(t, k).replace(/^[⚡\s]*/, '')}</span></div>
     </div></div>`;

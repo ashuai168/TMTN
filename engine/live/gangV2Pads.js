@@ -8,7 +8,7 @@ import * as baw from './baw.js';
 import { capFor, capLabel, sendApproval } from './approvals.js';
 import { BNB_NATIVE } from './config.js';
 import { getRoute, setRoute, waitReceived } from './quoteRoutes.js';
-import { V3_PADS, isV3Pad, v3PadAbi, normCurve, assertV3Trade } from './gangV3.js';   // Gang V3：曲线公式、buy / sell 和 V2 相同，curves() 多两个字段
+import { V3_PADS, isV3Pad, v3PadAbi, normCurve, assertV3Trade, v3Pending } from './gangV3.js';   // Gang V3：曲线公式、buy / sell 和 V2 相同，curves() 多两个字段
 
 export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
 const trimBnb = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
@@ -42,6 +42,7 @@ export class GangV2 {
     };
     if (p) { const c = await tryPad(p); if (c) return { pad: p, c }; }
     for (const a of [...V2_PADS, ...V3_PADS]) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return { pad: a, c }; } }
+    if (await v3Pending().then((r) => r.some(Boolean))) for (const a of V3_PADS) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return { pad: a, c }; } }   // 刚核对完的新内盘
     // V3 内盘上的「打新」币（kindOf = 2）没有曲线：固定价认购，本工具不做
     for (const a of V3_PADS) { const k = await this.call(a, v3PadAbi, 'kindOf', [token]).then((x) => x[0]).catch(() => 0n); if (k === 2n) throw Object.assign(new Error('这是 Gang V3「打新」币（固定价认购，不是曲线），暂不支持在这里买卖，请到 gang.fun 操作'), { code: 'V3_FAIR' }); }
     throw new Error('不是 gang.fun V2 / V3 合约上的代币');

@@ -506,6 +506,7 @@ td.addr { color: var(--muted); }
 .pg, .pcard.gang .pbadge, .hold .pbadge.gang { color: #fcd535 !important; background: rgba(252, 213, 53, .14) !important; }
 .seg.plat button.active[data-p="gang"] { color: #fcd535 !important; }
 .tag.gangy { color: #fcd535; background: rgba(252, 213, 53, .14); }
+.chip.gv { background: rgba(252, 213, 53, .14); color: #fcd535; } .chip.gv.v3 { background: #fcd535; color: #111; font-weight: 600; }   /* 战壕卡片的 Gang 版本 */
 .tag.gangy.v3 { color: #111; background: #fcd535; font-weight: 600; }   /* Gang V3 徽章：实底，和 V2 区分 */
 
 /* 搜索历史 */
