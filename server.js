@@ -137,6 +137,18 @@ app.post('/api/auth/login-cancel', (req, res) => { res.json(LIVE ? loginView(tra
 app.post('/api/auth/check', async (req, res) => res.json(LIVE ? await trader.checkAuth() : null));
 setTimeout(() => { for (const o of [...trader.orders].reverse()) latency.record(o); }, 5000);   // 启动时把内存里已有订单补记一次（按 id/tx 去重）
 app.get('/api/latency-stats', (req, res) => res.json(latency.stats(Math.max(0.01, Number(req.query.days) || 1))));
+// 「下单耗时」页面（latency.html）：本钱包 + WALLET_PEERS 里其他钱包后端的每笔买卖耗时（own=1 只返回本钱包，给主后端汇总用）
+app.get('/api/latency/orders', async (req, res) => {
+  const days = Math.min(90, Math.max(0.01, Number(req.query.days) || 7));
+  const rows = latency.ordersView(days, WALLET_LABEL).map((r) => ({ ...r, slot: WALLET_SLOT })), wallets = [{ slot: WALLET_SLOT, label: WALLET_LABEL, ok: true }];
+  if (req.query.own !== '1') await Promise.all(WALLET_PEERS.map(async (p) => {
+    const label = p.label || `钱包 ${p.slot}`;
+    try { const v = await peerFetch(p, `/api/latency/orders?own=1&days=${days}`, null, 8000); for (const r of v?.rows || []) rows.push({ ...r, wallet: label, slot: p.slot }); wallets.push({ slot: p.slot, label, ok: true }); }
+    catch (e) { wallets.push({ slot: p.slot, label, ok: false, error: e.status === 404 ? '这个钱包后端还没更新到有耗时接口的版本' : e.message }); }
+  }));
+  rows.sort((a, b) => b.ts - a.ts); wallets.sort((a, b) => a.slot - b.slot);
+  res.json({ days, now: Date.now(), stages: latency.STAGES, wallets, rows });
+});
 app.get('/api/state', (req, res) => res.json({ ...state(), orderSlots: true, holdings: holdView || holdSnap, orders: trader.orders.slice(0, 100), logs: agent.logs.slice(0, 150), records: agent.records, flow: market.named ? market.named(market.flow.slice(0, 80)) : market.flow.slice(0, 80) }));
 // 持仓快照：后台每 5 秒算一次（下单 / 领取 / 转账结束后立刻再算），通过 WebSocket 推给页面、也放进 /api/state，
 // 页面打开详情时直接用快照，不再每次现算（现算要读钱包历史和链上报价，慢）
