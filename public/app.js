@@ -188,7 +188,7 @@ function connect() {
 function onMsg({ type, data, full }) {
   switch (type) {
     case 'tick':
-      Object.assign(S, { mode: data.mode, baw: data.baw, block: data.block, bnbUsd: data.bnbUsd, net: data.net, wallets: data.wallets, usage: data.usage, positions: data.positions, claimable: data.claimable || [] });
+      Object.assign(S, { mode: data.mode, baw: data.baw, block: data.block, bnbUsd: data.bnbUsd, gangMcap: data.gangMcap, net: data.net, wallets: data.wallets, usage: data.usage, positions: data.positions, claimable: data.claimable || [] });
       S.tokens = new Map(data.tokens.map((t) => [t.address, t]));
       if (!S.selected) pickDefault();
       scheduleRender();
@@ -542,6 +542,7 @@ function renderTop() {
   mb.title = REAL() ? `手动买卖会通过 baw 真实上链，单笔上限 ${S.baw.maxTradeBnb || '不限'} BNB；自动买/自动卖只报价` : LIVE() ? '真实链上行情；下单只做报价/预演，不会上链' : '所有交易都在本地模拟，不连接真实钱包';
   $('#blockNo').textContent = '#' + S.block.toLocaleString('en-US');
   $('#bnbPx').textContent = 'BNB $' + S.bnbUsd.toFixed(2);
+  $('#gangMc').textContent = 'GANG 市值 ' + (S.gangMcap > 0 ? usd(S.gangMcap) : '—');
   const w = wallet(S.activeWallet);
   // 多钱包：顶栏只放一个紧凑的胶囊 —— 叠在一起的小头像 + 主钱包 .ai 名（+N）+ 参与下单钱包的 BNB 合计 + 状态点；地址都放在下拉菜单里
   const sel = $('#walletSel'); sel.classList.toggle('mw', MW());
@@ -2032,7 +2033,7 @@ document.addEventListener('click', (e) => {
   const st = await api('/api/state');
   if (st.holdings) setHoldSnap(st.holdings);
   S.orderSlots = !!st.orderSlots;   // 后端支持「只在指定钱包下单」
-  Object.assign(S, { mode: st.mode, baw: st.baw, block: st.block, bnbUsd: st.bnbUsd, net: st.net, wallets: st.wallets, settings: st.settings, config: st.config, usage: st.usage, positions: st.positions, orders: st.orders, logs: st.logs, records: st.records, flow: st.flow, snipeCurve: st.snipeCurve });
+  Object.assign(S, { mode: st.mode, baw: st.baw, block: st.block, bnbUsd: st.bnbUsd, gangMcap: st.gangMcap, net: st.net, wallets: st.wallets, settings: st.settings, config: st.config, usage: st.usage, positions: st.positions, orders: st.orders, logs: st.logs, records: st.records, flow: st.flow, snipeCurve: st.snipeCurve });
   S.tokens = new Map(st.tokens.map((t) => [t.address, t]));
   S.selWallets = new Set(S.wallets.map((w) => w.id)); S.activeWallet = S.wallets[0]?.id || S.activeWallet;
   if (LIVE()) S.platform = 'flap';

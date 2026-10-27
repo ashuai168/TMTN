@@ -131,7 +131,7 @@ app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => re
 mountUpdater(app, { rootDir: __dirname, peers: WALLET_PEERS.length });   // 版本管理：检查更新 / 切换版本 / 恢复备份（页面右下角的版本号）
 
 const state = () => ({
-  ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, net,
+  ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, gangMcap: market.gangMcap || 0, net,
   wallets: trader.walletsView(), settings: trader.settings, gasPresets: GAS_PRESETS, config: agent.config, usage: agent.usageView(),
   tokens: market.list(), positions: trader.positionsView(), snipeCurve: SNIPE_FEE_CURVE, claimable: LIVE ? trader.claimable : [],
 });
@@ -709,7 +709,7 @@ agent.on('record', (r) => broadcast({ type: 'record', data: r }));
 agent.on('config', (c) => broadcast({ type: 'config', data: c }));
 
 setInterval(() => {
-  broadcast({ type: 'tick', data: { ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, net, wallets: trader.walletsView(), usage: agent.usageView(), tokens: market.list(), positions: trader.positionsView(), claimable: LIVE ? trader.claimable : [] } });
+  broadcast({ type: 'tick', data: { ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, gangMcap: market.gangMcap || 0, net, wallets: trader.walletsView(), usage: agent.usageView(), tokens: market.list(), positions: trader.positionsView(), claimable: LIVE ? trader.claimable : [] } });
   for (const c of wss.clients) {
     if (c.readyState !== 1 || !c.sub) continue;
     const d = market.detail(c.sub);
