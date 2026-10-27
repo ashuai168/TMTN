@@ -24,11 +24,11 @@ const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
 const VT = 1066666666666666666666666667n, BPS = 10000n, FEE = 100n, SUPPLY = 10n ** 27n;   // LaunchpadV2：虚拟代币储备、1% 平台费、总量 10 亿
 const ceil = (a, b) => (a + b - 1n) / b;
 // 已知的非 BNB 报价币（符号大写 → 地址）：开着狙击时后台每 20 秒刷新一次 BNB 汇率，新盘出现时不用冷等 baw 报价（约 1.8 秒）
-const QUOTE_ADDR = { XAUT: '0x21caef8a43163eea865baee23b9c2e327696a3bf', GANG: '0x0c6302401aa5325c2e36f170f52c00b1d220b405', BNCB: '0x4902c5ebc598265ed2212b559b042de8a5eeec3f' };
+const QUOTE_ADDR = { XAUT: '0x21caef8a43163eea865baee23b9c2e327696a3bf', GANG: '0x0c6302401aa5325c2e36f170f52c00b1d220b405', BNCB: '0x4902c5ebc598265ed2212b559b042de8a5eeec3f', BEM: '0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a' };
 export const HARD_MAX_BUY = 0.3;   // 无论参数怎么填，每个钱包单笔不超过 0.3 BNB
 
 export const SNIPE_DEFAULTS = {
-  pct: 1, wallets: [1, 2], quotes: ['BNB', 'XAUT'], maxBnbPerBuy: 0.08, dailyCapBnb: 0.5, maxTokensPerDay: 5,
+  pct: 1, wallets: [1, 2], quotes: ['BNB', 'XAUT', 'BEM'], maxBnbPerBuy: 0.08, dailyCapBnb: 0.5, maxTokensPerDay: 5,
   maxDelaySec: 8, maxSoldPct: 15, partial: true, slippage: 35, buffer: 5, dryRun: true,
   wbnbFloat: 0.15, autoSell: true, tiers: [{ mult: 2, pct: 50 }], stopLossPct: 0, sellSlippage: 20, holdHours: 72,
 };

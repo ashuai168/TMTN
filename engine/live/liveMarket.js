@@ -7,7 +7,7 @@ import { AgentCurve } from './agentCurve.js';
 import { FourMeme, AGENT_ID_TEMPLATE } from './fourMeme.js';
 import { MetaFetcher, ipfsUrl } from './meta.js';
 import { GangFun } from './gangFun.js';
-import { GangChain } from './gangChain.js';
+import { GangChain, QUOTE_DEC } from './gangChain.js';
 import { FlapChain } from './flapChain.js';
 import { GangPadChain } from './gangPadChain.js';
 import { GangV2 } from './gangV2Pads.js';
@@ -212,12 +212,15 @@ export class LiveMarket extends EventEmitter {
   upsertGang(it, isNew) {
     const existed = this.tokens.has(this.key(it.address));
     const t = this.base(it.address);
+    const qa = String(it.quoteAddress || '').toLowerCase();
+    if (t._qDec == null && qa && QUOTE_DEC[qa]) t._qDec = QUOTE_DEC[qa];   // 已知的非 18 位报价币（XAUt 6 位、BEM 8 位）马上用，不等链上曲线
+    else if (t._qDec == null && qa && it.track === 'v2' && qa !== '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c') { this._gv2 ||= new GangV2(this.provider, null); this._gv2.decimals(qa).then((d) => { t._qDec ??= d; }).catch(() => {}); }
     const raised = Number(it.raisedQuote ?? it.raisedBnb) || 0, pct = Number(it.progressPct) || 0;
     Object.assign(t, {
       source: 'gang', platform: 'gang', agentExclusive: true, symbol: it.symbol, name: it.name, quote: it.quoteSymbol || 'BNB', quoteAddress: it.quoteAddress || null, creator: it.creator,
       creatorName: it.creatorHandle || null, feeBps: 100, sellFeeBps: 100, stage: it.graduated ? 'dex' : 'curve', raised: t._qDec && t._qDec !== 18 ? t.raised : raised, progress: pct, target: t._qDec && t._qDec !== 18 ? t.target : it.gradAmtQuote || (pct > 0 ? Math.round((raised / (pct / 100)) * 10) / 10 : (t.target || 15)),   /* 非 18 位报价币（XAUt）接口按 18 位给，数会小 1e12 倍，用链上读的 */ gangTrack: it.track || 'v1', remaining: t._v2Rem ?? null,   // 剩余可售：V2 从合约读，读到之前 / 老盘未知 = null（页面显示「—」）
      
-      price: (t._qDec && t._qDec !== 18 ? 0 : Number(it.priceQuote ?? it.priceBnb)) || t.price, mcapUsd: Number(it.fdvUsd) || t.mcapUsd || 0, holders: it.holders ?? null,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0 volume: Number(it.volume24hBnb) || 0, pair: it.pair || null, tradeCount: it.trades || 0,
+      price: (t._qDec && t._qDec !== 18 ? 0 : Number(it.priceQuote ?? it.priceBnb)) || t.price, mcapUsd: (t._qDec && t._qDec !== 18 ? 0 : Number(it.fdvUsd)) || t.mcapUsd || 0, holders: it.holders ?? null,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0 volume: Number(it.volume24hBnb) || 0, pair: it.pair || null, tradeCount: it.trades || 0,
     });
     if (!existed) t.createdAt = it.createdAt * 1000;
     if (it.lastTradeAt) t.lastTradeAt = Math.max(t.lastTradeAt || 0, it.lastTradeAt * 1000);
@@ -267,10 +270,16 @@ export class LiveMarket extends EventEmitter {
     if (tr.tx) { t.seenTx.add(id); if (t.seenTx.size > 5000) t.seenTx = new Set([...t.seenTx].slice(-2500)); }
     if (tr.name) this.names.set(tr.trader, tr.name);
     if (tr.side === 'buy') t.buys++; else t.sells++;
-    const trade = { ts: tr.ts, side: tr.side, bnb: tr.bnb, tokens: tr.tokens, price: tr.price, trader: tr.trader, tx: tr.tx, name: tr.name };
+    // 链上事件和 gang.fun 接口都把报价币金额按 18 位小数给；BEM（8 位）、XAUt（6 位）这类要乘回 10^(18-dec)
+    const k = this.qScale(t);
+    const trade = { ts: tr.ts, side: tr.side, bnb: tr.bnb * k, tokens: tr.tokens, price: tr.price * k, trader: tr.trader, tx: tr.tx, name: tr.name };
     this.addTrade(t, trade);
-    if (live) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: tr.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });   // Gang V2 的金额是报价币（GANG / BNCB…），按报价币价格换美元
+    if (k !== 1 && trade.price > 0 && trade.ts >= (t.lastTradeAt || 0) - 1) { const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }   // 接口的 fdvUsd 也按 18 位算错了，用成交价重算
+    if (live) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: trade.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });   // Gang V2 的金额是报价币（GANG / BNCB…），按报价币价格换美元
   }
+
+  // 报价币不是 18 位小数时，18 位口径的金额 / 价格要乘的倍数（BEM 8 位 = 1e10）
+  qScale(t) { return t._qDec && t._qDec !== 18 ? 10 ** (18 - t._qDec) : 1; }
 
   // four.meme 成交：更新已筹、进度、价格、K 线和成交列表
   onFourTrade(tr) {
@@ -397,7 +406,7 @@ export class LiveMarket extends EventEmitter {
         if (!t.gangFullAt || Date.now() - t.gangFullAt > 600_000) {
           t.gangFullAt = Date.now();
           const rows = await this.gang.history(t.address).catch(() => null);
-          if (rows?.length) { t.candles = []; for (const r of rows) if (r.price > 0) this.pushCandle(t, r.ts, r.price, r.bnb); t._chgAt = 0; }
+          if (rows?.length) { const k = this.qScale(t); t.candles = []; for (const r of rows) if (r.price > 0) this.pushCandle(t, r.ts, r.price * k, r.bnb * k); t._chgAt = 0; }
         }
       } else if (t.source === 'four-agent') {
         // 已由链上事件实时更新，不再请求 shrine（经常 429）
@@ -491,7 +500,7 @@ export class LiveMarket extends EventEmitter {
     this._all ||= new Map(); const c = this._all.get(t.address);
     if (c && Date.now() - c.at < 60_000) return c;
     let list = [], complete = true;
-    if (t.source === 'gang') list = await this.gang.history(t.address, 20000);
+    if (t.source === 'gang') { const k = this.qScale(t); list = (await this.gang.history(t.address, 20000)).map((x) => (k === 1 ? x : { ...x, price: x.price * k, bnb: x.bnb * k })); }
     else if (t.source === 'four-agent') list = await this.four.tokenTrades(t.address);
     else if (t.market) { list = await fsi.fetchTrades(t.market, 5000); complete = list.length < 9000; }
     list = [...new Map(list.map((x) => [`${x.tx}:${x.side}:${x.tokens}`, x])).values()].sort((a, b) => b.ts - a.ts).slice(0, 20000);

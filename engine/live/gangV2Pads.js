@@ -247,7 +247,7 @@ export class GangV2 {
       throw e;
     }
     let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(300); }
-    if (!toBnb || got <= 0n) return { venue: 'Gang V2 sell', expected: null, txHash: hashes.at(-1), hashes, note: got > 0n ? `已卖出得到报价币 ${ethers.formatUnits(got, 18)}（「卖出后自动换回 BNB」已关闭，留在钱包）` : '已卖出，没读到报价币到账' };
+    if (!toBnb || got <= 0n) return { venue: 'Gang V2 sell', expected: null, txHash: hashes.at(-1), hashes, note: got > 0n ? `已卖出得到报价币 ${ethers.formatUnits(got, await this.decimals(q))}（「卖出后自动换回 BNB」已关闭，留在钱包）` : '已卖出，没读到报价币到账' };
     return this.swapBack({ wallet, q, got, slippage, step, hashes });
   }
 

@@ -17,7 +17,9 @@ const T_OLD = '0xe57a519fe6a031fac5d360f4b8ce246c86dd280b40dc37b68c0a7cc7394ef9c
 const T_V2 = '0xd23a447045c377a966a79f59983bae21db7b92fead61df8ace4aea5628043791';
 const FILTER = { address: [GANG_OLD_PAD, GANG_V2_LAUNCHPAD], topics: [[T_OLD, T_V2]] };
 const coder = ethers.AbiCoder.defaultAbiCoder();
-const KNOWN_QUOTES = { '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c': 'BNB', '0x0c6302401aa5325c2e36f170f52c00b1d220b405': 'GANG', '0x4902c5ebc598265ed2212b559b042de8a5eeec3f': 'BNCB', '0x21caef8a43163eea865baee23b9c2e327696a3bf': 'XAUt' };
+const KNOWN_QUOTES = { '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c': 'BNB', '0x0c6302401aa5325c2e36f170f52c00b1d220b405': 'GANG', '0x4902c5ebc598265ed2212b559b042de8a5eeec3f': 'BNCB', '0x21caef8a43163eea865baee23b9c2e327696a3bf': 'XAUt', '0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a': 'BEM' };
+// 不是 18 位小数的报价币（gang.fun 接口和成交事件都按 18 位给数，要按这里换算）；不在表里的新报价币由 liveMarket 读链上 decimals()
+export const QUOTE_DEC = { '0x21caef8a43163eea865baee23b9c2e327696a3bf': 6, '0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a': 8 };
 const addr = (topic) => ethers.getAddress('0x' + topic.slice(26));
 
 export class GangChain extends EventEmitter {

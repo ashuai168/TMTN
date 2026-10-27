@@ -104,7 +104,7 @@ export class Holdings {
     let v = null;
     try {
       const g = this.trader.gangV2, w = this.trader.wallets[0]; const bal = await g.balanceOf(t.address, w.address);
-      if (bal > 0n) { const { c: cv } = await g.curve(t.address); const q = Number(ethers.formatEther(g.sellQuote(cv, bal).out)); v = { q, bnb: rate ? q * rate : null }; }
+      if (bal > 0n) { const { c: cv } = await g.curve(t.address); const q = Number(ethers.formatUnits(g.sellQuote(cv, bal).out, await g.decimals(cv.quote)));   /* 报价币不一定 18 位（BEM 8 位） */ v = { q, bnb: rate ? q * rate : null }; }
     } catch { /* 读链失败就不核对 */ }
     this.checks.set(k, { at: Date.now(), v, amt }); return v;
   }
