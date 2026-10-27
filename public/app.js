@@ -113,9 +113,10 @@ const gangBadge = (t) => (/^v3/.test(t.gangTrack || '') ? 'G3' : t.gangTrack ===
 // Flap Agent ID 门槛盘（NFT-gated）：内盘时只有持有门槛 NFT 的钱包能买卖，迁移后后端不再给 nftGate，标签自动消失
 const nftTip = (t) => `内盘门槛：钱包要持有 ${t.nftGate.name || 'NFT'}（${t.nftGate.nft}）里至少 1 个才能在内盘买卖，每个地址最多买总量 2%；迁移到外盘后谁都能买。没有这个 NFT 的钱包下单会自动跳过`;
 const nftChip = (t, cls = 'tag') => (t.nftGate ? `<i class="${cls} nftg" title="${esc(nftTip(t))}">🔒 ${t.nftGate.known ? 'Agent ID' : 'NFT'} 门槛</i>` : '');
+const NFTW = {};   // 门槛 NFT → 各钱包持有数（/api/token 返回；WebSocket 推的详情不带，按 NFT 集合记住）
 const nftPanel = (t) => {
   const g = t.nftGate; if (!g) return '';
-  const ws = g.wallets || [], ok = ws.filter((w) => w.n > 0);
+  const ws = g.wallets || NFTW[g.nft] || [], ok = ws.filter((w) => w.n > 0);
   const who = ws.length ? ws.map((w) => `<span class="${w.n > 0 ? 'g' : w.n === 0 ? 'r' : 'muted'}" title="${esc(w.address)}">${esc(w.label)} ${w.n > 0 ? `✓ 持有 ${w.n}` : w.n === 0 ? '✗ 没有（下单会跳过）' : '读取失败'}</span>`).join(' · ') : '<span class="muted">读取钱包中…</span>';
   return `<div class="nftg-box" title="${esc(nftTip(t))}">${g.image ? `<img src="${esc(proxied(g.image))}" alt="" loading="lazy"/>` : '<div class="nftg-ph">NFT</div>'}
     <div class="nftg-m"><b>🔒 ${esc(g.known ? 'Binance Agent ID 门槛' : 'NFT 门槛')}</b> <span class="muted">${esc(g.name)}${g.symbol ? ' (' + esc(g.symbol) + ')' : ''}</span>
@@ -321,7 +322,7 @@ function select(addr) {
   S.selected = addr; S.detail = null; S.hover = null; resetView(); syncUrl(); S.ivAutoUntil = Date.now() + 15_000;
   renderQB();   // 一键买卖浮窗和详情页同一帧出现（预设、位置都在本地，余额 / 持仓之后再补）
   ws?.readyState === 1 && ws.send(JSON.stringify({ type: 'sub', token: addr }));
-  api(`/api/token/${addr}`).then((d) => { if (S.selected === addr) { S.detail = d; autoInterval(); drawChart(); renderHead(); renderBottom(); } }).catch(() => {});
+  api(`/api/token/${addr}`).then((d) => { if (d?.nftGate?.wallets) NFTW[d.nftGate.nft] = d.nftGate.wallets; if (S.selected === addr) { S.detail = d; autoInterval(); drawChart(); renderHead(); renderBottom(); } }).catch(() => {});
   lastList = 0; scheduleRender(); refreshQuote();
 }
 
@@ -634,9 +635,9 @@ function renderHead() {
         <div class="th-sub"><span>代币 <span class="mono">${short(t.address, 8, 6)}</span> <span class="copy" data-copy="${t.address}">⧉</span></span><span>创建者 ${whoHtml(t.creator, t.creatorName || NAMES[String(t.creator || '').toLowerCase()])}</span>${t.firstBuyer ? `<span>首买 <a href="https://bscscan.com/address/${esc(t.firstBuyer)}" target="_blank" rel="noopener" title="${esc(t.firstBuyer)}">${whoHtml(t.firstBuyer, t.firstBuyerName || NAMES[t.firstBuyer.toLowerCase()])}</a></span>` : ''}</div>
         <div class="th-sub"><span>预设 ${t.preset}</span><span title="${fullTime(t.createdAt)}">${age(t.createdAt)} 前创建</span></div>
       </div>
-      ${nftPanel(t)}<div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制 CA'}</span><b class="mono">${short(t.address, 6, 4)}</b></button>${xsBtn(t.address, 'xs-head')}<a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}<a href="#" data-qbtoggle class="${qbOpen() ? 'qb-on' : ''}" title="显示 / 隐藏一键买卖面板">⚡ 一键买卖</a></div>${ruleBanner(t.address)}
+      <div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制 CA'}</span><b class="mono">${short(t.address, 6, 4)}</b></button>${xsBtn(t.address, 'xs-head')}<a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}<a href="#" data-qbtoggle class="${qbOpen() ? 'qb-on' : ''}" title="显示 / 隐藏一键买卖面板">⚡ 一键买卖</a></div>${ruleBanner(t.address)}
       <div class="th-price"><div class="p">$${sub(t.priceUsd)}</div><div class="s">每枚 · ${sub(t.price)} ${esc(t.quote || 'BNB')}</div></div>
-    </div>
+    </div>${nftPanel(t)}
     <div class="stats">
       <div><span>市值</span><b>${usd(t.mcapUsd)}</b></div>
       ${holdStats(t)}
