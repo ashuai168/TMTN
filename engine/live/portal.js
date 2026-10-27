@@ -161,11 +161,27 @@ export class Portal {
     const qc = bnbQuote ? null : new ethers.Contract(quoteAddress, ERC20_ABI, this.provider);
     const dec = bnbQuote ? 18 : Number(await qc.decimals().catch(() => 18));
     const before = bnbQuote ? 0n : await qc.balanceOf(wallet);
-    const hashes = [await this.send({ wallet, to: PORTAL, inputData, label: p >= 100 ? 'Portal.sellAll' : `Portal.sell ${p}%`, step })];
+    let hashes;
+    try { hashes = [await this.send({ wallet, to: PORTAL, inputData, label: p >= 100 ? 'Portal.sellAll' : `Portal.sell ${p}%`, step })]; }
+    catch (e) {
+      // 卖出那笔要在币安 App 里确认（或结果未知）：报价币确认后才到账，交给上层 followUp 确认后接着换回 BNB（以前这一步被跳过，报价币留在钱包）
+      if (!bnbQuote && toBnb && ['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) e.afterConfirm = async (log) => {
+        let got = 0n; for (const end = Date.now() + 5 * 60_000; Date.now() < end; await sleep(2000)) { got = (await qc.balanceOf(wallet).catch(() => before)) - before; if (got > 0n) break; }
+        if (got <= 0n) return { note: `5 分钟内没收到 ${quoteSym}（可能在 App 里拒绝了），没有换回 BNB` };
+        log(`收到 ${ethers.formatUnits(got, dec)} ${quoteSym}，接着换回 BNB`, 0);
+        return this.swapBack({ wallet, quoteAddress, quoteSym, dec, got, slippage, step: log, hashes: [] });
+      };
+      throw e;
+    }
     if (bnbQuote) return { venue: 'Portal.sell（BNB）', expected: +ethers.formatEther(expected), txHash: hashes[0], hashes };
     const got = await this.received(qc, wallet, before);
     if (got <= 0n) return { venue: `Portal.sell → ${quoteSym}`, expected: null, txHash: hashes[0], hashes, note: `已卖出，但没读到 ${quoteSym} 到账，没有换回 BNB` };
     if (!toBnb) return { venue: `Portal.sell → ${quoteSym}`, expected: null, txHash: hashes[0], hashes, note: `已卖出得到 ${ethers.formatUnits(got, dec)} ${quoteSym}（「卖出后自动换回 BNB」已关闭，留在钱包）` };
+    return this.swapBack({ wallet, quoteAddress, quoteSym, dec, got, slippage, step, hashes });
+  }
+
+  // 卖出到账的报价币换回 BNB（只换这次到账的数量）
+  async swapBack({ wallet, quoteAddress, quoteSym, dec, got, slippage, step, hashes }) {
     const t = Date.now();
     // 第二步：只换这次卖出实际到账的那部分（链上余额差，整数），失败最多再试 2 次
     let o = null, sw = {}, usdtGot = null;

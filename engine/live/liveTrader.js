@@ -613,14 +613,27 @@ export class LiveTrader extends EventEmitter {
   // 待确认订单的后续：有 txHash 就等回执（最多 10 分钟）；在等 App 确认的，等钱包解锁后再看结果
   async followUp(order, e) {
     const end = Date.now() + 10 * 60_000;
-    const done = (status, reason, tx) => { Object.assign(order, { status, reason, tx: tx || order.tx, stage: null }); this.quoteCache.clear(); this.refreshBalance(); this.syncAt = 0; this.emit('order', order); };
-    if (e.tx || order.pendingTx) {
-      const tx = e.tx || order.pendingTx;
+    const fin = (status, reason, tx) => { Object.assign(order, { status, reason, tx: tx || order.tx, stage: null }); this.quoteCache.clear(); this.refreshBalance(); this.syncAt = 0; this.emit('order', order); };
+    // 卖出那笔确认后，接着把到账的报价币换回 BNB（e.afterConfirm 由 Gang V2 / Portal 卖出挂上）
+    const done = async (status, reason, tx) => {
+      if (!e.afterConfirm || status === 'failed') return fin(status, reason, tx);
+      Object.assign(order, { reason: `${reason}；正在把报价币换回 BNB…` }); this.emit('order', order);
+      const log = (name, ms = 0) => { order.steps.push({ name, ms: Math.round(ms), at: Date.now() - order.ts }); this.emit('order', order); };
+      try {
+        const r = await e.afterConfirm(log);
+        if (r.hashes?.length) order.txs = [...(order.txs || []), ...r.hashes];
+        if (r.expected) { order.out = r.expected; return fin('filled', `已卖出并换回 ${trim(r.expected)} BNB${r.note ? '；' + r.note : ''}`, tx); }
+        return fin(status, `${reason}；${r.note || '没有换回 BNB'}`, tx);
+      } catch (x) { return fin(status, `${reason}；换回 BNB 失败：${x.message}，报价币留在钱包（可在持仓页「计价币余额」里一键换回）`, tx); }
+    };
+    // 只认这一步自己的 txHash：order.pendingTx 可能是前面授权那笔（已上链），拿它判断会把还在等 App 确认的卖出误标成「已成交」
+    if (e.tx) {
+      const tx = e.tx;
       while (Date.now() < end) { const rc = await (this.market.tradeProvider || this.market.provider).getTransactionReceipt(tx).catch(() => null); if (rc) return done(rc.status === 1 ? 'filled' : 'failed', rc.status === 1 ? '已上链确认' : `链上执行失败：${tx}`, tx); await sleep(3000); }
       return done('unknown', `10 分钟内没等到确认，请在钱包记录里查看：${tx}`, tx);
     }
     while (Date.now() < end) { if ((await baw.walletLock().catch(() => 'UNKNOWN')) !== 'LOCKED') break; await sleep(10_000); }
-    done('unknown', e.code === 'APP_CONFIRM' ? '币安 App 里的确认已处理（同意或拒绝），结果请看持仓 / 钱包记录' : '结果未知，请在持仓 / 钱包记录里查看，不要直接重下');
+    return done('unknown', e.code === 'APP_CONFIRM' ? '币安 App 里的确认已处理（同意或拒绝），结果请看持仓 / 钱包记录' : '结果未知，请在持仓 / 钱包记录里查看，不要直接重下');
   }
 
   // 真实下单（只由手动订单进入）。曲线阶段的 Flap Agent 盘走 Portal；其余走 baw market-order。

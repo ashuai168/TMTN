@@ -234,9 +234,25 @@ export class GangV2 {
     const data = pad.encodeFunctionData('sell', [token, amt, minOut(r.out, slippage)]);
     try { await this.provider.call({ from: wallet, to: p, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
     const before = await this.balanceOf(q, wallet);
-    hashes.push(await this.send({ wallet, to: p, inputData: data, label: 'Gang V2 sell', step }));
+    try { hashes.push(await this.send({ wallet, to: p, inputData: data, label: 'Gang V2 sell', step })); }
+    catch (e) {
+      // 卖出那笔要在币安 App 里确认（或已提交、结果未知）：报价币要等确认后才到账。交给上层 followUp 在确认后接着换回 BNB；
+      // 以前这里直接抛出，换回 BNB 那一步就被跳过了，GANG / WBNB / BNCB 留在钱包里
+      if (toBnb && ['APP_CONFIRM', 'UNCONFIRMED', 'UNKNOWN_SUBMIT'].includes(e.code)) e.afterConfirm = async (log) => {
+        let got = 0n; for (const end = Date.now() + 5 * 60_000; Date.now() < end; await sleep(2000)) { got = (await this.balanceOf(q, wallet).catch(() => before)) - before; if (got > 0n) break; }
+        if (got <= 0n) return { note: '5 分钟内没收到报价币（可能在 App 里拒绝了），没有换回 BNB' };
+        log(`收到报价币 ${ethers.formatUnits(got, await this.decimals(q))}，接着换回 BNB`, 0);
+        return this.swapBack({ wallet, q, got, slippage, step: log, hashes: [] });
+      };
+      throw e;
+    }
     let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(300); }
     if (!toBnb || got <= 0n) return { venue: 'Gang V2 sell', expected: null, txHash: hashes.at(-1), hashes, note: got > 0n ? `已卖出得到报价币 ${ethers.formatUnits(got, 18)}（「卖出后自动换回 BNB」已关闭，留在钱包）` : '已卖出，没读到报价币到账' };
+    return this.swapBack({ wallet, q, got, slippage, step, hashes });
+  }
+
+  // 卖出到账的报价币换回 BNB：WBNB 直接解包；其他用 baw（Ondo 类经 USDT），失败最多再试 2 次
+  async swapBack({ wallet, q, got, slippage, step, hashes }) {
     if (isWbnb(q)) { hashes.push(await this.send({ wallet, to: WBNB, inputData: erc20.encodeFunctionData('withdraw', [got]), label: 'WBNB→BNB 解包', step })); return { venue: 'Gang V2 sell → BNB', expected: Number(ethers.formatEther(got)), txHash: hashes.at(-1), hashes }; }
     const dec = await this.decimals(q);
     // 第二步：只换这次卖出实际到账的报价币（链上余额差，整数），失败最多再试 2 次
