@@ -2254,10 +2254,12 @@ const tcPaused = new Set();
 // 卡片下单状态（点击后立刻显示，几秒后清掉）：busy 下单中 / ok 已提交 / pend 待确认 / err 失败
 const tcState = new Map();
 const TC_ST = { busy: '<i class="spin"></i>下单中…', ok: '✓ 已提交', pend: '… 待确认', err: '✗ 失败' };
-const tcBuyLabel = (t, k) => `⚡ ${P(k).amt > 0 ? P(k).amt + ' BNB' : `买 ${qPct(t)}%`}`;
+// 会下单的钱包数（参与下单且已登录）：服务端每个钱包各买一份，不是平分
+const tcNW = () => (MW() ? onWallets().filter((w) => w.auth === 'ok').length : 1);
+const tcBuyLabel = (t, k) => `⚡ ${P(k).amt > 0 ? P(k).amt + ' BNB' : `买 ${qPct(t)}%`}${tcNW() > 1 ? ' ×' + tcNW() : ''}`;
 // 快捷买入的悬停说明：多钱包时写明「每个钱包」买多少、合计大约多少 BNB（按现价估算，没算价格冲击）
 function tcBuyTip(t, k) {
-  const n = MW() ? onWallets().filter((w) => w.auth === 'ok').length : 1, amt = P(k).amt;
+  const n = tcNW(), amt = P(k).amt;
   if (amt > 0) return n > 1 ? `每个钱包 ${amt} BNB · ${n} 个钱包 = ${+(amt * n).toFixed(6)} BNB 合计` : `买入 ${amt} BNB`;
   const pct = qPct(t), per = t?.priceUsd && S.bnbUsd ? (1e9 * pct / 100) * t.priceUsd / S.bnbUsd : null;
   return n > 1 ? `每个钱包买总量的 ${pct}% · ${n} 个钱包${per ? ` ≈ ${(per * n).toFixed(4)} BNB 合计（每个约 ${per.toFixed(4)}，按现价估算）` : ''}` : `买总量的 ${pct}%${per ? `（约 ${per.toFixed(4)} BNB）` : ''}`;
@@ -2292,7 +2294,7 @@ function tcHead(k) {
   return `<div class="tch"><b>${TCOLS[k]}</b><span class="cnt" id="tcn-${k}">0</span><i class="tc-pause" id="tcp-${k}" title="鼠标在列里，暂停刷新">❚❚</i>
     <span class="tch-r">
       <label class="tc-search"><svg viewBox="0 0 16 16" width="12" height="12"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6"/></svg><input data-tq="${k}" value="${esc(c.q)}" placeholder="关键词1, ..."/></label>
-      <label class="tc-amt" title="这一列 ⚡ 买入的 BNB 金额（0 = 按 1% 筹码买）"><i class="bnbcoin"></i><input data-ta="${k}" type="number" min="0" step="0.01" value="${p.amt || 0}"/></label>
+      <label class="tc-amt" title="每个钱包各买入的 BNB 数量（多钱包时每个钱包都买这么多，不是平分）；0 = 每个钱包按 1% 筹码买"><i class="bnbcoin"></i><input data-ta="${k}" type="number" min="0" step="0.01" value="${p.amt || 0}"/></label>
       <span class="tc-pre">${[1, 2, 3].map((n) => `<button data-tp="${k}:${n}" class="${c.preset === n ? 'on' : ''}">P${n}</button>`).join('')}</span>
       ${k === 'soon' ? `<span class="tc-pre tc-sort"><button data-ts="${k}:pct" class="${c.sort === 'pct' ? 'on' : ''}">%</button><button data-ts="${k}:mc" class="${c.sort === 'mc' ? 'on' : ''}">MC</button></span>` : ''}
       <button class="tc-ic ${c.sound ? 'on' : ''}" data-tsound="${k}" title="新币提示音">${c.sound ? '🔊' : '🔈'}</button>

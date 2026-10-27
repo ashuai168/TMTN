@@ -399,7 +399,7 @@ td.addr { color: var(--muted); }
 .tc-search { display: flex; align-items: center; gap: 4px; background: #15151c; border: 1px solid #23232d; border-radius: 6px; padding: 2px 6px; color: #6b7280; }
 .tc-search input { width: 78px; background: none; border: 0; color: #e5e7eb; font-size: 11px; outline: none; }
 .tc-amt { display: flex; align-items: center; gap: 3px; background: #15151c; border: 1px solid #23232d; border-radius: 6px; padding: 2px 5px; }
-.tc-amt input { width: 38px; background: none; border: 0; color: #e5e7eb; font: var(--fw-strong) 11px var(--mono, monospace); outline: none; }
+.tc-amt input { width: 72px; background: none; border: 0; color: #e5e7eb; font: var(--fw-strong) 11px var(--mono, monospace); outline: none; }
 .bnbcoin { width: 12px; height: 12px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ffd84d, #f0b90b 60%, #b8860b); display: inline-block; }
 .tc-pre { display: flex; background: #15151c; border: 1px solid #23232d; border-radius: 6px; overflow: hidden; }
 .tc-pre button { background: none; border: 0; color: #6b7280; font: var(--fw-strong) 10px var(--mono, monospace); padding: 3px 6px; cursor: pointer; }
