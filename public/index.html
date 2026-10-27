@@ -7,7 +7,7 @@
 <link rel="icon" type="image/svg+xml" href="logo.svg?v=2" />
 <link rel="icon" type="image/png" sizes="32x32" href="logo-32.png?v=2" />
 <link rel="apple-touch-icon" href="logo-96.png?v=2" />
-<link rel="stylesheet" href="style.css?v=1792991274" />
+<link rel="stylesheet" href="style.css?v=1793083610" />
 </head>
 <body>
 <header class="topbar">
@@ -150,7 +150,11 @@
   <div class="hold-sw" id="holdSwap"></div>
   <div class="hold-q" id="holdQuote"></div>
   <div class="hold-b" id="holdBody"></div>
-</div></section>
+</div>
+  <!-- 持仓页右侧：Gang 新币战壕（和战壕「新创建」列同一套卡片，⚡ 金额也跟那一列） -->
+  <aside class="tcol hold-gang" id="holdGang"><div class="tch"><b>Gang 新币</b><span class="cnt" id="hgCnt">0</span><i class="tc-pause" id="hgPause" title="鼠标在列里，暂停刷新">❚❚</i><span class="tch-r"><span class="muted hg-st" id="hgSt"></span><button class="tc-ic" id="hgClose" title="收起（右下角「Gang 新币」再打开）">×</button></span></div><div class="tcb" id="hgBody"></div></aside>
+  <button class="hg-open hidden" id="hgOpen" title="显示 Gang 新币战壕">Gang 新币 ›</button>
+</section>
 <section class="pulse trench hidden" id="pulse">
   <div class="tcol" id="tc-new"><div class="tchw" id="tch-new"></div><div class="tc-pop-w hidden" id="tcf-new"></div><div class="tcb" id="tcb-new"></div></div>
   <div class="tcol" id="tc-soon"><div class="tchw" id="tch-soon"></div><div class="tc-pop-w hidden" id="tcf-soon"></div><div class="tcb" id="tcb-soon"></div></div>
@@ -193,6 +197,6 @@
 
 <div class="toasts" id="toasts"></div>
 <script src="vendor/lightweight-charts.standalone.production.js?v=1792914154.2.0"></script>
-<script type="module" src="app.js?v=1792991274"></script>
+<script type="module" src="app.js?v=1793083610"></script>
 </body>
 </html>

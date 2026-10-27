@@ -2064,7 +2064,7 @@ function setView(v, fromRoute) {
   $$('#viewSw button').forEach((b) => b.classList.toggle('active', b.dataset.view === v));
   if (!fromRoute) syncUrl();
   renderQB?.();
-  if (v === 'hold') loadHold();
+  if (v === 'hold') { loadHold(); renderHoldGang(); }
   if (v === 'track') loadTrack();
   if (v === 'snipe') { SNP.formAt = 0; loadSnipe(); }
   if (v === 'pulse') { lastPulse = 0; renderPulse(); requestAnimationFrame(() => $$('.tcb').forEach((b) => { if (pulseScroll[b.id] != null) b.scrollTop = pulseScroll[b.id]; })); }
@@ -2232,6 +2232,42 @@ function patchCard(el, n) {
     if (x.classList?.contains('logo') || x.classList?.contains('tc-img') || x.classList?.contains('tlc-img')) { const si = x.querySelector('img')?.getAttribute('src') ?? x.getAttribute('src'), ni = b[i].querySelector('img')?.getAttribute('src') ?? b[i].getAttribute('src'); if (si === ni && x.textContent === b[i].textContent) { const bx = x.querySelector('.tc-badge'), by = b[i].querySelector('.tc-badge'); if (bx && by && bx.outerHTML !== by.outerHTML) bx.replaceWith(by); return; } } if (x.tagName === b[i].tagName && x.children.length && x.children.length === b[i].children.length && !x.matches('img')) patchCard(x, b[i]); else x.replaceWith(b[i]); });
 }
 function renderTrenchHeads() { for (const k of Object.keys(TCOLS)) { const h = $('#tch-' + k); if (h) h.innerHTML = tcHead(k); } }
+
+// 持仓页右侧的 Gang 新币战壕：只列 Gang 内盘中的币（最新在上），卡片和 ⚡ 金额沿用战壕「新创建」列；鼠标停在列里暂停刷新；可收起（记在本地）
+var HG = { open: (() => { try { return localStorage.holdGang !== '0'; } catch { return true; } })(), paused: false };
+function renderHoldGang() {
+  if (!HG) return;   // 启动时路由先进持仓页，这里还没初始化
+  const box = $('#holdGang'), body = $('#hgBody'); if (!box || !body) return;
+  box.classList.toggle('hidden', !HG.open); $('#hgOpen')?.classList.toggle('hidden', HG.open); $('#hold')?.classList.toggle('hg-on', HG.open);
+  if (!HG.open || S.view !== 'hold') return;
+  const list = [...S.tokens.values()].filter((t) => t.platform === 'gang' && t.stage === 'curve' && !isBlocked(t)).sort((a, b) => b.createdAt - a.createdAt || (a.address < b.address ? -1 : 1));
+  const gc = S.net?.gangChain;
+  $('#hgCnt').textContent = list.length; $('#hgPause').classList.toggle('on', HG.paused);
+  $('#hgSt').innerHTML = !LIVE() ? '' : gc?.connected ? `<span class="g">链上 ✓</span>${gc.lastAt ? ` · 上个新币 ${age(gc.lastAt)}前` : ''}` : `<span class="r">链上 ${gc?.lastError ? '✗' : '连接中…'}</span>`;
+  if (HG.paused) { body.querySelectorAll(':scope > [data-pa]').forEach((el) => { if (isBlocked(S.tokens.get(el.dataset.pa))) el.remove(); }); return; }
+  const show = list.slice(0, 40);
+  const old = new Map([...body.children].filter((x) => x.dataset.pa).map((x) => [x.dataset.pa, x]));
+  let prev = null;
+  for (const t of show) {
+    const html = tcCard(t, 'new');
+    let el = old.get(t.address);
+    if (!el) { const d = document.createElement('div'); d.innerHTML = html; el = d.firstElementChild; el._h = html; if (Date.now() - (t.createdAt || 0) < 10_000) el.classList.add('new'); }
+    else if (el._h !== html) { const d = document.createElement('div'); d.innerHTML = html; patchCard(el, d.firstElementChild); el._h = html; }
+    old.delete(t.address);
+    const want = prev ? prev.nextSibling : body.firstChild;
+    if (el !== want) body.insertBefore(el, want);
+    prev = el;
+  }
+  for (const el of old.values()) el.remove();
+  body.querySelector(':scope > .empty')?.remove();
+  if (!show.length) body.innerHTML = '<div class="empty">暂无 Gang 内盘新币</div>';
+}
+const setHoldGang = (on) => { HG.open = on; try { localStorage.holdGang = on ? '1' : '0'; } catch { /* ignore */ } renderHoldGang(); };
+$('#hgClose')?.addEventListener('click', (e) => { e.stopPropagation(); setHoldGang(false); });
+$('#hgOpen')?.addEventListener('click', () => setHoldGang(true));
+$('#hgBody')?.addEventListener('mouseenter', () => { HG.paused = true; renderHoldGang(); });
+$('#hgBody')?.addEventListener('mouseleave', () => { HG.paused = false; renderHoldGang(); });
+setInterval(() => { if (S.view === 'hold') renderHoldGang(); }, 1000);
 
 // ⚡：金额 > 0 买这一列设置的 BNB；金额 = 0 按 1% 筹码买（沿用原来的「买 1%」逻辑）
 async function trenchBuy(addr, k) {
