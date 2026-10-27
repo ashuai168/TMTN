@@ -731,9 +731,12 @@ body.fav-on .favbar { display: flex; }
 .qbp-in { height: 28px; width: 100%; box-sizing: border-box; border: 1px solid #f0b90b; background: #1a1708; color: var(--text); text-align: center; font-size: 12px; }
 .qbp-adv { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); font-size: 11px; } .qbp-adv button { color: var(--muted); }
 /* 一键买卖浮窗可改大小（右下角拖）：按钮列数跟着宽度变，拉高时按钮变高，字号跟着宽度略放大；太小时内容滚动 */
-.qbp { resize: both; overflow: auto; min-width: 230px; min-height: 150px; max-width: 96vw; max-height: calc(100vh - 60px); display: flex; flex-direction: column; container-type: inline-size; }
+.qbp { overflow: hidden; min-width: 230px; min-height: 150px; max-width: 96vw; max-height: calc(100vh - 60px); display: flex; flex-direction: column; container-type: inline-size; }
 .qbp-h { flex: none; } .qbp-f { flex: none; }
-.qbp-sec { flex: 1 1 auto; display: flex; flex-direction: column; }
+.qbp-sec { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.qbp-sec .qbp-grid { min-height: 0; overflow: auto; }
+.qbp-rs { position: absolute; width: 14px; height: 14px; z-index: 2; } .qbp-rs.nw { left: 0; top: 0; cursor: nwse-resize; } .qbp-rs.se { right: 0; bottom: 0; cursor: nwse-resize; } .qbp-rs.ne { right: 0; top: 0; cursor: nesw-resize; } .qbp-rs.sw { left: 0; bottom: 0; cursor: nesw-resize; }
+.qbp-rs.se::after { content: ''; position: absolute; right: 3px; bottom: 3px; width: 7px; height: 7px; border-right: 2px solid rgba(255, 255, 255, .3); border-bottom: 2px solid rgba(255, 255, 255, .3); }
 .qbp-sec .qbp-grid { flex: 1 1 auto; grid-template-columns: repeat(auto-fill, minmax(max(54px, 21cqi), 1fr)); grid-auto-rows: minmax(28px, 1fr); }
 .qbp-b, .qbp-in { height: auto; min-height: 28px; font-size: clamp(12px, 4.4cqi, 20px); }
 .qbp-b.wide { flex: none; }

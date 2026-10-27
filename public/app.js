@@ -1736,7 +1736,7 @@ function renderQB() {
   const btns = (side, list) => list.map((v, i) => QBP.edit ? `<input class="qbp-in mono" data-qbi="${side}:${i}" value="${v}" inputmode="decimal" />` : `<button class="qbp-b ${side}" data-qbgo="${side}:${v}">${side === 'buy' ? v : v + '%'}</button>`).join('');
   const tabs = (side, cur) => [0, 1, 2].map((i) => `<button class="${cur === i ? 'on' : ''}" data-qbtab="${side}:${i}">P${i + 1}</button>`).join('');
   const sgnU = (v) => (v == null ? '—' : `<b class="${v >= 0 ? 'g' : 'r'}">${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}</b>`);
-  el.innerHTML = `<div class="qbp-h" data-qbdrag><b>一键买卖</b><span class="muted">${esc(t.symbol)}</span><span class="spacer"></span><button class="ca-big sm ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-qb')}<button class="qbp-x" data-qbedit title="编辑预设">${QBP.edit ? '完成' : '⚙'}</button><button class="qbp-x" data-qbclose title="关闭">×</button></div>
+  el.innerHTML = `<div class="qbp-h" data-qbdrag><b>一键买卖</b><span class="muted">${esc(t.symbol)}</span><span class="spacer"></span><button class="ca-big sm ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-qb')}<button class="qbp-x" data-qbedit title="${QBP.edit ? '完成（保存预设）' : '编辑预设'}">${QBP.edit ? '✅' : '⚙'}</button><button class="qbp-x" data-qbclose title="关闭">×</button></div>
     <div class="qbp-sec"><div class="qbp-row"><b class="g">买入</b><span class="qbp-tabs">${tabs('buy', QBP.pb)}</span><span class="spacer"></span><span class="muted mono">${w ? bnb(w.bnb || 0, 4) : '—'} BNB</span></div>
       <div class="qbp-grid">${btns('buy', P.buy[QBP.pb])}</div>
       <div class="qbp-adv"><button data-qbadv>${QBP.adv ? '▾' : '▸'} 高级</button>${QBP.adv ? `<span>滑点 <b class="mono">${S.slippage}%</b>（在右侧下单区修改）</span><span>${S.fast ? '<b class="y">极速模式：点击直接下单</b>' : '每次会弹确认'}</span><span>单笔上限 ${S.baw?.maxTradeBnb || '不限'} BNB</span>` : ''}</div></div>
@@ -1744,6 +1744,7 @@ function renderQB() {
       <div class="qbp-grid">${btns('sell', P.sell[QBP.ps])}</div>
       ${hr?.amount > 0 && hr.costBnb > 0 && hr.valueBnb > hr.costBnb ? `<button class="qbp-b sell wide" data-qbgo="sell:${Math.min(100, (hr.costBnb / hr.valueBnb) * 100).toFixed(1)}" title="卖出刚好收回成本的比例（按现价估算）">回本（卖 ${Math.min(100, (hr.costBnb / hr.valueBnb) * 100).toFixed(1)}%）</button>` : ''}</div>
     <div class="qbp-f"><div><span>余额</span><b>${hr?.valueUsd != null ? '$' + hr.valueUsd.toFixed(2) : '—'}</b></div><div><span>总买入</span><b>${hr ? '$' + (hr.costUsd || 0).toFixed(2) : '—'}</b></div><div><span>总卖出</span><b>${hr ? '$' + (hr.soldUsd || 0).toFixed(2) : '—'}</b></div><div><span>未实现</span>${hr && hr.valueUsd != null && hr.amount > 0 ? sgnU(hr.valueUsd - (hr.costUsd || 0) + (hr.soldUsd || 0)) : '—'}</div></div>`;
+  el.insertAdjacentHTML('beforeend', '<i class="qbp-rs nw" data-qbrs="nw"></i><i class="qbp-rs ne" data-qbrs="ne"></i><i class="qbp-rs sw" data-qbrs="sw"></i><i class="qbp-rs se" data-qbrs="se"></i>');   // 四个角拖动改大小
 }
 function qbBind(el) {
   el.addEventListener('click', async (e) => {
@@ -1763,6 +1764,22 @@ function qbBind(el) {
       const [side, v] = d.qbgo.split(':'); const amt = +v; if (!S.selected || !(amt > 0)) return;
       return submitOrder({ token: S.selected, side, wallets: [S.activeWallet], amountFor: () => amt });
     }
+  });
+  // 四个角拖动改大小（拖哪个角，对角不动），宽高和位置都记住
+  el.addEventListener('pointerdown', (e) => {
+    const h = e.target.closest('[data-qbrs]'); if (!h) return;
+    e.preventDefault(); e.stopPropagation(); el.setPointerCapture(e.pointerId); el.classList.add('dragging');
+    const c = h.dataset.qbrs, r = el.getBoundingClientRect(), sx = e.clientX, sy = e.clientY, MW = 230, MH = 150;
+    const mv = (ev) => {
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      let l = r.left, t = r.top, w = r.width, hh = r.height;
+      if (c.includes('e')) w = Math.max(MW, Math.min(innerWidth - l, r.width + dx)); else { w = Math.max(MW, Math.min(r.right, r.width - dx)); l = r.right - w; }
+      if (c.includes('s')) hh = Math.max(MH, Math.min(innerHeight - t, r.height + dy)); else { hh = Math.max(MH, Math.min(r.bottom - 46, r.height - dy)); t = r.bottom - hh; }
+      Object.assign(el.style, { left: l + 'px', top: t + 'px', right: 'auto', width: w + 'px', height: hh + 'px' });
+      Object.assign(QBP, { x: l, y: t, w: Math.round(w), h: Math.round(hh) });
+    };
+    const up = () => { el.classList.remove('dragging'); el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); qbSave(); };
+    el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
   });
   // 拖动标题栏移动，位置记住
   el.addEventListener('pointerdown', (e) => {
