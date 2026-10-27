@@ -516,7 +516,11 @@ export class LiveTrader extends EventEmitter {
       const w = this.wallet(walletId);
       order.route = this.route(t, side); order.wallet = w.label;
       // Agent ID 门槛盘：这个钱包没有门槛 NFT 就跳过（狙击 / 跟单 / 一键买都一样，不算失败、不发交易）。和钱包锁检查同时查，省一次往返
-      const [nb, lock] = await Promise.all([this.nftBlock(t, w), order.dryRun ? null : this.lockStatus()]);
+      // 战壕 ⚡ 快捷买入不等任何检查：不查 NFT 门槛，钱包锁只用 30 秒内的缓存（过期就后台刷新，不等）（jak 2026-10-27：快捷买入要最快）
+      const quick = via === 'quick' && side === 'buy';
+      if (quick && !order.dryRun && !(this.lockState && Date.now() - this.lockState.at < 30_000)) this.lockStatus().catch(() => {});
+      const [nb, lock] = quick ? [null, order.dryRun ? null : this.lockState && Date.now() - this.lockState.at < 30_000 ? this.lockState.v : null]
+        : await Promise.all([this.nftBlock(t, w), order.dryRun ? null : this.lockStatus()]);
       if (nb) { Object.assign(order, { status: 'failed', skipped: true, reason: nb, latencyMs: Date.now() - order.ts }); this.emit('order', order); return order; }
 
       if (!order.dryRun) {
@@ -825,7 +829,7 @@ export class LiveTrader extends EventEmitter {
       const cap = this.status.maxTradeBnb;
       if (cap > 0 && amt > cap) throw new Error(`单笔上限 ${cap} BNB（可在交易设置里修改）`);
       // BNB 余额用后台每 20 秒刷新的缓存；超过 30 秒没刷新才当场查
-      if (!this.balAt || Date.now() - this.balAt > 30_000) { const t0 = Date.now(); await this.refreshBalance(); step('检查 BNB 余额（baw）', Date.now() - t0); }
+      if (!this.balAt || Date.now() - this.balAt > 30_000) { if (order.via === 'quick' && this.balAt) this.refreshBalance(); else { const t0 = Date.now(); await this.refreshBalance(); step('检查 BNB 余额（baw）', Date.now() - t0); } }   // 快捷买入：有过余额就不等刷新
       let payQuote = null;
       // Gang V2 的 WBNB 盘：钱包里已有够用的 WBNB 就直接用（只发 buy 一笔，狙击要快），BNB 只要够 gas
       const wbnbReady = this.useGangV2(t) && String(t.quoteAddress || '').toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase() && (w.tokens?.[QUOTE_TOKENS.WBNB.toLowerCase()] || 0) >= amt && (w.bnb || 0) >= 0.0005;
@@ -846,7 +850,7 @@ export class LiveTrader extends EventEmitter {
         : this.useGangV2(t) ? await this.gangV2.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, payQuote })
         : this.useGang(t) ? await this.gangTrade.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
         : this.useOpenFour(t) ? await this.openFourBuy({ w, t, amt, slippage, step })
-        : this.useFlapNft(t) ? await this.flapNft.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
+        : this.useFlapNft(t) ? await this.flapNft.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, fast: order.via === 'quick' })
         : this.usePortal(t, 'buy')
         ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step, payQuote, quoteRate: t.quoteAddress ? await this.gangV2.quoteRate(t.quoteAddress, { stale: 30_000 }).catch(() => null) : null })
         : await this.dexTrade({ t, w, side: 'buy', qty: amt, slippage, step });

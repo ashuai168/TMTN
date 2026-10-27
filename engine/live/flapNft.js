@@ -337,12 +337,12 @@ export class FlapNft extends EventEmitter {
   }
 
   // 买入：一笔 swapExactInput{value}（BNB 盘原子完成；非 BNB 报价币盘由 Portal 自己把 BNB 换成报价币）。到 2% 上限时只成交到上限，多余 BNB 同笔退回
-  async buy({ wallet, token, amountBnb, slippage, step }) {
+  async buy({ wallet, token, amountBnb, slippage, step, fast = false }) {
     const q = await this.quoteBuy(token, wallet, amountBnb);
     if (q.out <= 0n) throw new Error('报价为 0：可能已到每个地址 2% 上限');
     step(`Flap Portal 报价 ${f18(q.out).toFixed(0)} 个`, 0);
     const inputData = iface.encodeFunctionData('swapExactInput', [[ZERO, token, q.value, minOut(q.out, slippage), '0x']]);
-    await this.simulate(wallet, inputData, q.value);
+    if (!fast) await this.simulate(wallet, inputData, q.value);   // 快捷买入不模拟，直接发（报价 + 滑点保护照旧）
     const hash = await this.send({ wallet, to: FLAP_PORTAL, valueWei: q.value, inputData, label: 'Flap Portal.swapExactInput 买入', step });
     return { venue: 'Flap Portal.swapExactInput（Agent ID 门槛内盘，BNB）', expected: f18(q.out), txHash: hash, hashes: [hash] };
   }
