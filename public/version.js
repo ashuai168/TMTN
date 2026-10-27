@@ -11,6 +11,7 @@ const md = (s) => esc(s).split('\n').map((l) => l.trim()).filter(Boolean).map((l
 }).join('');
 
 let V = null, open = false, histOpen = false, polling = null, restarting = null;
+let ask = null, msg = null;   // 面板里的确认框 { title, lines[], ok, danger, run } / 错误提示（不用浏览器自带的 confirm / alert）
 const btn = $('#vmBtn'), pop = $('#vmPop');
 
 async function load(refresh) {
@@ -24,6 +25,7 @@ async function load(refresh) {
 async function post(url, body) {
   const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   const j = await r.json().catch(() => ({}));
+  if (r.status === 404 && !j.error) throw new Error('服务还在跑旧版本，没有这个功能的接口。请先用原来的方式重启一次服务（例如 restart-all.sh），之后就能在这里操作了');
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   V = j; paint(); watchJob();
 }
@@ -48,18 +50,22 @@ function watchJob() {
   }, 1200);
 }
 
+const fail = (e) => { msg = e.message; paint(); };
+const confirmAsk = (a) => { ask = a; msg = null; paint(); };
 function switchTo(tag, force) {
   const up = cmp(tag, V.current) > 0;
-  if (!force && !confirm(`${up ? '更新' : '回退'}到 ${short(tag)}？\n\n· 只替换程序代码，data/、.env、钱包登录都不动\n· 切换前会自动备份当前代码，随时能恢复\n· 完成后服务会自动重启（约 5–10 秒），重启期间不能下单、跟单和狙击会暂停`)) return;
-  post('/api/version/switch', { tag, force: !!force }).catch((e) => alert(e.message));
+  const run = () => post('/api/version/switch', { tag, force: !!force }).catch(fail);
+  if (force) return run();
+  confirmAsk({ title: `${up ? '更新' : '回退'}到 ${short(tag)}？`, ok: up ? '更新' : '回退', run,
+    lines: ['只替换程序代码，data/、.env、钱包登录都不动', '切换前自动备份当前代码，随时能恢复', '完成后服务自动重启（约 5–10 秒），期间不能下单，跟单和狙击会暂停'] });
 }
 function restartNow() {
-  if (!confirm('现在重启服务？\n\n大约 5–10 秒，重启期间不能下单，跟单和狙击会暂停；data/、.env、钱包登录都不动。页面会自动刷新。')) return;
-  post('/api/version/restart', {}).catch((e) => alert(e.message));
+  confirmAsk({ title: '现在重启服务？', ok: '重启', run: () => post('/api/version/restart', {}).catch(fail),
+    lines: ['大约 5–10 秒，页面会自动刷新', '重启期间不能下单，跟单和狙击会暂停', 'data/、.env、钱包登录都不动'] });
 }
 function restore(file) {
-  if (!confirm(`恢复备份 ${file}？\n\n会先备份当前代码，再把代码换回这份备份，然后自动重启服务。`)) return;
-  post('/api/version/restore', { file }).catch((e) => alert(e.message));
+  confirmAsk({ title: '恢复这份备份？', ok: '恢复', danger: true, run: () => post('/api/version/restore', { file }).catch(fail),
+    lines: [file, '先备份当前代码，再换回这份备份', '完成后服务自动重启'] });
 }
 
 function paint() {
@@ -86,6 +92,8 @@ function paint() {
   const cur = V.releases.find((r) => cmp(r.tag, V.current) === 0);
   pop.innerHTML = `
     <div class="vm-h"><b>版本管理</b>${upd ? '<i class="vm-new">NEW</i>' : ''}<span class="spacer"></span><button class="vm-x" data-vm-close>×</button></div>
+    ${ask ? `<div class="vm-ask"><b>${esc(ask.title)}</b><ul>${ask.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul><div class="vm-ask-b"><button class="vm-b" data-vm-ask="no">取消</button><button class="vm-b ${ask.danger ? 'warn' : 'primary'}" data-vm-ask="yes">${esc(ask.ok)}</button></div></div>` : ''}
+    ${msg ? `<div class="vm-err"><span>${esc(msg)}</span><button class="vm-x" data-vm-msg>×</button></div>` : ''}
     <div class="vm-line">当前版本 <b class="mono">${esc(short(V.current))}</b> · ${status}</div>
     <div class="vm-sub muted">${V.checkedAt ? `上次检查 ${hm(V.checkedAt)} · ` : ''}来源 <a href="${esc(V.repoUrl)}" target="_blank" rel="noopener">${esc(V.repo)}</a>${V.install === 'git' ? ' · git 安装' : ''}</div>
     ${V.pendingRestart ? `<div class="vm-warn vm-row2"><span>代码已经是 ${esc(short(V.current))}，但服务还在跑 ${esc(short(V.running))}，重启后生效</span><button class="vm-b sm" data-vm-restart ${busy || blocked ? 'disabled' : ''}>立即重启</button></div>` : ''}
@@ -106,7 +114,7 @@ function paint() {
 
 btn.addEventListener('click', () => { open = !open; pop.classList.toggle('hidden', !open); paint(); if (open && !V?.checkedAt) load(false); });
 pop.addEventListener('click', (e) => {
-  const t = e.target.closest('[data-vm-close],[data-vm-check],[data-vm-switch],[data-vm-force],[data-vm-hist],[data-vm-restore],[data-vm-restart]');
+  const t = e.target.closest('[data-vm-close],[data-vm-check],[data-vm-switch],[data-vm-force],[data-vm-hist],[data-vm-restore],[data-vm-restart],[data-vm-ask],[data-vm-msg]');
   if (!t) return;
   if (t.dataset.vmClose != null) { open = false; pop.classList.add('hidden'); paint(); }
   else if (t.dataset.vmCheck != null) { t.textContent = '检查中…'; load(true); }
@@ -115,6 +123,8 @@ pop.addEventListener('click', (e) => {
   else if (t.dataset.vmHist != null) { histOpen = !histOpen; paint(); }
   else if (t.dataset.vmRestore) restore(t.dataset.vmRestore);
   else if (t.dataset.vmRestart != null) restartNow();
+  else if (t.dataset.vmAsk) { const a = ask; ask = null; paint(); if (t.dataset.vmAsk === 'yes') a?.run(); }
+  else if (t.dataset.vmMsg != null) { msg = null; paint(); }
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) { open = false; pop.classList.add('hidden'); paint(); } });
 

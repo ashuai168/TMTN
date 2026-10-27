@@ -32,3 +32,7 @@
 .vm-row { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 4px; border-radius: 6px; } .vm-row:hover { background: var(--panel2); }
 .vm-bt { font-size: 11px; margin-top: 8px; }
 .vm-row2 { display: flex; align-items: center; gap: 8px; } .vm-row2 span { flex: 1; } .vm-row2 .vm-b { flex: none; }
+.vm-ask { border: 1px solid var(--y); background: var(--y-bg); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.vm-ask b { font-size: 13px; } .vm-ask ul { margin: 0; padding-left: 16px; color: #c3cad3; line-height: 1.6; }
+.vm-ask-b { display: flex; justify-content: flex-end; gap: 8px; } .vm-ask-b .vm-b { height: 28px; width: auto; margin: 0; }
+.vm-err { display: flex; gap: 6px; align-items: flex-start; color: var(--r); background: var(--r-bg); border-radius: 6px; padding: 6px 8px; font-size: 11.5px; } .vm-err span { flex: 1; } .vm-err .vm-x { font-size: 14px; }
