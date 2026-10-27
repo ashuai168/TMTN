@@ -880,6 +880,7 @@ function renderBottom() {
         <td>${p.amount > 0 ? `<button class="qb" style="display:inline;color:var(--r);border-color:rgba(246,70,93,.4);background:var(--r-bg)" data-sell="${p.walletId}:${p.token}:50">卖50%</button> <button class="qb" style="display:inline;color:var(--r);border-color:rgba(246,70,93,.4);background:var(--r-bg)" data-sell="${p.walletId}:${p.token}:100">清仓</button>` : ''}</td></tr>`).join('')}</table>` : (cl ? '' : '<div class="empty">暂无持仓</div>'));
       break;
     }
+    case 'holders': { const v = holdersHtml(t); html = v.html; cnt = v.cnt; break; }   // HOLDERS_FEATURE
     case 'allpos': {
       // 所有持仓：每个钱包各自一行（同一个币两个钱包都有就两行），点卖出只卖那一个钱包的
       const rows = allPosRows(), shown = rows.filter((r) => r.valueBnb == null || r.valueBnb >= 0.0005), hid = rows.length - shown.length;
@@ -1851,6 +1852,38 @@ $('#bottomBody').addEventListener('click', (e) => { if (e.target.closest('#trade
 $('#bottomBody').addEventListener('scroll', (e) => { const b = e.currentTarget; if (S.bottomTab === 'trades' && b.scrollHeight - b.scrollTop - b.clientHeight < 120) loadOlderTrades(); }, { passive: true });
 
 
+/* ---------- 详情页底部「持有人」（HOLDERS_FEATURE）：按持仓排名，总买入 / 总卖出 / 利润 / 买入市值；点一行打开交易者抽屉看每一笔买卖 ---------- */
+const HOLDERS = {};   // token → { at, data, loading, err, exited }
+function holdersState() { const k = S.selected || ''; return (HOLDERS[k] ||= { at: 0, data: null, loading: false, err: null, exited: false }); }
+async function loadHolders(force) {
+  const k = S.selected, o = holdersState(); if (!k || !LIVE() || o.loading || (!force && Date.now() - o.at < 30_000)) return;
+  o.loading = true; o.err = null; if (force) renderBottom();
+  try { o.data = await api(`/api/holders/${k}`); } catch (e) { o.err = e.message; }
+  o.at = Date.now(); o.loading = false; if (S.selected === k && S.bottomTab === 'holders') renderBottom();
+}
+function holdersHtml(t) {
+  if (!LIVE()) return { html: '<div class="empty">持有人只在实盘模式可用</div>', cnt: '' };
+  if (!t) return { html: '<div class="empty">先选一个币</div>', cnt: '' };
+  const o = holdersState(); loadHolders(); const d = o.data;
+  if (!d) return { html: `<div class="empty">${o.err ? '读取失败：' + esc(o.err) : '正在汇总这个币的全部成交…'}</div>`, cnt: '' };
+  const U = (q) => q * d.qUsd, B = (q) => q * d.qBnb;
+  const money = (qv, n) => `<b>$${U(qv).toFixed(2)}</b><div class="hsub">${bnb(B(qv))} BNB${n != null ? ` · ${n} 笔` : ''}</div>`;
+  const rows = o.exited ? d.exited : d.holders;
+  const head = `<div class="note" style="margin:4px 0 6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="muted">${esc(d.coverage)}。统计 ${d.trades} 笔成交、${d.traders} 个地址${d.complete ? '' : '（成交太多，只统计了最近一部分）'}；持仓：前 ${d.checked} 名读链上余额，其余按买卖差估算，<span class="y">⚠</span> = 有转入 / 转出（买卖差和链上余额对不上，成本、利润只按买卖算）</span><span class="spacer"></span>
+    <button class="qb" style="display:inline" data-hexited>${o.exited ? `看持有中（${d.holderCount}）` : `看已清仓（${d.exitedCount}）`}</button> <button class="qb" style="display:inline" data-hrefresh>${o.loading ? '刷新中…' : '刷新'}</button></div>`;
+  const html = head + (rows.length ? `<table class="ttable"><tr><th>#</th><th class="l">钱包</th><th title="当前持有数量 / 占总量">持有</th><th title="买入按实际付出（含平台费）；美元 / BNB 按报价币现价换算">总买入</th><th title="卖出按到手金额">总卖出</th><th title="已实现 + 未实现（按现价），不含 gas">利润</th><th title="买入均价 × 总量 × 报价币现价">买入市值</th><th>最近交易</th></tr>
+    ${rows.map((r, i) => `<tr class="${isMe(r.trader) ? 'mine' : ''} trow" data-trader="${esc(r.trader)}" title="点击查看这个地址在 ${esc(t.symbol)} 上的每一笔买卖"><td class="dim">${i + 1}</td><td class="l addr"><span class="tr-who">${gmgnWho(r.trader, r.name || NAMES[r.trader.toLowerCase()])}</span></td>
+    <td><b>${K(r.hold)}</b>${r.xfer ? ` <span class="y" title="链上余额 ${K(r.hold)}，买卖差 ${K(r.net)}：有转入 / 转出">⚠</span>` : ''}<div class="hsub">${r.pctSupply.toFixed(r.pctSupply < 0.1 ? 3 : 2)}%${r.holdSrc === 'chain' ? '' : ' · 估算'}</div></td>
+    <td>${money(r.boughtQ, r.buys)}</td><td>${money(r.soldQ, r.sells)}</td>
+    <td>${sgn(U(r.total), (v) => '$' + v.toFixed(2))}${r.pct != null ? ' <span class="hsub">' + sgn(r.pct, (v) => v.toFixed(1) + '%') + '</span>' : ''}<div class="hsub" title="已实现 / 未实现">${sgn(U(r.realized), (v) => '$' + v.toFixed(2))} / ${sgn(U(r.unrealized), (v) => '$' + v.toFixed(2))}</div></td>
+    <td>${r.buyMcUsd ? usd(r.buyMcUsd) : '—'}</td><td class="dim">${r.last ? relT(r.last) : '—'}</td></tr>`).join('')}</table>` : `<div class="empty">${o.exited ? '没有已清仓的地址' : '没有持有人'}</div>`);
+  return { html, cnt: o.exited ? `${d.exitedCount} 个已清仓` : `${d.holderCount} 个持有人` };
+}
+$('#bottomBody').addEventListener('click', (e) => {
+  if (e.target.closest('[data-hexited]')) { const o = holdersState(); o.exited = !o.exited; $('#bottomBody').scrollTop = 0; renderBottom(); }
+  else if (e.target.closest('[data-hrefresh]')) loadHolders(true);
+});
+
 /* ---------- K 线右边的「活动」：和实时成交同一份数据；点「时间」切换倒序 / 正序（记住），点行打开交易者抽屉 ---------- */
 let actAsc = (() => { try { return localStorage.getItem('actAsc') === '1'; } catch { return false; } })();
 // 每笔成交当时的市值 = 这笔的成交价（报价币）× 总量 × 报价币美元价；拿不到成交价才用记录里的市值
@@ -2063,11 +2096,12 @@ async function quoteSweepAll() {
   let plan; try { plan = await api('/api/quote-to-bnb/plan', { slot: HOLD.wslot || 0, slippage: 1 }); } catch (e) { return toast({ status: 'failed', symbol: '一键换回 BNB', reason: e.message }); }
   const ok = (w) => !w.error && w.auth === 'ok', todo = plan.filter((w) => ok(w) && w.items.length);
   const total = todo.reduce((a, w) => a + w.items.reduce((x, i) => x + (i.out || 0), 0), 0);
+  const qn = (v) => esc(String(+Number(v).toPrecision(6)));
   const why = (w) => (w.error ? `<span class="r">${esc(w.error)}</span>` : !ok(w) ? '<span class="r">币安钱包未登录，跳过</span>' : '<span class="hsub">没有要换的计价币</span>');
   $('#confirmBody').innerHTML = `
     ${plan.map((w) => `<div class="kv"><span><b>${esc(w.label)}</b></span><b>${ok(w) && w.items.length ? `${w.items.length} 个币` : why(w)}</b></div>
-      ${ok(w) ? w.items.map((i) => `<div class="kv"><span>${esc(String(i.balance))} ${esc(i.symbol)}<br><span class="hsub">${esc(i.route)}</span></span><b class="g">≈ ${bnb(i.out, 6)} BNB</b></div>`).join('') : ''}
-      ${(w.skipped || []).map((i) => `<div class="kv"><span class="hsub">${esc(String(i.balance))} ${esc(i.symbol)}</span><span class="hsub">跳过：${esc(i.reason)}</span></div>`).join('')}`).join('<hr style="border:0;border-top:1px solid var(--line,#2b3139);margin:6px 0">')}
+      ${ok(w) ? w.items.map((i) => `<div class="kv"><span>${qn(i.balance)} ${esc(i.symbol)}<br><span class="hsub">${esc(i.route)}</span></span><b class="g" style="flex:none">≈ ${bnb(i.out, 6)} BNB</b></div>`).join('') : ''}
+      ${(w.skipped || []).map((i) => `<div class="kv"><span class="hsub">${qn(i.balance)} ${esc(i.symbol)}</span><span class="hsub">跳过：${esc(i.reason)}</span></div>`).join('')}`).join('<hr style="border:0;border-top:1px solid var(--line,#2b3139);margin:6px 0">')}
     ${todo.length ? `<div class="kv"><span>合计预计到手</span><b class="g">${bnb(total, 6)} BNB</b></div>
     <div class="note" style="color:#f6465d">真实交易：每个币一笔（Ondo 类经 USDT 两笔），用各自的币安 Agentic 钱包上链，无法撤回。按点击时的余额全部换，滑点 1%；如果币安 App 弹出确认，请在 App 里处理。</div>
     <button class="big-btn sell" id="confirmGo">确认全部换回 BNB</button>` : '<div class="note">没有可以换的计价币（零头和没有路线的已跳过）。</div>'}`;

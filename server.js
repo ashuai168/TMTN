@@ -108,9 +108,9 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 // 强制登录：实盘模式下币安钱包未登录时，所有动用资金的接口一律拒绝（买卖、兑换、换回 BNB、领取、撤销授权、单币转出规则）
-const AUTH_GATED = new Set(['/api/order', '/api/swap', '/api/quote-to-bnb', '/api/claim', '/api/approvals/revoke', '/api/token-rules']);
+const AUTH_GATED = new Set(['/api/order', '/api/swap', '/api/quote-to-bnb', '/api/quote-to-bnb/sweep', '/api/quote-to-bnb/sweep-own', '/api/claim', '/api/approvals/revoke', '/api/token-rules']);
 app.use((req, res, next) => {
-  if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && !(req.path === '/api/order' && WALLET_PEERS.length) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });   // 多钱包时下单按钱包分别处理（未登录的跳过）
+  if (LIVE && req.method === 'POST' && AUTH_GATED.has(req.path) && !((req.path === '/api/order' || req.path === '/api/quote-to-bnb/sweep') && WALLET_PEERS.length) && trader.status?.auth?.state !== 'ok') return res.status(401).json({ error: '币安钱包未登录', auth: trader.status?.auth?.state });   // 多钱包时下单按钱包分别处理（未登录的跳过）
   next();
 });
 // 首页：把 app.js / style.css 的版本号换成文件修改时间（每次改动都是新地址，浏览器不会用旧缓存），首页本身不缓存
@@ -199,8 +199,38 @@ app.get('/api/holdings', async (req, res) => {
 app.get('/api/quote-balances', async (req, res) => { if (!LIVE) return res.json([]); try { res.json(await trader.quoteBalances()); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.post('/api/quote-to-bnb/preview', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' }); try { res.json(await trader.quoteToBnbPreview(String(req.body.token || ''), Number(req.body.slippage) || 1)); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/quote-to-bnb', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' }); res.json(await trader.quoteToBnb({ token: String(req.body.token || ''), slippage: Number(req.body.slippage) || 1 })); });
+// 一键全部换回 BNB：*-own 每个钱包后端都有（只管自己的钱包）；plan / sweep 由主后端分发给各钱包（slot = 只那一个钱包；不填 = 所有「参与下单」的钱包）。
+// plan 只报价不发交易；sweep 只换页面确认框里列出的钱包 × 币（plan 已经按钱包选择过滤），各钱包同时执行、同一个钱包内按顺序
+const sweepTargets = (slot) => { const all = [{ slot: WALLET_SLOT, label: WALLET_LABEL, self: true }, ...WALLET_PEERS.map((p) => ({ slot: p.slot, label: p.label || `钱包 ${p.slot}`, peer: p }))]; return slot === 'any' ? all : Number(slot) > 0 ? all.filter((w) => w.slot === Number(slot)) : all.filter((w) => walletOn(w.slot)); };
+const sweepErr = (e) => (e.status === 401 ? '币安钱包未登录' : e.message);
+app.post('/api/quote-to-bnb/plan-own', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' }); try { res.json(await trader.quoteSweepPlan(Number(req.body?.slippage) || 1)); } catch (e) { res.status(400).json({ error: e.message }); } });
+app.post('/api/quote-to-bnb/sweep-own', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' }); res.json(await trader.quoteSweep({ tokens: Array.isArray(req.body?.tokens) ? req.body.tokens.slice(0, 30) : [], slippage: Number(req.body?.slippage) || 1 })); });
+app.post('/api/quote-to-bnb/plan', async (req, res) => {
+  if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' });
+  const ws = sweepTargets(req.body?.slot), slippage = Number(req.body?.slippage) || 1; if (!ws.length) return res.status(400).json({ error: '没有开启「参与下单」的钱包' });
+  res.json(await Promise.all(ws.map(async (w) => {
+    try { return { slot: w.slot, label: w.label, ...(w.self ? await trader.quoteSweepPlan(slippage) : await peerFetch(w.peer, '/api/quote-to-bnb/plan-own', { slippage }, 120_000)) }; }
+    catch (e) { return { slot: w.slot, label: w.label, items: [], skipped: [], error: sweepErr(e) }; }
+  })));
+});
+app.post('/api/quote-to-bnb/sweep', async (req, res) => {   // { plan: [{ slot, tokens }], slippage }
+  if (!LIVE) return res.status(400).json({ error: '只有实盘模式可用' });
+  const want = new Map((Array.isArray(req.body?.plan) ? req.body.plan : []).map((x) => [Number(x.slot), (Array.isArray(x.tokens) ? x.tokens : []).map(String).slice(0, 30)]));
+  const ws = sweepTargets('any').filter((w) => want.get(w.slot)?.length), slippage = Number(req.body?.slippage) || 1;
+  if (!ws.length) return res.status(400).json({ error: '没有要换的币' });
+  res.json(await Promise.all(ws.map(async (w) => {
+    const tag = (o) => ({ ...o, wallet: w.label, walletSlot: w.slot, ...(w.self ? {} : { id: `w${w.slot}-${o.id || Date.now()}` }) });
+    try {
+      if (w.self && trader.status?.auth?.state !== 'ok') throw Object.assign(new Error('币安钱包未登录'), { status: 401 });
+      const r = w.self ? await trader.quoteSweep({ tokens: want.get(w.slot), slippage }) : await peerFetch(w.peer, '/api/quote-to-bnb/sweep-own', { tokens: want.get(w.slot), slippage }, 900_000);
+      const orders = (r || []).map(tag); if (!w.self) orders.forEach((o) => broadcast({ type: 'order', data: o }));
+      return { slot: w.slot, label: w.label, orders };
+    } catch (e) { return { slot: w.slot, label: w.label, orders: [], error: e.name === 'TimeoutError' ? '等结果超时（可能已经在执行，请看钱包 / 订单记录，不要重复点）' : sweepErr(e) }; }
+  })));
+});
 app.get('/api/trades/:token', async (req, res) => { try { const v = LIVE ? await market.tradesPage(req.params.token, Number(req.query.before) || 0, Math.min(500, Number(req.query.limit) || 100)) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/trader/:token/:addr', async (req, res) => { try { const v = LIVE ? await market.traderStats(req.params.token, req.params.addr) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
+app.get('/api/holders/:token', async (req, res) => { try { const v = LIVE ? await market.holders(req.params.token) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });   // HOLDERS_FEATURE 详情页「持有人」
 app.get('/api/rpc-usage', (req, res) => res.json(rpcUsageLog));
 app.get('/api/cache-status', (req, res) => res.json(cache.status()));   // 历史数据缓存（MySQL / Redis）是否启用、连上没有、命中次数
 cache.mysql(); cache.redis();   // 启动时先连一下（没配置就什么都不做），日志里能看到连上没有

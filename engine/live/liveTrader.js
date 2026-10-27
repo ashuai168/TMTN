@@ -18,7 +18,9 @@ import { V3_TRADE } from './gangV3.js';
 import { FlapNft } from './flapNft.js';
 import { DexDirect } from './dexDirect.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
-import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt } from './quoteRoutes.js';
+import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt, assertLiquid, isQuoteToken } from './quoteRoutes.js';
+// 一键全部换回 BNB：价值低于这个美元数的零头跳过（不值 gas）。QUOTE_SWEEP_MIN_USD 可调
+const SWEEP_MIN_USD = Number(process.env.QUOTE_SWEEP_MIN_USD || 1);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -679,6 +681,34 @@ export class LiveTrader extends EventEmitter {
       Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts });
       this.emit('order', order); return order;
     }
+  }
+
+  // 一键全部换回 BNB 的计划（只报价，不发交易）：本钱包每个计价币按此刻余额报价；零头、流动性不够、没有路线的列进 skipped 并写原因
+  async quoteSweepPlan(slippage = 1) {
+    const bnbUsd = this.market.bnbUsd || 0, items = [], skipped = [];
+    for (const r of await this.quoteBalances()) {
+      const base = { token: r.token, symbol: r.symbol, balance: r.balance, valueUsd: r.valueUsd, wbnb: r.wbnb };
+      if (r.valueUsd > 0 && r.valueUsd < SWEEP_MIN_USD) {   // 没有价格（valueUsd 0）的不在这里跳过，下面按报价再判断
+        skipped.push({ ...base, reason: `价值不到 $${SWEEP_MIN_USD}（不值 gas）` }); continue; }
+      try {
+        if (!r.wbnb && isQuoteToken(r.token)) await assertLiquid(r.token, r.symbol);
+        const p = await this.quoteToBnbPreview(r.token, slippage);
+        if (!(p.out > 0)) { skipped.push({ ...base, reason: '报价为 0（没有可用路线）' }); continue; }
+        if (bnbUsd && p.out * bnbUsd < SWEEP_MIN_USD) { skipped.push({ ...base, reason: `报价只有 ${p.out.toFixed(6)} BNB（不到 $${SWEEP_MIN_USD}，不值 gas）` }); continue; }
+        items.push({ ...base, balance: p.balance, out: p.out, minOut: p.minOut, route: p.route, slippage: p.slippage });
+      } catch (e) { skipped.push({ ...base, reason: e.message }); }
+    }
+    return { items, skipped, minUsd: SWEEP_MIN_USD, auth: this.status.auth.state };
+  }
+  // 按计划逐个执行（同一个钱包按顺序：baw 每个钱包一次只处理一笔，钱包锁 / 在 App 里待确认时后面的会冲突）。每个币仍走 quoteToBnb（点击时读余额、同币在途检查）
+  async quoteSweep({ tokens = [], slippage = 1 }) {
+    const set = this.quoteSet(), out = [];
+    for (const token of [...new Set(tokens.map(String))].filter((t) => set.has(t.toLowerCase()))) {
+      const prev = out.at(-1);
+      if (prev?.status === 'pending') { out.push({ token, symbol: '?', side: 'sell', status: 'failed', reason: '上一笔还在等确认（可能要在币安 App 里确认），这个币没有执行，请稍后再点' }); continue; }
+      out.push(await this.quoteToBnb({ token, slippage }));
+    }
+    return out;
   }
 
   // 授权确认后接着卖出（同一笔订单）：先等链上额度够（最多约 30 秒），再按当时余额 / 比例重新走一遍卖出
