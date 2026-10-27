@@ -2720,7 +2720,7 @@ function renderTrkFeed() {
   $('#trkGroups').innerHTML = TRK.groups.map((g) => `<option value="${esc(g)}">`).join('');
   const fg = $('#trkFGroup'); const cur = TRK.fGroup; fg.innerHTML = '<option value="">全部分组</option>' + TRK.groups.map((g) => `<option ${g === cur ? 'selected' : ''}>${esc(g)}</option>`).join('');
   $('#trkList').innerHTML = TRK.targets.length ? TRK.targets.map((t) => `<div class="trk-t"><i class="ws-av" style="background:${wsColor((parseInt(t.address.slice(-2), 16) % 4) + 1)}"></i>
-    <div class="trk-t-id"><span class="trk-nm" data-trkname><b>${esc(trkName(t.address))}</b><button class="trk-pen" data-trkedit="${t.address}" title="编辑备注名">✎</button></span><span class="mono muted">${esc(trkSub(t.address) || short(t.address, 6, 4))} · ${esc(t.group || '默认')}</span></div>
+    <div class="trk-t-id"><span class="trk-nm" data-trkname><b class="${trkRemark(t.address) ? 'y' : 'wn'}">${esc(trkName(t.address))}</b><button class="trk-pen" data-trkedit="${t.address}" title="编辑备注名">✎</button></span><span class="mono muted">${esc(trkSub(t.address) || short(t.address, 6, 4))} · ${esc(t.group || '默认')}</span></div>
     <button class="trk-mini" data-trknew="${t.address}" title="给这个目标新建跟单任务（新建是暂停 + 模拟）">跟单</button><button class="trk-x" data-trkdel="${t.address}" title="不再追踪">×</button></div>`).join('')
     : '<div class="empty">还没有追踪的地址。上面填 .ai / .bnb 域名或 0x 地址添加</div>';
   const rows = TRK.feed.filter(trkPass);

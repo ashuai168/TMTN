@@ -1137,7 +1137,7 @@ h1, h2, h3, h4, .lh b, .tch b, .trkp-h b { font-weight: var(--fw-head); }
 .trk-panel .trkp-e .dim { font-size: var(--fs-trk-sub); } .trk-panel .trkp-act { font-size: var(--fs-trk-tag); }
 .trk-panel .trkp-tok .tlogo, .trk-panel .trkp-tok img { width: 18px; height: 18px; }
 .trk-panel .trkp-e:hover { background: var(--trk-card-hover); }
-.trk-panel .trkp-who { color: var(--y); } .trk-panel .trkp-tok b { color: var(--text); }
+.trk-panel .trkp-who { color: #fff; } .trk-panel .trkp-who.y, .trk-tbl a.y, .trk-nm b.y { color: var(--y); } .trk-tbl a.wn { color: #fff; }   /* 备注过的黄色，没备注的白色 */ .trk-panel .trkp-tok b { color: var(--text); }
 .trk-panel .trkp-e .dim, .trk-panel .trkp-e .dim * { color: var(--muted); }
 .trk-panel .trkp-act { border: 0; border-radius: 3px; padding: 0 5px; } .trk-panel .trkp-act.g { background: var(--g-bg); color: var(--g); } .trk-panel .trkp-act.r { background: var(--r-bg); color: var(--r); }
 /* 追踪页动态表的动作也用同样的绿 / 红 */
