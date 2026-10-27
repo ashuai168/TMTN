@@ -680,7 +680,9 @@ export class LiveTrader extends EventEmitter {
       // BNB 余额用后台每 20 秒刷新的缓存；超过 30 秒没刷新才当场查
       if (!this.balAt || Date.now() - this.balAt > 30_000) { const t0 = Date.now(); await this.refreshBalance(); step('检查 BNB 余额（baw）', Date.now() - t0); }
       let payQuote = null;
-      if ((w.bnb || 0) < amt + FUND_GAS) {
+      // Gang V2 的 WBNB 盘：钱包里已有够用的 WBNB 就直接用（只发 buy 一笔，狙击要快），BNB 只要够 gas
+      const wbnbReady = this.useGangV2(t) && String(t.quoteAddress || '').toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase() && (w.tokens?.[QUOTE_TOKENS.WBNB.toLowerCase()] || 0) >= amt && (w.bnb || 0) >= 0.0005;
+      if (!wbnbReady && (w.bnb || 0) < amt + FUND_GAS) {
         const f = await this.fundingPlan(w, t, amt);
         if (!f || f.mode === 'none') throw new Error(f?.note || `BNB 余额不足（${(w.bnb || 0).toFixed(4)}）`);
         if ((w.bnb || 0) < 0.0005) throw new Error(`BNB 只剩 ${(w.bnb || 0).toFixed(5)}，不够付 gas，没法用 ${f.symbol} 付款`);
