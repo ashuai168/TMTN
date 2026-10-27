@@ -1,5 +1,5 @@
 // 实盘执行层：读币安 Agentic Wallet（baw）的地址和余额，用链上 Portal.quoteBuy / baw 报价和预演算出能成交多少。
-// 默认不提交真实交易（订单状态 dry_run）。LIVE_TRADE=1 时，页面上手动点击的订单、以及本人启动的「真实下单」跟单任务（source 形如「跟单 任务名」）才会真实上链；自动买/自动卖始终只报价。
+// 默认不提交真实交易（订单状态 dry_run）。LIVE_TRADE=1 时，页面上手动点击的订单、以及本人启动的「真实下单」跟单任务（source 形如「跟单 任务名」）和 Gang 新盘狙击（狙击 Gang）才会真实上链；自动买/自动卖始终只报价。
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -940,4 +940,5 @@ const fmtQ = (n) => (n >= 100 ? n.toFixed(2) : n >= 1 ? n.toFixed(4) : n.toPreci
 const trim = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
 // 会真实上链的订单来源：页面手动点击（手动），以及本人在页面上关掉「模拟」并启动的跟单任务（跟单 任务名）。
 // 以前只认「手动」，跟单任务传来的「跟单 xxx」被当成自动订单，真实模式的跟单永远只报价、从不下单，也不计次数
-const isRealSource = (s) => s === '手动' || /^跟单 /.test(String(s || ''));
+// 2026-10-27 起还有本人在页面上打开、并关掉「模拟」的 Gang 新盘狙击（狙击 Gang，engine/live/sniper.js）
+const isRealSource = (s) => s === '手动' || /^跟单 /.test(String(s || '')) || s === '狙击 Gang';

@@ -6,6 +6,7 @@ const SUBS = '₀₁₂₃₄₅₆₇₈₉';
 /* 持仓快照：放最前面，启动过程中（还没执行到持仓页代码）也能读 */
 const HOLD = { data: null, open: new Set(), plats: new Set(['flap', 'four', 'gang']) };
 /* 追踪 / 跟单页的状态（放最前面，启动过程中收到推送也能用） */
+const SNP = { v: null, log: [], err: null };   // Gang 新盘狙击（服务器 /api/snipe）
 const TRK = { tab: 'feed', cptab: 'active', targets: [], groups: ['默认'], feed: [], tasks: [], paused: false, log: [], loaded: false, fGroup: '', fMin: 0, sound: false };
 const S = {
   tokens: new Map(), selected: null, detail: null, platform: 'four', listTab: 'curve', chips: new Set(),
@@ -158,6 +159,8 @@ function onMsg({ type, data, full }) {
     case 'track': { if (!TRK.feed.some((x) => x.id === data.id)) { TRK.feed.unshift(data); if (TRK.feed.length > 500) TRK.feed.length = 500; if (TRK.sound && trkPass(data)) beep(data.side === 'buy' ? 1000 : 520, 0.06); if (S.view === 'track') renderTrack(); renderTrkPanel(); } break; }
     case 'trackTargets': { TRK.targets = data.targets || []; TRK.groups = data.groups || TRK.groups; if (S.view === 'track') renderTrack(); renderTrkPanel(); break; }
     case 'copyTasks': { TRK.tasks = data.tasks || []; TRK.paused = !!data.paused; renderTrkKill(); if (S.view === 'track') renderTrack(); break; }
+    case 'snipeState': { SNP.v = data; renderSnpPill(); if (S.view === 'track' && TRK.tab === 'snipe') renderSnipe(); break; }
+    case 'snipeLog': { SNP.log.unshift(data); if (SNP.log.length > 300) SNP.log.length = 300; snpNotice(data); if (S.view === 'track' && TRK.tab === 'snipe') renderSnipe(); break; }
     case 'copyLog': { TRK.log.unshift(data); if (TRK.log.length > 300) TRK.log.length = 300; if (S.view === 'track' && TRK.tab === 'copy') renderTrack(); break; }
     case 'wallets': { S.walletsInfo = data; renderAuth(); scheduleRender(); break; }
     case 'order': {
@@ -2510,7 +2513,8 @@ function renderTrkKill() {
 function renderTrack() {
   if (S.view !== 'track') return;
   $$('#track [data-trtab]').forEach((b) => b.classList.toggle('on', b.dataset.trtab === TRK.tab));
-  $('#trkFeedView').classList.toggle('hidden', TRK.tab !== 'feed'); $('#trkCopyView').classList.toggle('hidden', TRK.tab !== 'copy');
+  $('#trkFeedView').classList.toggle('hidden', TRK.tab !== 'feed'); $('#trkCopyView').classList.toggle('hidden', TRK.tab !== 'copy'); $('#trkSnipeView').classList.toggle('hidden', TRK.tab !== 'snipe');
+  if (TRK.tab === 'snipe') { if (!SNP.v && !SNP.err) loadSnipe(); return renderSnipe(); }
   $('#trkSound').checked = TRK.sound;
   if (TRK.err && !TRK.loaded) { $('#trkFeed').innerHTML = `<div class="empty">${esc(TRK.err)}</div>`; return; }
   if (TRK.tab === 'feed') renderTrkFeed(); else renderTrkCopy();
@@ -2548,6 +2552,80 @@ function renderTrkCopy() {
     : `<div class="empty">${TRK.cptab === 'active' ? '还没有跟单任务。点「新建跟单」，或在追踪动态里点目标旁的「跟单」' : '没有已关闭的任务'}</div>`;
   $('#trkLog').innerHTML = TRK.log.length ? TRK.log.slice(0, 200).map((r) => `<div class="trk-lr ${r.kind}"><span class="dim">${new Date(r.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span><b>${esc((r.target && trkRemark(r.target)) || r.taskName || '')}</b><span>${esc(r.symbol || '')} ${esc(r.action || '')}</span><span class="trk-k">${{ order: '下单', sim: '模拟', skip: '跳过', fail: '失败', error: '出错', stop: '停止' }[r.kind] || r.kind}</span><span class="trk-r">${esc(r.reason || '')}</span></div>`).join('') : '<div class="empty">还没有记录</div>';
 }
+/* ---------- Gang 新盘狙击 ---------- */
+// gang.fun 出新盘时用选中的钱包各买总量 N%。默认关闭 + 模拟；上限都在服务器端强制；急停 = 立刻关闭
+async function loadSnipe() {
+  try { const v = await api('/api/snipe'); SNP.log = v.log || []; delete v.log; SNP.v = v; SNP.err = null; } catch (e) { SNP.err = e.message; }
+  renderSnpPill(); if (S.view === 'track' && TRK.tab === 'snipe') { SNP.formAt = 0; renderSnipe(); }
+}
+const snpWl = (slots) => (slots || []).map((n) => esc(S.walletsInfo?.find((w) => w.slot === n)?.agentId || `钱包 ${n}`)).join(' + ');
+function renderSnpPill() {
+  const v = SNP.v; let pill = $('#snpPill');
+  if (!v?.enabled) { pill?.remove(); return; }
+  if (!pill) { pill = document.createElement('button'); pill.id = 'snpPill'; pill.className = 'pill copy-pill'; pill.addEventListener('click', () => { TRK.tab = 'snipe'; setView('track'); }); $('#favToggle')?.before(pill); }
+  pill.classList.toggle('real', !v.params.dryRun); pill.textContent = `Gang 狙击运行中（${v.params.dryRun ? '模拟' : '真实下单'}）`;
+}
+// 狙击触发时的提示：真实下单的成交 / 失败停留久一点并响一声；模拟只弹一条短提示；跳过不提示
+function snpNotice(r) {
+  if (!['order', 'fail', 'sim', 'error'].includes(r.kind)) return;
+  if (r.kind === 'sim') return note(`Gang 狙击（模拟）${r.symbol || ''}：每个钱包 ${r.amount} BNB`, 'info');
+  const el = document.createElement('div'); el.className = 'toast ' + (r.kind === 'order' ? '' : 'err');
+  el.innerHTML = `<b class="${r.kind === 'order' ? 'g' : 'r'}">Gang 狙击${r.kind === 'order' ? '已下单' : '失败'}</b> · ${esc(r.symbol || '')}<div class="muted">${esc(r.reason || '')}</div>${(r.results || []).filter((x) => x.tx).map((x) => `<div>${esc(x.wallet || '')} ${txLink(x.tx)}</div>`).join('')}`;
+  $('#toasts').prepend(el); setTimeout(() => el.remove(), 20000); beep(r.kind === 'order' ? 1200 : 400, 0.12);
+}
+function renderSnipe() {
+  const v = SNP.v;
+  if (!v) { $('#snpHead').innerHTML = `<div class="empty">${esc(SNP.err || '加载中…')}</div>`; $('#snpForm').innerHTML = ''; $('#snpLog').innerHTML = ''; return; }
+  const p = v.params, nW = p.wallets.length || 1, td = v.today || { bnb: 0, tokens: 0 };
+  const st = !v.enabled ? '<b class="muted">已关闭</b>' : p.dryRun ? '<b class="y">运行中 · 模拟（不下单）</b>' : '<b class="r">运行中 · 真实下单</b>';
+  const recent = (v.recent || []).slice(0, 8);
+  $('#snpHead').innerHTML = `<div class="snp-top"><div class="snp-st">${st}<div class="hsub">新盘出现时：${snpWl(p.wallets)} 各买总量 ${p.pct}%（每个钱包最多 ${p.maxBnbPerBuy} BNB）· 只狙 ${esc(p.quotes.includes('*') ? '全部报价币' : p.quotes.join(' / ') + ' 盘')} · 出块后 ${p.maxDelaySec} 秒内</div></div>
+    <span class="spacer"></span>${v.enabled ? `<button class="trk-kill on" data-snp="off">急停（立刻关闭）</button>` : `<button class="trk-new" data-snp="on">${p.dryRun ? '开启（模拟）' : '开启（真实下单）'}</button>`}</div>
+    ${!p.dryRun && !v.liveTrade ? '<div class="ui-note y">这个后端没有开 LIVE_TRADE=1，真实模式下单也只会报价。</div>' : ''}
+    <div class="snp-cards"><div class="snp-card"><span class="muted">今天已用</span><b>${bnb(td.bnb, 4)} / ${p.dailyCapBnb} BNB</b></div><div class="snp-card"><span class="muted">今天已狙</span><b>${td.tokens} / ${p.maxTokensPerDay || '不限'} 个</b></div>
+      <div class="snp-card"><span class="muted">累计</span><b>${v.stats.orders} 笔下单 · ${bnb(v.stats.bnb, 4)} BNB</b><span class="hsub">模拟 ${v.stats.sims} 次 · 失败 ${v.stats.fails} 笔</span></div></div>
+    <div class="snp-cost"><b>买 ${p.pct}% 要多少 BNB（BNB 盘，虚拟储备 5 BNB）</b><table class="trk-tbl"><tr><th class="l">发现时已被买走</th>${v.typical.map((x) => `<th>${x.soldPct}%</th>`).join('')}</tr>
+      <tr><td class="l">每个钱包</td>${v.typical.map((x) => `<td>${x.bnb}</td>`).join('')}</tr><tr><td class="l">${nW} 个钱包合计（含 ${p.buffer}% 缓冲）</td>${v.typical.map((x) => `<td>${(x.bnb * nW * (1 + p.buffer / 100)).toFixed(4)}</td>`).join('')}</tr></table>
+      <div class="hsub">多付的缓冲合约会退回，以 WBNB 留在钱包（下次狙击直接用，也可在持仓页「计价币余额」换回 BNB）。每个钱包第一次狙击还要多一笔 WBNB 授权，之后只发包装 + buy；钱包里已有够用的 WBNB 时只发 buy 一笔。</div>
+      ${recent.length ? `<div class="snp-recent"><span class="muted">最近发现的新盘：</span>${recent.map((r) => `<span title="${fullTime(r.ts)}">${esc(r.symbol || '?')} <i class="tag">${esc(r.quote || '')}</i> ${r.costBnb} BNB${r.soldPct ? `（已卖 ${r.soldPct}%）` : ''}</span>`).join('')}</div>` : ''}</div>`;
+  // 参数表单只在第一次 / 保存后重画，推送更新时不打断正在输入的内容
+  if (!SNP.formAt || !$('#snpForm').innerHTML) {
+    SNP.formAt = Date.now();
+    const ws = (S.walletsInfo?.length ? S.walletsInfo : [{ slot: 1, label: '钱包 1' }]);
+    const num = (k, label, step = '0.01', hint = '') => `<label class="cp-f"><span>${label}</span><input type="number" step="${step}" min="0" data-sp="${k}" value="${p[k]}"/>${hint ? `<i>${hint}</i>` : ''}</label>`;
+    const chk = (k, label, hint = '') => `<label class="cp-c"><input type="checkbox" data-sp="${k}" ${p[k] ? 'checked' : ''}/> ${label}${hint ? `<i>${hint}</i>` : ''}</label>`;
+    $('#snpForm').innerHTML = `<div class="cp-grp"><b>金额与上限（服务器端强制，每个钱包单笔最高 ${v.hardMax} BNB，另外还受交易设置的单笔上限）</b>
+      ${num('pct', '每个钱包买总量的 %', '0.1', 'Gang V2 合约限制每个钱包最多 1%')}${num('maxBnbPerBuy', '每个钱包单笔最多（BNB）', '0.001')}${num('dailyCapBnb', '每天合计最多（BNB，所有钱包加起来）')}${num('maxTokensPerDay', '每天最多狙几个币', '1', '0 = 不限')}
+      ${chk('partial', '超过单笔上限时按上限买一部分', '关掉 = 直接跳过')}${num('buffer', '金额缓冲 %', '1', '多付的合约会退回')}</div>
+      <div class="cp-grp"><b>条件</b>${num('maxDelaySec', '出块后最多几秒', '1', '发现得比这晚就不买')}${num('maxSoldPct', '发现时已被买走最多 %', '1', '超过说明已经被别人抢了')}${num('slippage', '滑点 %', '1')}
+        <label class="cp-f"><span>报价币</span><input data-sp="quotes" value="${esc(p.quotes.join(','))}"/><i>逗号分隔，如 BNB,GANG；* = 全部（非 BNB 盘要先用 baw 换报价币，慢几秒）</i></label>
+        <div class="cp-row">用哪些钱包（每个钱包各买一份）：${ws.map((w) => `<label class="cp-c" title="${esc(w.label)} ${w.address || ''}"><input type="checkbox" data-spw="${w.slot}" ${p.wallets.includes(w.slot) ? 'checked' : ''}/> ${esc(w.agentId || w.label)} <i class="${w.auth === 'ok' || !w.auth ? 'g' : 'r'}">${w.auth === 'ok' || !w.auth ? '已登录' : '未登录'}</i></label>`).join('')}</div>
+        <div class="cp-row">屏蔽列表里的代币 / 开发者不会被狙。</div></div>
+      <div class="cp-grp"><b>运行方式</b>${chk('dryRun', '模拟（只记录会买多少，不真的下单）', '建议先模拟一段时间再关掉')}<span></span><div><button class="ui-btn ok" data-snp="save">保存参数</button> <span class="cp-err r" id="snpErr"></span></div></div>`;
+  }
+  $('#snpLog').innerHTML = SNP.log.length ? SNP.log.slice(0, 200).map((r) => `<div class="trk-lr ${r.kind}"><span class="dim">${new Date(r.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span><b>${esc(r.symbol || '')}</b><span>${esc(r.quote || '')}${r.cost ? ` · 1% ≈ ${bnb(r.cost, 4)}` : ''}</span><span class="trk-k">${{ order: '下单', sim: '模拟', skip: '跳过', fail: '失败', error: '出错' }[r.kind] || r.kind}</span><span class="trk-r">${esc(r.reason || '')}${r.totalMs ? ` · 出块到完成 ${(r.totalMs / 1000).toFixed(1)} 秒` : ''}</span></div>`).join('') : '<div class="empty">还没有记录。开启后，gang.fun 每出一个新盘都会在这里记一条</div>';
+}
+$('#track').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-snp]'); if (!b) return;
+  const act = b.dataset.snp, v = SNP.v; if (!v) return;
+  try {
+    if (act === 'off') { SNP.v = await api('/api/snipe', { enabled: false }); note('Gang 狙击已关闭'); }
+    else if (act === 'on') {
+      const p = v.params, nW = p.wallets.length || 1;
+      if (!(await ui.confirm({ title: `开启 Gang 狙击（${p.dryRun ? '模拟' : '真实下单'}）？`, body: p.dryRun ? '<p>这是<b class="y">模拟</b>：每个新盘只记录会买多少，不会下单。</p>' : `<p class="r"><b>真实下单：</b>gang.fun 每出一个符合条件的新盘，${nW} 个钱包（${snpWl(p.wallets)}）会立刻各买总量 ${p.pct}%：每个钱包每次最多 ${p.maxBnbPerBuy} BNB，每天合计最多 ${p.dailyCapBnb} BNB、最多 ${p.maxTokensPerDay || '不限'} 个币。会花真实的 BNB，新盘很可能归零。随时可以点「急停」。</p>`, confirmText: '开启', danger: !p.dryRun }))) return;
+      SNP.v = await api('/api/snipe', { enabled: true }); note(`Gang 狙击已开启（${p.dryRun ? '模拟' : '真实下单'}）`);
+    } else if (act === 'save') {
+      const f = $('#snpForm'), q = {}; f.querySelectorAll('[data-sp]').forEach((i) => { q[i.dataset.sp] = i.type === 'checkbox' ? i.checked : i.dataset.sp === 'quotes' ? i.value.split(/[,，\s]+/).filter(Boolean) : Number(i.value); });
+      q.wallets = [...f.querySelectorAll('[data-spw]:checked')].map((i) => Number(i.dataset.spw));
+      if (!q.wallets.length) return ($('#snpErr').textContent = '至少选一个钱包');
+      if (v.enabled && v.params.dryRun && !q.dryRun && !(await ui.confirm({ title: '切换到真实下单？', body: `<p class="r">狙击正在运行，保存后下一个新盘就会用真实 BNB 买入（每个钱包最多 ${q.maxBnbPerBuy} BNB，每天合计最多 ${q.dailyCapBnb} BNB）。</p>`, confirmText: '保存并真实下单', danger: true }))) return;
+      SNP.v = await api('/api/snipe', { params: q }); SNP.formAt = 0; note('狙击参数已保存');
+    }
+    renderSnpPill(); renderSnipe();
+  } catch (err) { const el = $('#snpErr'); if (el) el.textContent = err.message; else toast({ status: 'failed', symbol: '狙击', reason: err.message }); }
+});
+setTimeout(() => { if (LIVE()) api('/api/snipe').then((v) => { SNP.log = v.log || []; delete v.log; SNP.v = v; renderSnpPill(); }).catch(() => {}); }, 4000);   // 顶栏狙击状态
+
 // 新建 / 修改跟单参数的对话框
 function copyDialog(task, presetTarget) {
   const p = { maxCopies: 1, mode: 'fixed', amountBnb: 0.01, ratioPct: 10, maxPerTrade: 0.05, maxPerToken: 0.05, dailyCap: 0.2, maxOpen: 5, onlyFirst: true, minTargetBnb: 0, maxTargetBnb: 0, maxMcUsd: 0, platforms: ['flap', 'four', 'gang'], maxDelaySec: 15, slippage: 20, wallets: [1], followSell: false, dryRun: true, ...(task?.params || {}) };
@@ -2588,7 +2666,7 @@ function copyDialog(task, presetTarget) {
 $('#track').addEventListener('click', async (e) => {
   const d = e.target.closest('[data-trtab],[data-cptab],[data-trkdel],[data-trknew],[data-cpact],[data-trkwho],#trkAddBtn,#trkNewTask,#trkKill')?.dataset; if (!d) return;
   const el = e.target.closest('[data-trtab],[data-cptab],[data-trkdel],[data-trknew],[data-cpact],[data-trkwho],#trkAddBtn,#trkNewTask,#trkKill');
-  if (d.trtab) { TRK.tab = d.trtab; return renderTrack(); }
+  if (d.trtab) { TRK.tab = d.trtab; if (d.trtab === 'snipe') loadSnipe(); return renderTrack(); }
   if (d.cptab) { TRK.cptab = d.cptab; return renderTrack(); }
   if (d.trkdel) { if (!await ui.confirm({ title: '不再追踪这个地址？', body: '它的跟单任务不会自动删除，可以在跟单里关闭。', confirmText: '不再追踪' })) return; await api('/api/track/targets', { address: d.trkdel, remove: true }).catch((err) => toast({ status: 'failed', symbol: '追踪', reason: err.message })); return loadTrack(); }
   if (d.trknew) return copyDialog(null, d.trknew);

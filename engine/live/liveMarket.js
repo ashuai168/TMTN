@@ -190,9 +190,22 @@ export class LiveMarket extends EventEmitter {
     if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return null;
     let t = this.get(address);
     if (!t && await this.four.lookup(address)) t = this.get(address);
+    if (!t) t = await this.lookupGangV2(address).catch(() => null);
     if (!t) return null;
     t.pinned = true;               // 手动打开的盘不被自动淘汰
     return this.summary(t);
+  }
+
+  // Gang V2 新盘：本后端的订阅还没看到、但主后端已经发来狙击订单时（钱包 2 等），直接读链上曲线把它加进列表
+  async lookupGangV2(address) {
+    this._gv2 ||= new GangV2(this.provider, null);
+    const { c } = await this._gv2.curve(address);
+    const erc = new ethers.Contract(address, ['function name() view returns (string)', 'function symbol() view returns (string)'], this.provider);
+    const [name, symbol] = await Promise.all([erc.name().catch(() => ''), erc.symbol().catch(() => '?')]);
+    const q = String(c.quote).toLowerCase(), quoteSymbol = q === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' || c.quote === ethers.ZeroAddress ? 'BNB' : await this.gangChain.symbolOf(q);
+    if (this.get(address)) return this.get(address);   // 读链期间订阅已经收录
+    this.upsertGang({ address: address.toLowerCase(), name, symbol, creator: String(c.creator).toLowerCase(), createdAt: Math.floor(Date.now() / 1000), graduated: !!c.graduated, raisedQuote: 0, progressPct: 0, quoteSymbol, quoteAddress: q, track: 'v2' }, false);
+    return this.get(address);
   }
 
   // gang.fun：接口给的列表（已筹 / 进度 / 价格 / FDV / 持有人）；毕业门槛按 已筹 ÷ 进度 推算
