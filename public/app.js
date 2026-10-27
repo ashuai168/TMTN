@@ -147,6 +147,7 @@ function onMsg({ type, data, full }) {
       break;
     case 'launch':
       { const known = S.tokens.has(data.address); S.tokens.set(data.address, data); S.newTokens.add(data.address); setTimeout(() => S.newTokens.delete(data.address), 2000);
+        if (!known && S.view === 'pulse') { lastPulse = 0; scheduleRender(); }   // 新币立刻上战壕，不等每秒一次的重画（平均省 0.5 秒）
         // 顶栏🔊的新币提示：在战壕页由各列自己的声音负责；其他页面只对当前平台页签的新币响
         if (!known && data.stage !== 'dex' && Date.now() - (data.createdAt || 0) < 120_000 && S.view !== 'pulse' && data.platform === S.platform && !isBlocked(data)) newTokenChime(); }
       if (data.platform === S.platform && !isBlocked(data)) { if (S.config?.notify && document.hidden && Notification?.permission === 'granted') new Notification(`新内盘 ${data.symbol}`); }
