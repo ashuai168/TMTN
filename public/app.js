@@ -559,6 +559,7 @@ function renderTop() {
     const all = S.walletsInfo, on = onWallets(), ok = on.filter((x) => x.auth === 'ok'), first = on[0] || all[0], tot = on.reduce((a, x) => a + (x.bnb || 0), 0);
     box.innerHTML = `<span class="ws-stack">${(on.length ? on : [first]).map((x) => `<i class="ws-av" style="background:${wsColor(x.slot)}"></i>`).join('')}</span><b class="ws-name">${esc(first?.agentId || first?.label || '钱包')}</b>${on.length > 1 ? `<span class="ws-more">+${on.length - 1}</span>` : ''}<span class="mono ws-bal">${tot.toFixed(tot >= 10 ? 2 : 3)} BNB</span><i class="dot ${ok.length === on.length && on.length ? 'g' : ok.length ? 'y' : 'r'}"></i>`;
     sel.title = all.map((x) => `${x.label} ${x.agentId || ''}：${x.auth === 'ok' ? '已登录' : '未登录'}，${x.on ? '参与下单' : '不参与'}，${x.bnb != null ? x.bnb.toFixed(4) + ' BNB' : '—'}`).join('\n');
+    const hm = $('#wsHandle'); if (hm) hm.style.display = 'none';   // 多钱包：名字在胶囊里
     return;
   }
   if (!w.id && LIVE()) { $('#wsLabel').textContent = 'baw'; $('#wsAddr').textContent = '未连接'; $('#wsBal').textContent = S.baw?.error ? '点此查看' : ''; }
@@ -566,6 +567,8 @@ function renderTop() {
     $('#wsLabel').textContent = w.label; $('#wsAvatar').style.background = w.color;
     $('#wsAddr').textContent = short(w.address, 6, 4); $('#wsBal').textContent = w.bnb.toFixed(4) + ' BNB';
   }
+  // 顶栏 .ai 手柄：用后端给的钱包 Agent ID（以前写死在 index.html 里），没有就不显示
+  const hs = $('#wsHandle'); if (hs) { const me = (S.walletsInfo || []).find((x) => x.self) || (S.walletsInfo || [])[0]; const name = LIVE() ? (me?.agentId || S.baw?.auth?.agentId || '') : ''; hs.textContent = name; hs.style.display = name ? '' : 'none'; }
 }
 
 const wsColor = (slot) => ['linear-gradient(135deg,#f0b90b,#3fb950)', 'linear-gradient(135deg,#a855f7,#ec4899)', 'linear-gradient(135deg,#38bdf8,#6366f1)', 'linear-gradient(135deg,#f97316,#ef4444)'][(slot - 1) % 4];
