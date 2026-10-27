@@ -10,6 +10,6 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 COPY . ./
-# 默认只报价（LIVE_TRADE=0）、不自动转出；钱包编号、端口、实盘开关由 wallets/walletN/docker-compose.yml 覆盖
-ENV MODE=live LIVE_TRADE=0 HOST=0.0.0.0 WALLET_PEERS=[] FEEDS_PUBLIC=1 AUTO_TRANSFER_FOUR=0 DATA_DIR=/data
+# 默认只报价（LIVE_TRADE=0）；钱包编号、端口、实盘开关由 wallets/walletN/docker-compose.yml 覆盖
+ENV MODE=live LIVE_TRADE=0 HOST=0.0.0.0 WALLET_PEERS=[] FEEDS_PUBLIC=1 DATA_DIR=/data
 CMD ["node", "server.js"]

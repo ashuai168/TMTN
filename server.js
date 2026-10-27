@@ -31,9 +31,6 @@ if (LIVE) {
   market = new LiveMarket();
   trader = new LiveTrader(market);
   await trader.init();
-  // 按币的「发射后转出」监控（data/transferWatch.json，与 AUTO_TRANSFER_FOUR 无关）
-  const { startTransferWatch } = await import('./engine/live/transferWatch.js');
-  startTransferWatch(trader, market.provider, { intervalMs: 3000, dryRun: !LIVE_TRADE });
 } else {
   market = new Market();
   trader = new SimTrader(market);
@@ -142,7 +139,7 @@ app.get('/api/state', (req, res) => res.json({ ...state(), orderSlots: true, hol
 // 页面打开详情时直接用快照，不再每次现算（现算要读钱包历史和链上报价，慢）
 let holdSnap = null, holdView = null, holdBusy = false, holdAgain = false;   // holdSnap：本钱包；holdView：多钱包时合并后的（给页面）
 // ---------- 多钱包（同时下单）----------
-// 每个钱包是一个独立的后端（各自的 baw 登录目录 BINANCE_BAW_DIR、数据目录 DATA_DIR、设置 / 授权 / 自动转出）。
+// 每个钱包是一个独立的后端（各自的 baw 登录目录 BINANCE_BAW_DIR、数据目录 DATA_DIR、设置 / 授权）。
 // 主后端（钱包 1）在 WALLET_PEERS 里登记其他钱包的后端地址；页面上的一笔订单由主后端同时发给所有「参与下单」的钱包。
 const peerFetch = async (peer, p, body, ms = 2500) => {
   const r = await fetch(peer.url.replace(/\/$/, '') + p, { method: body ? 'POST' : 'GET', headers: { 'x-tmtn-token': peer.token || API_TOKEN, ...(body ? { 'content-type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(ms) });   // 其他钱包后端要用同一个 TMTN_API_TOKEN（或在 WALLET_PEERS 里写 token）
@@ -467,17 +464,15 @@ app.post('/api/order', async (req, res) => {
   catch (e) { res.status(400).json({ error: e.message }); }
 });
 
-// 单币规则（发射后领取 / 转出）。转账要本人在页面上点「确认」才会变成 armed
+// 单币规则（发射后立刻领取）
 app.get('/api/token-rules', (req, res) => res.json(LIVE ? trader.rulesView() : {}));
-// 页面只能改「是否领取」和「转出确认状态」；转出地址、自动标记、执行状态都只由服务器写（地址固定为 AUTO_TRANSFER_TO）
+// 页面只能改「是否领取」，以及取消规则
 app.post('/api/token-rules', (req, res) => {
   if (!LIVE) return res.status(400).json({ error: '只有实盘可用' });
   try {
     if (req.body.remove) return res.json(trader.setRule(req.body.token, null));
     const p = req.body.patch || {}, patch = {};
-    if (p.transfer !== undefined) { if (!['armed', 'confirm', 'off'].includes(p.transfer)) throw new Error('transfer 只能是 armed / confirm / off'); patch.transfer = p.transfer; }
     if (p.claim !== undefined) patch.claim = p.claim === true;
-    if (patch.transfer === 'armed') { const r = trader.rules()[String(req.body.token || '').toLowerCase()]; if (!r?.to) throw new Error('这个币没有服务器生成的转出规则，不能确认转出'); console.log(`[tokenRule] 页面确认转出 ${r.symbol} → ${r.to}`); }
     res.json(trader.setRule(req.body.token, patch));
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
@@ -492,9 +487,8 @@ app.get('/api/blocklist', (req, res) => res.json(blocklist.view()));
 app.post('/api/blocklist', (req, res) => { try { const v = blocklist.set(req.body.kind, req.body.address, !!req.body.on, req.body.label); broadcast({ type: 'blocklist', data: v }); res.json(v); } catch (e) { res.status(400).json({ error: e.message }); } });
 app.post('/api/config', (req, res) => { agent.setConfig(req.body); if (LIVE && Number(req.body?.quickBuy) > 0) trader.saveSetting('quickBuy', Number(req.body.quickBuy)); res.json(agent.config); });
 app.post('/api/settings', (req, res) => {
-  const { maxTradeBnb, sendTo, ...rest } = req.body;   // 转出地址只能在服务器配置里改，页面不能改
+  const { maxTradeBnb, ...rest } = req.body;
   if (maxTradeBnb !== undefined) { if (!LIVE) return res.status(400).json({ error: '只有实盘模式有单笔上限' }); try { trader.setMaxTrade(maxTradeBnb); } catch (e) { return res.status(400).json({ error: e.message }); } }
-  if (LIVE && !trader.settings.sendTo && [rest.autoSendAfterClaim, rest.autoSendFourMigrated, rest.autoSendGangMigrated].includes(true)) return res.status(400).json({ error: '没有设置 AUTO_TRANSFER_TO（.env），不能打开自动转出' });
   // 只接受已知的设置项，并且先校验再写入（以前先 Object.assign 再校验：格式错的预设会留在内存里直到重启，任意键也能写进 settings）
   if (rest.qbPresets !== undefined) { const q = rest.qbPresets; const ok = q && ['buy', 'sell'].every((k) => Array.isArray(q[k]) && q[k].length === 3 && q[k].every((a) => Array.isArray(a) && a.length === 8 && a.every((v) => Number(v) > 0 && Number(v) <= (k === 'sell' ? 100 : 1000))));
     if (!ok) return res.status(400).json({ error: '预设格式不对' }); }
@@ -502,9 +496,6 @@ app.post('/api/settings', (req, res) => {
   if (rest.execPath !== undefined) trader.settings.execPath = rest.execPath === 'ai' ? 'ai' : 'direct';
   if (rest.multiRpc !== undefined) trader.settings.multiRpc = rest.multiRpc === true;
   if (rest.autoClaim !== undefined) trader.settings.autoClaim = !!rest.autoClaim;
-  if (LIVE && rest.autoSendAfterClaim !== undefined) { trader.settings.autoSendAfterClaim = rest.autoSendAfterClaim === true; trader.saveSetting('autoSendAfterClaim', trader.settings.autoSendAfterClaim); console.log(`[settings] 领取后自动转出 ${trader.settings.autoSendAfterClaim ? '打开' : '关闭'} → ${trader.settings.sendTo}`); }
-  if (LIVE && rest.autoSendFourMigrated !== undefined) { trader.settings.autoSendFourMigrated = rest.autoSendFourMigrated === true; trader.saveSetting('autoSendFourMigrated', trader.settings.autoSendFourMigrated); console.log(`[settings] Four 发射后自动转出 ${trader.settings.autoSendFourMigrated ? '打开' : '关闭'} → ${trader.settings.sendTo}`); }
-  if (LIVE && rest.autoSendGangMigrated !== undefined) { trader.settings.autoSendGangMigrated = rest.autoSendGangMigrated === true; trader.saveSetting('autoSendGangMigrated', trader.settings.autoSendGangMigrated); console.log(`[settings] Gang 发射后自动转出 ${trader.settings.autoSendGangMigrated ? '打开' : '关闭'} → ${trader.settings.sendTo}`); }
   if (rest.qbPresets !== undefined) { trader.settings.qbPresets = rest.qbPresets; if (LIVE) trader.saveSetting('qbPresets', rest.qbPresets); }
   if (rest.sellToBnb !== undefined) { trader.settings.sellToBnb = rest.sellToBnb !== false; if (LIVE) trader.saveSetting('sellToBnb', trader.settings.sellToBnb); }
   if (rest.preApproveCap !== undefined) { trader.settings.preApproveCap = rest.preApproveCap !== false; if (LIVE) trader.saveSetting('preApproveCap', trader.settings.preApproveCap); }
@@ -555,7 +546,6 @@ market.on('detail', (a) => { for (const c of wss.clients) if (c.readyState === 1
 // 订单结束（成交或失败）后马上重读链上余额，3 / 5 / 20 秒后再读一次，等区块和 baw 索引跟上
 const resync = async () => { trader.syncAt = 0; if (holdings) holdings.histAt = 0; await trader.refreshBalance?.().catch(() => {}); await trader.syncHoldings?.().catch(() => {}); };
 trader.on('order', (o) => { broadcast({ type: 'order', data: o }); if (LIVE && ['filled', 'failed', 'unknown'].includes(o.status)) { for (const ms of [3000, 5000, 20000]) setTimeout(() => resync(), ms); for (const ms of [1500, 6000, 15000]) setTimeout(refreshHoldSnap, ms); } });
-trader.on('autoTransfer', (o) => broadcast({ type: 'autoTransfer', data: o }));
 trader.on('rules', (r) => broadcast({ type: 'rules', data: r }));
 trader.on('settings', (st) => broadcast({ type: 'settings', data: st }));
 market.on('migrate', (s) => { if (LIVE && s?.platform === 'four') { trader.syncAt = 0; trader.refreshBalance?.(); } });

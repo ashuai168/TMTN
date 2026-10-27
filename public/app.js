@@ -223,16 +223,6 @@ function onMsg({ type, data, full }) {
       if (['orders', 'fills'].includes(S.bottomTab)) scheduleBottom();
       break;
     }
-    case 'autoTransfer': {
-      let el = $('#topPop'); if (!el) { el = document.createElement('div'); el.id = 'topPop'; document.body.appendChild(el); }
-      const ok = data.status === 'filled', dry = data.status === 'dry_run';
-      el.className = 'toppop show ' + (ok ? 'buy' : dry ? 'dry' : 'err');
-      el.innerHTML = ok ? `<b>已自动转出</b><span class="mono">${K(data.amountIn)} 枚 ${esc(data.symbol)} 到 ${esc(data.toShort)}</span>${data.tx ? txLink(data.tx) : ''}`
-        : dry ? `<b>自动转出（模拟，未上链）</b><span class="mono">${K(data.amountIn)} 枚 ${esc(data.symbol)} → ${esc(data.toShort)}</span>`
-        : `<b>自动转出失败</b><span>${esc(data.symbol)}</span><span class="mono">${esc(zhErr(data.reason))}</span>`;
-      clearTimeout(popTimer); popTimer = setTimeout(() => el.classList.remove('show'), ok ? 6000 : 8000);
-      break;
-    }
     case 'log': S.logs.unshift(data); if (S.logs.length > 300) S.logs.length = 300; if (S.bottomTab === 'logs') scheduleBottom(); break;
     case 'record': S.records.unshift(data); if (!$('#settingsModal').classList.contains('hidden')) renderRecords(); break;
     case 'config': S.config = data; renderControls(); break;
@@ -240,7 +230,7 @@ function onMsg({ type, data, full }) {
     case 'favorites': setFav(data); break;
     case 'holdings': setHoldSnap(data); break;
     case 'rules': S.rules = data || {}; scheduleRender(); if (S.view === 'hold') renderHold(); break;
-    case 'settings': S.settings = data; renderControls(); renderAutoSend(); break;
+    case 'settings': S.settings = data; renderControls(); break;
   }
 }
 
@@ -943,7 +933,6 @@ function renderRight() {
     if (k > 1) btn.textContent += buy && a > 0 ? ` · ${a} BNB ×${k} = ${+(a * k).toFixed(6)} BNB` : ` · ${k} 个钱包`;
   }
   $('#fastMode').checked = !!S.fast; $('#autoClaim').checked = S.settings.autoClaim !== false; $('#sellToBnb').checked = S.settings.sellToBnb !== false; $('#preApproveCap').checked = S.settings.preApproveCap !== false;
-  renderAutoSend();
   renderMyPos(t); renderInfo(t);
 }
 
@@ -1349,56 +1338,6 @@ document.addEventListener('change', async (e) => {
 $('#amount').addEventListener('input', refreshQuote);
 $('#submit').addEventListener('click', () => submitOrder());
 $('#fastMode').addEventListener('change', (e) => { S.fast = e.target.checked; try { localStorage.fast = S.fast ? '1' : ''; } catch { /* */ } });
-// 自动转出（Flap 领取后 / Four 发射后 / Gang 发射后，全部转到固定地址）：顶部栏按钮 → 弹窗里三个开关分别设置。
-// 打开任何一个都要在确认弹窗里点确认；关闭直接生效
-const AS = [
-  { k: 'autoSendAfterClaim', name: 'Flap', what: 'Flap Agent 曲线发射后领取（claim）成功', how: '领到的全部代币' },
-  { k: 'autoSendFourMigrated', name: 'Four', what: '你持有的 Four 代币从内盘发射（迁移到外盘）', how: '钱包里该币的全部余额' },
-  { k: 'autoSendGangMigrated', name: 'Gang', what: '你持有的 Gang 代币（老盘和 V2 盘）从内盘发射（毕业）', how: '钱包里该币的全部余额' },
-];
-function renderAutoSend() {
-  const to = S.settings.sendTo || '', sum = AS.map((x) => `${x.name}${S.settings[x.k] ? '✓' : '✗'}`).join(' ');
-  const p = $('#autoSendPill'); p.classList.toggle('hidden', !LIVE() || !to);
-  const any = AS.some((x) => S.settings[x.k]);
-  p.classList.toggle('on', any);
-  p.innerHTML = `<span class="${any ? 'y' : 'muted'}">⇢ 自动转出</span> <span class="mono">${AS.map((x) => `${x.name}<b class="${S.settings[x.k] ? 'g' : 'muted'}">${S.settings[x.k] ? '✓' : '✗'}</b>`).join(' ')}</span>`;
-  p.title = to ? `自动转出到 ${to}：${sum}。点击设置` : '';
-  $('#autoSendLink')?.classList.toggle('hidden', !LIVE() || !to); if ($('#autoSendSum')) $('#autoSendSum').textContent = sum;
-  if ($('.as-dlg')) renderAutoSendDlg();
-}
-function renderAutoSendDlg() {
-  const box = $('.as-dlg .as-rows'); if (!box) return; const to = S.settings.sendTo || '';
-  box.innerHTML = AS.map((x) => `<div class="as-row"><div><b>${x.name}</b><div class="ui-note">${x.what}后，把${x.how}转到下面的地址</div></div>
-    <button class="as-sw ${S.settings[x.k] ? 'on' : ''}" data-ask="${x.k}" role="switch" aria-checked="${!!S.settings[x.k]}"><i></i></button></div>`).join('');
-}
-function openAutoSend() {
-  const to = S.settings.sendTo || ''; if (!to) return;
-  const wrap = document.createElement('div'); wrap.className = 'ui-dlg-back';
-  wrap.innerHTML = `<div class="ui-dlg as-dlg" role="dialog" aria-modal="true"><div class="ui-h">⇢ 自动转出</div>
-    <div class="ui-b"><div class="as-rows"></div><p style="margin-top:10px">转出地址（固定，页面上改不了）：</p>
-    <div class="ui-addr"><span class="mono">${esc(to)}</span><button class="ui-copy" data-v="${esc(to)}">复制</button></div>
-    <p class="ui-note">打开要确认；关闭立刻生效。只处理打开之后发生的发射 / 领取；每个币只转一次，失败自动重试；币安 App 要确认时会等你处理。交易哈希记在订单列表和该币的规则栏里。</p></div>
-    <div class="ui-f"><button class="ui-btn" data-close-as>关闭</button></div></div>`;
-  document.body.appendChild(wrap); requestAnimationFrame(() => wrap.classList.add('in')); renderAutoSendDlg();
-  const close = () => { document.removeEventListener('keydown', key, true); wrap.classList.remove('in'); setTimeout(() => wrap.remove(), 150); };
-  const key = (e) => { if (document.querySelectorAll('.ui-dlg-back').length > 1) return; if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); close(); } };
-  document.addEventListener('keydown', key, true);
-  wrap.addEventListener('mousedown', (e) => { if (e.target === wrap) close(); });
-  wrap.addEventListener('click', async (e) => {
-    if (e.target.closest('[data-close-as]')) return close();
-    const cp = e.target.closest('.ui-copy'); if (cp) { try { await copyOrThrow(cp.dataset.v); cp.textContent = '已复制'; } catch { cp.textContent = '复制失败'; } return; }
-    const sw = e.target.closest('[data-ask]'); if (!sw || sw.disabled) return;
-    const x = AS.find((a) => a.k === sw.dataset.ask), on = !S.settings[x.k];
-    if (on && !(await ui.confirm({ title: `打开「${x.name} 自动转出」？`, danger: true, confirmText: '打开自动转出',
-      body: `<p>以后${x.what}后，都会把<b>${x.how}</b>自动转到：</p>`, address: to,
-      after: '<p class="ui-note">不会再逐笔问你。真实转账，转出后无法撤回。随时可以在这里关掉。</p>' }))) return;
-    sw.disabled = true;
-    try { S.settings = await api('/api/settings', { [x.k]: on }); note(on ? `已打开：${x.name} 自动转到 ${to.slice(0, 6)}…${to.slice(-4)}` : `已关闭 ${x.name} 自动转出`); }
-    catch (err) { toast({ status: 'failed', symbol: '设置', reason: err.message }); }
-    sw.disabled = false; renderAutoSend();
-  });
-}
-document.addEventListener('click', (e) => { if (e.target.closest('[data-autosend]')) { e.preventDefault(); e.stopPropagation(); openAutoSend(); } }, true);
 $('#sellToBnb').addEventListener('change', async (e) => { try { S.settings = await api('/api/settings', { sellToBnb: e.target.checked }); note(e.target.checked ? '已打开：卖出后自动换回 BNB' : '已关闭：卖出后报价币留在钱包'); } catch (err) { e.target.checked = !e.target.checked; toast({ status: 'failed', symbol: '设置', reason: err.message }); } });
 $('#preApproveCap').addEventListener('change', async (e) => { try { S.settings = await api('/api/settings', { preApproveCap: e.target.checked }); note(e.target.checked ? '已打开：需要授权时授较大固定额度' : '已关闭：每次只授权本次数量'); } catch (err) { e.target.checked = !e.target.checked; toast({ status: 'failed', symbol: '设置', reason: err.message }); } });
 // 授权管理：本程序授过的额度，逐条可撤销（approve 0，你点了才发）
@@ -1643,28 +1582,21 @@ const ui = (() => {
   };
 })();
 
-/* ---------- 单币规则（发射后立刻领取，确认后自动转出） ---------- */
+/* ---------- 单币规则（发射后立刻领取） ---------- */
 function ruleBanner(addr) {
   const r = S.rules[String(addr || '').toLowerCase()]; if (!r) return '';
-  const st = r.state || {}, to = r.to ? `${r.to.slice(0, 6)}…${r.to.slice(-4)}` : '';
+  const st = r.state || {};
   const claimTxt = st.claimedAt ? `已领取${st.claimTx ? ` <a href="https://bscscan.com/tx/${esc(st.claimTx)}" target="_blank" rel="noopener">↗</a>` : ''}` : r.claim ? '发射后立刻领取（每 2 秒检查）' : '';
-  const sendTxt = !r.to ? '' : st.transferTx ? `已转到 ${to}${/^0x/.test(st.transferTx) ? ` <a href="https://bscscan.com/tx/${esc(st.transferTx)}" target="_blank" rel="noopener">↗</a>` : ''}`
-    : r.transfer === 'armed' ? `领取后自动全部转到 <b title="${esc(r.to)}">${to}</b>` : `转到 <b title="${esc(r.to)}">${to}</b>：<span class="y">等你确认</span> <button class="qb" data-rule-arm="${r.token}">确认自动转出</button>`;
   const last = (r.log || []).at(-1);
-  return `<div class="rule-bar"><b>⚙ 规则</b> ${claimTxt}${sendTxt ? ' · ' + sendTxt : ''}${last ? `<span class="hsub" title="${esc((r.log || []).map((x) => new Date(x.at).toLocaleTimeString('zh-CN', { hour12: false }) + ' ' + x.msg).join('\n'))}"> · ${esc(last.msg)}</span>` : ''}${st.done ? '' : ` <button class="qb" data-rule-cancel="${r.token}">取消规则</button>`}</div>`;
+  return `<div class="rule-bar"><b>⚙ 规则</b> ${claimTxt}${last ? `<span class="hsub" title="${esc((r.log || []).map((x) => new Date(x.at).toLocaleTimeString('zh-CN', { hour12: false }) + ' ' + x.msg).join('\n'))}"> · ${esc(last.msg)}</span>` : ''}${st.done ? '' : ` <button class="qb" data-rule-cancel="${r.token}">取消规则</button>`}</div>`;
 }
 document.addEventListener('click', async (e) => {
-  const el = e.target.closest('[data-rule-arm],[data-rule-cancel]'); if (!el) return;
+  const el = e.target.closest('[data-rule-cancel]'); if (!el) return;
   e.preventDefault(); e.stopPropagation();
-  const k = el.dataset.ruleArm || el.dataset.ruleCancel, r = S.rules[k]; if (!r) return;
+  const k = el.dataset.ruleCancel, r = S.rules[k]; if (!r) return;
   try {
-    if (el.dataset.ruleArm) {
-      if (!(await ui.confirm({ title: `确认 ${r.symbol} 自动转出`, danger: true, confirmText: '确认转出', body: `<p>${esc(r.symbol)} 发射并领取后，把钱包里<b>全部 ${esc(r.symbol)}</b> 自动转到：</p>`, address: r.to, after: '<p class="ui-note">这是真实转账，转出后无法撤回。只对这一个币生效。</p>' }))) return;
-      S.rules = await api('/api/token-rules', { token: k, patch: { transfer: 'armed' } }); note(`已确认：${r.symbol} 领取后自动转到 ${r.to.slice(0, 6)}…${r.to.slice(-4)}`);
-    } else {
-      if (!(await ui.confirm({ title: `取消 ${r.symbol} 的规则？`, body: '<p>不再自动领取 / 转出这个币。</p>', confirmText: '取消规则', cancelText: '保留' }))) return;
-      S.rules = await api('/api/token-rules', { token: k, remove: true }); note(`已取消 ${r.symbol} 的规则`);
-    }
+    if (!(await ui.confirm({ title: `取消 ${r.symbol} 的规则？`, body: '<p>不再自动领取这个币。</p>', confirmText: '取消规则', cancelText: '保留' }))) return;
+    S.rules = await api('/api/token-rules', { token: k, remove: true }); note(`已取消 ${r.symbol} 的规则`);
   } catch (err) { toast({ status: 'failed', symbol: '规则', reason: err.message }); }
   scheduleRender(); if (S.view === 'hold') renderHold();
 }, true);
@@ -1982,7 +1914,7 @@ document.addEventListener('click', (e) => {
   const prefs = loadPrefs(); S.prefSel = prefs.selected || null;
   const r0 = applyRoute(); if (!location.hash && prefs.view === 'pulse') setView('pulse', true);
   applyActive(); if (prefs.amount && !r0.ca) { const am = $('#amount'); if (am) am.value = prefs.amount; }
-  renderControls(); renderAutoSend(); pickDefault(); connect(); renderBottom();
+  renderControls(); pickDefault(); connect(); renderBottom();
   if (LIVE()) api('/api/token-rules').then((r) => { S.rules = r || {}; scheduleRender(); }).catch(() => {});
   renderFavBar(); api('/api/favorites').then(setFav).catch(() => {});
   if (LIVE()) api('/api/wallets').then((v) => { S.walletsInfo = v; renderAuth(); scheduleRender(); }).catch(() => {});   // 多钱包状态（之后每 10 秒通过 WS 推送）

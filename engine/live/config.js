@@ -27,7 +27,7 @@ export const dataFile = (name) => pathToFileURL(pathJoin(DATA_DIR, name));
 export const WALLET_SLOT = Number(env('WALLET_SLOT', '1'));
 export const WALLET_PEERS = (() => { try { return JSON.parse(env('WALLET_PEERS', '[]')) || []; } catch { return []; } })();
 export const BAW_DIR = env('BINANCE_BAW_DIR', '');
-// 本后端只允许用这个钱包地址（可选）。baw 登录成别的账号时拒绝使用，防止拿错账号下单 / 自动转出
+// 本后端只允许用这个钱包地址（可选）。baw 登录成别的账号时拒绝使用，防止拿错账号下单
 export const EXPECT_WALLET = env('WALLET_ADDRESS', '').toLowerCase();   // baw 的登录信息目录（空 = 默认 ~/.baw）
 // 只用公共节点跑行情订阅（第二个钱包的后端用，省 NodeReal 额度；交易链路照样用 NodeReal）
 export const FEEDS_PUBLIC = env('FEEDS_PUBLIC', '0') === '1';
@@ -73,7 +73,3 @@ export const BNB_PRICE_URL = 'https://api.binance.com/api/v3/ticker/price?symbol
 // Four 代币迁移（发射）后自动把整仓转到指定钱包
 // 买入后自动「预授权」（无限额 approve）。默认关闭：无限额授权会被币安风控标成高风险，需要在 App 里确认并锁住钱包；卖出时会按本次数量授权
 export const PREAPPROVE = env('PREAPPROVE', '0') === '1';
-// 自动转出的目标地址：只从 .env 读，默认空。为空（或格式不对）时所有自动转出都不能打开
-export const AUTO_TRANSFER_TO = /^0x[0-9a-fA-F]{40}$/.test(env('AUTO_TRANSFER_TO', '')) ? env('AUTO_TRANSFER_TO', '') : '';
-// 默认关闭：自动把迁移后的 Four 持仓全部转走风险太大，确认地址是自己的再用 AUTO_TRANSFER_FOUR=1 打开
-export const AUTO_TRANSFER_FOUR = env('AUTO_TRANSFER_FOUR', '0') === '1';

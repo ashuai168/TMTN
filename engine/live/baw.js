@@ -2,7 +2,7 @@
 // execFile 不经过 shell，参数逐个传入，地址都先校验。
 import { execFile } from 'node:child_process';
 import { ethers } from 'ethers';
-import { BAW_BIN, BINANCE_CHAIN_ID, BAW_SLIPPAGE_UNIT, DRY_RUN, AUTO_TRANSFER_TO } from './config.js';
+import { BAW_BIN, BINANCE_CHAIN_ID, BAW_SLIPPAGE_UNIT, DRY_RUN } from './config.js';
 import { assertLiquid, isQuoteToken } from './quoteRoutes.js';
 
 export function assertAddress(a, name = 'address') {
@@ -137,11 +137,3 @@ export async function pollOrder(orderId, { maxMs = 60_000, intervalMs = 250 } = 
   return last;
 }
 
-// 代币转账：baw wallet send --max（转出全部余额）
-export async function sendMax({ tokenAddress, recipient, gasLevel = 'MEDIUM' }) {
-  // 最后一道闸：只报价模式（LIVE_TRADE=0）一律不转；收款地址只能是服务器配置的 AUTO_TRANSFER_TO
-  if (DRY_RUN) throw new Error('当前是只报价模式（LIVE_TRADE=0），不会转出');
-  if (String(recipient || '').toLowerCase() !== String(AUTO_TRANSFER_TO || '').toLowerCase()) throw new Error('收款地址不是服务器配置的 AUTO_TRANSFER_TO，已拒绝转出');
-  const args = ['wallet', 'send', '--binanceChainId', String(BINANCE_CHAIN_ID), '--max', '--tokenAddress', assertAddress(tokenAddress, 'tokenAddress'), '--recipient', assertAddress(recipient, 'recipient'), '--gasLevel', gasLevel];
-  return (await runBaw(args, { timeoutMs: 90_000 })).data || {};
-}

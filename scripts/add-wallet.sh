@@ -159,7 +159,6 @@ services:
       PORT: "$PORT"
       LIVE_TRADE: "$LIVE"           # 1 = 真实下单；0 = 只报价
       WALLET_ADDRESS: "$ADDRESS"    # 只允许这个地址（空 = 不检查，建议填）
-      AUTO_TRANSFER_TO: ""          # 额外钱包不自动转出
     ports:
       - "127.0.0.1:$PORT:$PORT"     # 只开在本机
     volumes:

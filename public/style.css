@@ -603,14 +603,6 @@ tr.mine td { background: rgba(30, 203, 129, .07); }
 .ui-btn.danger { background: var(--r); border-color: var(--r); color: #fff; }
 .ui-btn:focus-visible { outline: 2px solid rgba(255, 255, 255, .5); outline-offset: 2px; }
 
-/* 自动转出：顶部栏按钮 + 设置弹窗里的开关 */
-.as-pill { cursor: pointer; } .as-pill b { margin-left: 1px; } .as-pill.on { border-color: rgba(240, 185, 11, .5); }
-.as-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
-.as-row:last-child { border-bottom: 0; }
-.as-sw { flex: none; width: 38px; height: 22px; border-radius: 11px; background: #2a313b; position: relative; transition: .15s; }
-.as-sw i { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: .15s; }
-.as-sw.on { background: var(--g); } .as-sw.on i { left: 19px; } .as-sw:disabled { opacity: .5; }
-
 #brand { cursor: pointer; border-radius: 6px; transition: opacity .15s, background .15s; } #brand:hover { opacity: .85; background: rgba(255, 255, 255, .04); }
 .brand-logo { width: 30px; height: 30px; border-radius: 8px; object-fit: cover; flex: none; box-shadow: 0 0 0 1px rgba(240, 185, 11, .25); }
 

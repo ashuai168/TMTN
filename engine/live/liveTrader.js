@@ -5,8 +5,7 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { PREAPPROVE, QUOTE_TOKENS, dataFile, EXPECT_WALLET } from './config.js';
 import { setApprovalCtx, capFor, capLabel, sendApproval, listApprovals } from './approvals.js';
-import { DRY_RUN, AUTH_SIMULATE_LOGGED_OUT, MAX_TRADE_BNB, LIVE_SETTINGS_FILE, BNB_NATIVE, BINANCE_CHAIN_ID, WALLET_LABEL, AUTO_TRANSFER_TO, AUTO_TRANSFER_FOUR } from './config.js';
-const AT_FILE = dataFile('autoTransfer.json');
+import { DRY_RUN, AUTH_SIMULATE_LOGGED_OUT, MAX_TRADE_BNB, LIVE_SETTINGS_FILE, BNB_NATIVE, BINANCE_CHAIN_ID, WALLET_LABEL } from './config.js';
 const RULE_FILE = dataFile('tokenRules.json');
 import * as baw from './baw.js';
 import { ethers } from 'ethers';
@@ -51,13 +50,9 @@ export class LiveTrader extends EventEmitter {
     this.orders = [];
     this.quoteCache = new Map();
     this.settings = { gas: 'high', execPath: 'direct', multiRpc: false, autoClaim: loadSaved().autoClaim ?? true,
-      // 领取后自动全部转到 AUTO_TRANSFER_TO：默认关，只能由本人在页面「设置」里打开（一次性同意），存 data/live-settings.json
-      autoSendAfterClaim: !!AUTO_TRANSFER_TO && loadSaved().autoSendAfterClaim === true, sendTo: AUTO_TRANSFER_TO,
-      autoSendFourMigrated: !!AUTO_TRANSFER_TO && loadSaved().autoSendFourMigrated === true,
-      autoSendGangMigrated: !!AUTO_TRANSFER_TO && loadSaved().autoSendGangMigrated === true,
       qbPresets: loadSaved().qbPresets || null,
       sellToBnb: loadSaved().sellToBnb !== false,
-      preApproveCap: loadSaved().preApproveCap !== false, walletOn: loadSaved().walletOn || {} };   /* 多钱包「参与下单」开关，重启后保留 */   // 预先授权（较大固定额度，用户可在页面关闭）；关掉 = 只授权本次数量   // 卖出后自动把报价币（BNCB / GANG / 币股…）换回 BNB，默认开，可在交易设置里关   // 一键买卖面板的预设金额 / 比例（页面上编辑，存 live-settings.json）   // Gang 发射（毕业）后自动转出，同样只能本人打开   // Four 发射后自动转出（同样只能本人在页面打开）
+      preApproveCap: loadSaved().preApproveCap !== false, walletOn: loadSaved().walletOn || {} };   /* 多钱包「参与下单」开关，重启后保留 */   // 预先授权（较大固定额度，用户可在页面关闭）；关掉 = 只授权本次数量   // 卖出后自动把报价币（BNCB / GANG / 币股…）换回 BNB，默认开，可在交易设置里关   // 一键买卖面板的预设金额 / 比例（页面上编辑，存 live-settings.json）
     this.claimable = []; this.claimRetry = new Map(); this.claiming = new Set(); this.inflight = new Set(); this.tokenQ = new Map(); this.dupAt = new Map();
     this.preapproving = new Set();
     this.on('order', (o) => { try { latency.record(o, { gasLevel: this.settings.gas, rpc: this.market.provider?._getConnection?.().url || null }); } catch {} });
@@ -188,22 +183,17 @@ export class LiveTrader extends EventEmitter {
       const o = {}; for (const [k, p] of this.positions) if (p.amount > 0 || p.boughtBnb) o[k] = p;
       try { mkdirSync(new URL('.', POS_FILE), { recursive: true }); writeFileSync(POS_FILE, JSON.stringify(o)); } catch { /* ignore */ }
     } finally { this.syncing = false; }
-    this.autoTransferCheck().catch((e) => console.error('autoTransfer:', e.message));
   }
 
-  /* ---------- 单币规则：发射后立刻领取，再（经本人确认后）把全部代币转到指定地址 ----------
-     只对规则里的币生效，全局 AUTO_TRANSFER_FOUR 不受影响。存在 data/tokenRules.json，重启后继续。
-     transfer: 'confirm'（等本人在页面上确认）| 'armed'（已确认，领取后自动转）| 'off'；转账只有 armed 才会执行 */
+  /* ---------- 单币规则：发射后立刻领取（存在 data/tokenRules.json，重启后继续） ---------- */
   rules() { if (!this._rules) { try { this._rules = JSON.parse(readFileSync(RULE_FILE, 'utf8')); } catch { this._rules = {}; } } return this._rules; }
   rulesSave() { try { mkdirSync(new URL('.', RULE_FILE), { recursive: true }); writeFileSync(RULE_FILE, JSON.stringify(this._rules, null, 1)); } catch { /* ignore */ } this.emit('rules', this.rulesView()); }
   rulesView() { return Object.fromEntries(Object.entries(this.rules()).map(([k, r]) => [k, { ...r }])); }
   setRule(token, patch) {
     const k = String(token || '').toLowerCase(); if (!/^0x[0-9a-f]{40}$/.test(k)) throw new Error('代币地址无效');
     if (patch === null) { delete this.rules()[k]; this.rulesSave(); return this.rulesView(); }
-    if (patch.to && String(patch.to).toLowerCase() !== AUTO_TRANSFER_TO.toLowerCase()) throw new Error('转出地址只能是服务器配置的 AUTO_TRANSFER_TO');
-    const t = this.market.get(k); const r = this.rules()[k] || { token: k, createdAt: Date.now(), claim: true, transfer: 'confirm', state: {} };
+    const t = this.market.get(k); const r = this.rules()[k] || { token: k, createdAt: Date.now(), claim: true, state: {} };
     Object.assign(r, { symbol: t?.symbol || r.symbol, market: t?.market || r.market, platform: t?.platform || r.platform }, patch);
-    if (patch.transfer === 'armed') r.armedAt = Date.now();
     this.rules()[k] = r; this.rulesSave(); return this.rulesView();
   }
   // 授权管理：列出本程序授过的（代币, 合约）以及链上当前额度；撤销 = approve 0，只在本人点击时调用
@@ -320,53 +310,10 @@ export class LiveTrader extends EventEmitter {
           else { st.claimTries = (st.claimTries || 0) + 1; st.claimNext = Date.now() + [5_000, 15_000, 60_000, 300_000][Math.min(st.claimTries, 4) - 1]; this.ruleLog(r, `领取未完成：${o.reason || o.status}`); }
           this.rulesSave(); continue;
         }
-        // 2) 转账：只有本人确认过（armed）才执行；全部余额 → r.to
-        const ready = !r.claim || st.claimedAt || t?.source !== 'agent-curve';
-        if (!ready || r.transfer !== 'armed' || !r.to || st.transferTx) continue;
-        if (Date.now() < (st.sendNext || 0)) continue;
-        if (t?.source !== 'agent-curve' && t?.stage !== 'dex') continue;   // 非 Flap 的币：等发射（迁移）后再转
-        // 只报价模式（LIVE_TRADE=0）不转；地址被改过（不是 AUTO_TRANSFER_TO）也不转
-        if (DRY_RUN) { st.sendNext = Date.now() + 60_000; if (!st.dryRunNoted) { st.dryRunNoted = true; this.ruleLog(r, '可以转出，但当前是只报价模式（LIVE_TRADE=0），不会转'); this.rulesSave(); } continue; }
-        if (r.to.toLowerCase() !== AUTO_TRANSFER_TO.toLowerCase()) { st.sendNext = Date.now() + 300_000; this.ruleLog(r, `转出地址 ${r.to} 不是服务器配置的 AUTO_TRANSFER_TO，已拒绝`); this.rulesSave(); continue; }
-        const bal = Number((await baw.walletBalance({ tokenAddress: r.token }).catch(() => [])).find((x) => String(x.address || '').toLowerCase() === r.token)?.balance || 0);
-        if (!(bal > 0)) { st.sendNext = Date.now() + 5_000; continue; }   // 领取刚上链，余额可能还没更新
-        if ((await baw.walletLock().catch(() => 'UNKNOWN')) === 'LOCKED') { st.sendNext = Date.now() + 10_000; this.ruleLog(r, '钱包在等币安 App 确认，稍后再转'); this.rulesSave(); continue; }
-        const short = r.to.slice(0, 6) + '…' + r.to.slice(-4);
-        const order = { id: randomBytes(5).toString('hex'), ts: Date.now(), walletId: w.id, wallet: w.label, token: r.token, symbol: r.symbol || '?', platform: r.platform, side: 'transfer', amountIn: bal, to: r.to, status: 'pending', steps: [], auto: true, source: '规则：领取后转出', route: `全部 ${r.symbol} → ${short}` };
-        this.orders.unshift(order); this.emit('order', order);
-        st.sendTries = (st.sendTries || 0) + 1; this.ruleLog(r, `转出 ${bal} → ${r.to}（第 ${st.sendTries} 次）`);
-        try {
-          const d = await baw.sendMax({ tokenAddress: r.token, recipient: r.to });
-          Object.assign(order, { status: 'filled', tx: d.txHash || d.hash || null, out: bal }); st.transferTx = order.tx || 'submitted'; st.transferAt = Date.now(); st.sent = bal; st.done = true;
-          this.ruleLog(r, `转出成功 ${order.tx || ''}`);
-        } catch (e) {
-          Object.assign(order, { status: 'failed', reason: e.message }); st.lastError = e.message;
-          st.sendNext = Date.now() + [5_000, 15_000, 60_000, 300_000, 900_000][Math.min(st.sendTries, 5) - 1]; this.ruleLog(r, `转出失败：${e.message}`);
-        }
-        this.rulesSave(); this.emit('order', order); this.emit('autoTransfer', { ...order, toShort: short }); this.refreshBalance();
+        // 2) 领取完成（或规则不需要领取）就结束这条规则
+        if (!r.claim || st.claimedAt) { st.done = true; this.rulesSave(); }
       }
     } finally { this.ruleBusy = false; }
-  }
-
-  // Four 代币发射（curve→dex）后，把持仓全部转到 AUTO_TRANSFER_TO。done 记录在 data/autoTransfer.json，失败最多重试 3 次（退避 1/5/15 分钟）
-  atState() { if (!this.at) { try { this.at = JSON.parse(readFileSync(AT_FILE, 'utf8')); } catch { this.at = {}; } } return this.at; }
-  atSave() { try { mkdirSync(new URL('.', AT_FILE), { recursive: true }); writeFileSync(AT_FILE, JSON.stringify(this.at, null, 1)); } catch { /* ignore */ } }
-  // Four 发射（内盘 → 外盘）后自动转出：页面「设置」里本人打开 autoSendFourMigrated（或环境变量 AUTO_TRANSFER_FOUR=1）才生效。
-  // 只处理「打开后、看到从内盘变成已迁移」且当时钱包里有这个币的情况（迁移后才在外盘买的不转，启动后 3 分钟内的状态变化不算，避免把重启时补状态误当成发射）。
-  // 认定后给这个币挂一条已确认的转出规则，由 ruleTick 负责转账：重试、等币安 App 确认、记录哈希、每个币只转一次
-  async autoTransferCheck() {
-    const w = this.wallets[0]; if (!w) return;
-    // Four：autoSendFourMigrated（或环境变量 AUTO_TRANSFER_FOUR）；Gang（老盘和 V2 盘）：autoSendGangMigrated
-    const onFor = AUTO_TRANSFER_TO ? { four: AUTO_TRANSFER_FOUR || this.settings.autoSendFourMigrated, gang: this.settings.autoSendGangMigrated } : { four: false, gang: false };   // 没设目标地址就不转
-    this.fourStage ||= new Map(); this.startedAt ||= Date.now();
-    for (const t of this.market.tokens.values()) {
-      if (t.platform !== 'four' && t.platform !== 'gang') continue;
-      const prev = this.fourStage.get(t.address); this.fourStage.set(t.address, t.stage);
-      if (!onFor[t.platform] || prev !== 'curve' || t.stage !== 'dex' || Date.now() - this.startedAt < 180_000) continue;
-      if (!((w.tokens?.[t.address] || 0) > 0) || this.rules()[t.address.toLowerCase()]) continue;
-      this.setRule(t.address, { claim: false, to: AUTO_TRANSFER_TO, transfer: 'armed', auto: true, state: {} });
-      this.ruleLog(this.rules()[t.address.toLowerCase()], `${t.platform === 'gang' ? 'Gang' : 'Four'} 已发射，按「${t.platform === 'gang' ? 'Gang' : 'Four'} 发射后自动转出」设置转出全部 ${t.symbol}`); this.rulesSave();
-    }
   }
 
   wallet(id) { const w = this.wallets.find((x) => x.id === id) || this.wallets[0]; if (!w) throw new Error(this.status.error || 'baw 钱包未连接'); return w; }
@@ -933,12 +880,6 @@ export class LiveTrader extends EventEmitter {
       const r = await this.portal.claim({ wallet: w.address, market, step });
       Object.assign(order, { status: 'filled', venue: r.venue, out: r.expected, tx: r.txHash, txs: r.hashes, latencyMs: Date.now() - order.ts });
       this.claimRetry.delete(market); this.claimable = this.claimable.filter((c) => c.market !== market);
-      // 打开了「领取后自动转出」：给这个币挂上已确认的转出规则，由 ruleTick 负责转账（重试、钱包锁、记录哈希）
-      if (AUTO_TRANSFER_TO && this.settings.autoSendAfterClaim && t?.address) {
-        const k = t.address.toLowerCase(), ex = this.rules()[k];
-        if (ex) { ex.to ||= AUTO_TRANSFER_TO; if (ex.transfer !== 'off') ex.transfer = 'armed'; ex.state ||= {}; ex.state.claimedAt ||= Date.now(); ex.state.claimTx ||= r.txHash; this.ruleLog(ex, '领取成功，按「领取后自动转出」设置转出'); this.rulesSave(); }
-        else { this.setRule(k, { claim: true, to: AUTO_TRANSFER_TO, transfer: 'armed', auto: true, state: { claimedAt: Date.now(), claimTx: r.txHash } }); }
-      }
     } catch (e) {
       const prev = this.claimRetry.get(market)?.wait || 30_000; const wait = Math.min(prev * 2, 30 * 60_000);
       this.claimRetry.set(market, { wait, next: Date.now() + wait });
