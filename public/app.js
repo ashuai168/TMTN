@@ -614,9 +614,11 @@ function renderHead() {
       <div><span title="内盘进度">进度</span><b>${t.progress.toFixed(2)}%</b><div class="bar"><i style="width:${t.progress}%"></i></div></div>
       <div><span>已筹/目标</span><b style="white-space:nowrap">${pool(t)}</b></div>
       <div><span title="底池（美元）">底池</span><b>${usd(t.liqUsd || 0)}</b></div>
-      <div><span title="买入 / 卖出笔数">成交</span><b><span class="g">${t.buys}</span>/<span class="r">${t.sells}</span></b></div>
+      ${t.stage === 'dex' && t.dexVol24 != null ? `<div><span title="外盘（PancakeSwap）最近 ${t.dexCountMin} 分钟买入 / 卖出笔数（链上只读得到最近约 1 小时）">外盘成交${t.dexCountMin >= 60 ? '' : ` ${t.dexCountMin}分`}</span><b><span class="g">${t.dexBuys24}</span>/<span class="r">${t.dexSells24}</span></b></div>
+      <div><span title="外盘（PancakeSwap）最近 24 小时成交量">24h 成交量</span><b>${t.dexVol24 >= 1e4 ? K(t.dexVol24) : bnb(t.dexVol24, 3)} ${esc(t.quote || 'BNB')}</b></div>
+      <div><span title="内盘已卖完，已发射到 PancakeSwap">可售</span><b>已发射</b></div>` : `<div><span title="买入 / 卖出笔数">成交</span><b><span class="g">${t.buys}</span>/<span class="r">${t.sells}</span></b></div>
       <div><span title="内盘成交量">成交量</span><b>${bnb(t.volume, 3)} ${esc(t.quote || 'BNB')}</b></div>
-      <div><span title="内盘剩余可售">可售</span><b>${t.remaining == null ? '—' : K(t.remaining)}</b></div>
+      <div><span title="内盘剩余可售">可售</span><b>${t.remaining == null ? '—' : K(t.remaining)}</b></div>`}
       ${!(t.buyTax > 0 || t.sellTax > 0) ? '' : `<div><span title="代币税：只算代币自己设置的税，不含平台费">代币税</span><b><span class="${t.buyTax >= 5 ? 'r' : ''}">${pctTxt(t.buyTax)}</span> / <span class="${t.sellTax >= 5 ? 'r' : ''}">${pctTxt(t.sellTax)}</span></b></div>`}
       ${el.ok ? '' : `<div><span>资格</span><b class="${el.ok ? 'g' : 'r'}" style="font-family:var(--sans)">${el.ok ? '可交易' : el.why}</b></div>`}
       <div><span title="总费率 买/卖：代币税 + 平台费 + 防狙击税，和标题里的「税」标签是同一个数">总费率</span><b class="${taxHi(t) ? 'r' : 'g'}">${pctTxt(t.buyFeePct)} / ${pctTxt(t.sellFeePct)}${t.antiSniperPct >= 0.1 ? ` <span class="y" title="最近一笔买入含防狙击税">🛡${t.antiSniperPct.toFixed(1)}%</span>` : ''}</b></div>

@@ -70,7 +70,7 @@ export class GangFun extends EventEmitter {
   fromV2(x) {
     const qUsd = Number(x.quoteUsd) || 0, bUsd = this.bnbUsd || 1;
     this.v2.set(x.address, { quoteUsd: qUsd });
-    return { address: x.address, name: x.name, symbol: x.symbol, creator: x.creator, creatorHandle: x.creatorHandle, createdAt: x.createdAt, graduated: x.graduated, pair: x.pair,
+    return { address: x.address, name: x.name, symbol: x.symbol, creator: x.creator, creatorHandle: x.creatorHandle, createdAt: x.createdAt, graduated: x.graduated, graduatedAt: x.graduatedAt || null, pair: x.pair,
       raisedQuote: Number(x.raisedQuote) || 0, gradAmtQuote: Number(x.gradAmtQuote) || 0, quoteSymbol: x.quoteSymbol || 'BNB', quoteAddress: x.quoteAddress,
       progressPct: x.progressPct, priceBnb: (Number(x.priceUsd) || 0) / bUsd, priceQuote: Number(x.priceQuote) || null, quoteUsd: qUsd, fdvUsd: x.fdvUsd, holders: x.holders, trades: x.trades, lastTradeAt: x.lastTradeAt,
       volume24hBnb: (Number(x.volume24hUsd) || 0) / bUsd, logo: x.logoUrl ? new URL(x.logoUrl, 'https://gang.fun').href : null, track: 'v2' };   // logoThumbUrl 是相对路径且实际返回网页，不能用
