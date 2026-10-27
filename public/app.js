@@ -683,7 +683,7 @@ function renderHead() {
         <div class="th-sub"><span>代币 <span class="mono">${short(t.address, 8, 6)}</span> <span class="copy" data-copy="${t.address}">⧉</span></span><span>创建者 ${whoHtml(t.creator, t.creatorName || NAMES[String(t.creator || '').toLowerCase()])}</span>${t.firstBuyer ? `<span>首买 <a href="https://bscscan.com/address/${esc(t.firstBuyer)}" target="_blank" rel="noopener" title="${esc(t.firstBuyer)}">${whoHtml(t.firstBuyer, t.firstBuyerName || NAMES[t.firstBuyer.toLowerCase()])}</a></span>` : ''}</div>
         <div class="th-sub"><span>预设 ${t.preset}</span><span title="${fullTime(t.createdAt)}">${age(t.createdAt)} 前创建</span></div>
       </div>
-      <div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-head')}<a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}<a href="#" data-qbtoggle class="${qbOpen() ? 'qb-on' : ''}" title="显示 / 隐藏一键买卖面板">⚡ 一键买卖</a></div>${ruleBanner(t.address)}
+      <div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-head')}<a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}</div>${ruleBanner(t.address)}
       <div class="th-price"><div class="p">$${sub(t.priceUsd)}</div><div class="s">每枚 · ${sub(t.price)} ${esc(t.quote || 'BNB')}</div></div>
     </div>
     <div class="stats">
@@ -1713,17 +1713,23 @@ $('#favToggle').addEventListener('click', () => { try { localStorage.setItem('fa
 
 /* ---------- 一键买卖浮窗（GMGN 那种）：只在交易详情页显示，战壕不显示；可拖动，预设可编辑，点按钮 = 你手动下单（走同一套下单流程和检查） ---------- */
 const QB_DEF = { buy: [[0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5], [0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5], [0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5]], sell: [[10, 25, 50, 100, 5, 15, 35, 70], [10, 25, 50, 100, 5, 15, 35, 70], [10, 25, 50, 100, 5, 15, 35, 70]] };
-const QBP = (() => { let x = {}; try { x = JSON.parse(localStorage.getItem('qbPanel') || '{}'); } catch { /* ignore */ } return { open: x.open !== false, x: x.x ?? null, y: x.y ?? null, pb: x.pb || 0, ps: x.ps || 0, edit: false, adv: false }; })();
-const qbSave = () => { try { localStorage.setItem('qbPanel', JSON.stringify({ open: QBP.open, x: QBP.x, y: QBP.y, pb: QBP.pb, ps: QBP.ps })); } catch { /* ignore */ } };
+const QBP = (() => { let x = {}; try { x = JSON.parse(localStorage.getItem('qbPanel') || '{}'); } catch { /* ignore */ } return { open: x.open !== false, x: x.x ?? null, y: x.y ?? null, w: x.w ?? null, h: x.h ?? null, pb: x.pb || 0, ps: x.ps || 0, edit: false, adv: false }; })();
+const qbSave = () => { try { localStorage.setItem('qbPanel', JSON.stringify({ open: QBP.open, x: QBP.x, y: QBP.y, w: QBP.w, h: QBP.h, pb: QBP.pb, ps: QBP.ps })); } catch { /* ignore */ } };
 const qbOpen = () => QBP.open;
 const qbPresets = () => { const p = S.settings?.qbPresets; if (p) { try { localStorage.setItem('qbPresets', JSON.stringify(p)); } catch { /* ignore */ } return p; } try { return JSON.parse(localStorage.getItem('qbPresets') || 'null') || QB_DEF; } catch { return QB_DEF; } };
 function renderQB() {
   let el = $('#qbPanel');
   const show = QBP.open && S.view === 'trade' && !!S.selected && LIVE();
+  $('#qbToggleBtm')?.classList.toggle('qb-on', QBP.open);   // 底部标签栏右边的「⚡ 一键买卖」开关
   if (!show) { el?.classList.add('hidden'); return; }
-  if (!el) { el = document.createElement('div'); el.id = 'qbPanel'; el.className = 'qbp'; document.body.appendChild(el); qbBind(el); }
+  if (!el) {
+    el = document.createElement('div'); el.id = 'qbPanel'; el.className = 'qbp'; document.body.appendChild(el); qbBind(el);
+    if (QBP.w) el.style.width = QBP.w + 'px'; if (QBP.h) el.style.height = QBP.h + 'px';
+    // 右下角拖动改大小（长方形 / 正方形都行），松手后记住宽高；按钮按宽度自动排列、按高度变高
+    let rt = 0; new ResizeObserver(() => { if (!el.style.width && !el.style.height) return; clearTimeout(rt); rt = setTimeout(() => { if (el.classList.contains('hidden')) return; QBP.w = Math.round(el.offsetWidth); QBP.h = el.style.height ? Math.round(el.offsetHeight) : null; qbSave(); }, 300); }).observe(el);
+  }
   el.classList.remove('hidden');
-  if (QBP.x != null) { el.style.left = Math.max(0, Math.min(innerWidth - 300, QBP.x)) + 'px'; el.style.top = Math.max(46, Math.min(innerHeight - 120, QBP.y)) + 'px'; el.style.right = 'auto'; }
+  if (QBP.x != null) { el.style.left = Math.max(0, Math.min(innerWidth - Math.min(el.offsetWidth || 300, innerWidth), QBP.x)) + 'px'; el.style.top = Math.max(46, Math.min(innerHeight - 120, QBP.y)) + 'px'; el.style.right = 'auto'; }
   if (el.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;   // 正在改预设时不重画
   const t = S.tokens.get(S.selected) || { address: S.selected, symbol: '…' };
   const P = qbPresets(), hr = S.tokens.has(S.selected) ? holdRow(t) : null, w = wallet(S.activeWallet) || S.wallets[0];
@@ -1763,7 +1769,7 @@ function qbBind(el) {
     if (!e.target.closest('[data-qbdrag]') || e.target.closest('button')) return;
     const r = el.getBoundingClientRect(), ox = e.clientX - r.left, oy = e.clientY - r.top; el.setPointerCapture(e.pointerId);
     el.classList.add('dragging');
-    const mv = (ev) => { QBP.x = ev.clientX - ox; QBP.y = ev.clientY - oy; el.style.left = Math.max(0, Math.min(innerWidth - 300, QBP.x)) + 'px'; el.style.top = Math.max(46, Math.min(innerHeight - 120, QBP.y)) + 'px'; el.style.right = 'auto'; };
+    const mv = (ev) => { QBP.x = ev.clientX - ox; QBP.y = ev.clientY - oy; el.style.left = Math.max(0, Math.min(innerWidth - Math.min(el.offsetWidth, innerWidth), QBP.x)) + 'px'; el.style.top = Math.max(46, Math.min(innerHeight - 120, QBP.y)) + 'px'; el.style.right = 'auto'; };
     const up = () => { el.classList.remove('dragging'); el.removeEventListener('pointermove', mv); el.removeEventListener('pointerup', up); qbSave(); };
     el.addEventListener('pointermove', mv); el.addEventListener('pointerup', up);
   });
