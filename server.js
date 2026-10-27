@@ -18,6 +18,7 @@ import * as latency from './engine/live/latency.js';
 import { redactSecrets } from './engine/live/rpc.js';
 import { dataFile } from './engine/live/config.js';
 import { cache } from './engine/live/cache.js';
+import { fairPctBnb } from './engine/live/gangFair.js';
 
 // 日志脱敏：控制台 / live.log 里出现的 RPC 地址（含 NodeReal key）一律打码
 for (const k of ['log', 'info', 'warn', 'error']) { const f = console[k].bind(console); console[k] = (...a) => f(...a.map((x) => (typeof x === 'string' ? redactSecrets(x) : x instanceof Error ? redactSecrets(x.stack || x.message) : x))); }
@@ -478,6 +479,10 @@ async function costForPct(q) {
   if (!(pct > 0)) return ({ bnb: 0 });
   // Four Agent 专属币每个钱包最多持有总量 1%，超过的部分买不到，按 1% 算，避免反推出离谱的 BNB
   const tk = market.get?.(q.token); let capped = false; const asked = pct; const notes = [];
+  if (LIVE && tk && trader.fairMinting?.(tk)) {   // 打新认购：份数 × 单价（含认购费）
+    if (!tk.gangFair) await market.gangFairState?.(tk).catch(() => {});
+    if (tk.gangFair && !tk.gangFair.launched) { const f = fairPctBnb(tk.gangFair, pct); return { bnb: f.bnb, pct, capped: f.shares < Math.round(pct * 100), note: `打新认购 ${f.shares} 份（每地址上限 ${tk.gangFair.capShares} 份）` }; }
+  }
   // Four / Gang 都是单钱包最多持有总量 1%
   if ((tk?.platform === 'four' || tk?.platform === 'gang') && pct > 1) { pct = 1; capped = true; }
   let target = 1_000_000_000 * pct / 100;
@@ -557,7 +562,10 @@ async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, vi
     const local = () => Promise.all(wallets.map(async (w) => {
       let amt = amount;
       const tk = market.get(token);
-      if (side === 'buy' && Number(pctSupply) >= 1 && PCT_FAST_BNB > 0 && LIVE && tk && trader.useGangV2?.(tk)) amt = PCT_FAST_BNB;
+      if (side === 'buy' && Number(pctSupply) > 0 && LIVE && tk && trader.fairMinting?.(tk)) {   // 打新认购：N% = N% × 10000 份（夹到每地址上限），不另报价
+        if (!tk.gangFair) await market.gangFairState?.(tk).catch(() => {});
+        if (tk.gangFair && !tk.gangFair.launched) amt = fairPctBnb(tk.gangFair, pctSupply).bnb;
+      } else if (side === 'buy' && Number(pctSupply) >= 1 && PCT_FAST_BNB > 0 && LIVE && tk && trader.useGangV2?.(tk)) amt = PCT_FAST_BNB;
       else if (side === 'buy' && Number(pctSupply) >= 2 && PCT_FAST_FLAP_BNB > 0 && LIVE && tk && trader.useFlapNft?.(tk)) amt = flapFastBnb(w);
       else if (side === 'buy' && Number(pctSupply) > 0) {   // 每个钱包自己报价：买到总量的 X% 要多少 BNB
         const c = await costForPct({ wallet: w, token, pct: Number(pctSupply), slippage });

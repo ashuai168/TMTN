@@ -112,8 +112,10 @@ const divTip = (t) => {
 };
 // Gang V3（GangLaunchpad）：曲线和 V2 一样，毕业后外盘收买卖税；默认只报价
 const v3Tip = (t) => { const v = t.gangV3; return v ? `Gang V3 税收币：内盘只收 1% 手续费；毕业后外盘买税 ${v.buyTaxBps / 100}% / 卖税 ${v.sellTaxBps / 100}%，其中分红 ${v.dividendBps / 100}%${v.trade ? '' : '。真实买卖未开启（只报价）'}` : 'Gang V3'; };
-const gangKind = (t) => (t.gangTrack === 'v3' ? `<i class="tag gangy v3" title="${esc(v3Tip(t))}">V3${t.gangV3 && !t.gangV3.trade ? ' · 只报价' : ''}</i>` : t.gangTrack === 'v3fair' ? '<i class="tag gangy v3" title="Gang V3 打新：固定价认购，满 1 万份开盘；暂不支持在这里买卖">V3 打新</i>' : t.gangTrack === 'v2' && t.stage === 'curve' ? '<i class="tag gangy">Gang V2</i>' : '<i class="tag gangy">Gang 内盘</i>');
+const gangKind = (t) => (t.gangTrack === 'v3' ? `<i class="tag gangy v3" title="${esc(v3Tip(t))}">V3${t.gangV3 && !t.gangV3.trade ? ' · 只报价' : ''}</i>` : t.gangTrack === 'v3fair' ? (t.stage === 'dex' ? '<i class="tag gangy v3" title="Gang 打新币：1 万份已认购满，已在 PancakeSwap V2 开池；买卖走外盘">打新 · 已发射</i>' : `<i class="tag gangy v3" title="Gang 打新：固定价认购，满 1 万份在 PancakeSwap 开池；认购中不能在这里买卖">V3 打新${t.gangFair ? ` · 还差 ≥${t.gangFair.minWalletsLeft} 地址` : ''}</i>`) : t.gangTrack === 'v2' && t.stage === 'curve' ? '<i class="tag gangy">Gang V2</i>' : '<i class="tag gangy">Gang 内盘</i>');
 // 战壕卡片：Gang 盘标出是哪一版（老盘 V1 / V2 / V3 / V3 打新），角标也写成 G1 / G2 / G3
+// 打新币（认购中）：还差多少个地址才能打满（剩余份数 ÷ 每地址上限，向上取整；和 gang.fun 页面同一算法）
+const fairLeft = (t) => (t.gangFair && !t.gangFair.launched ? ` · 还差 ≥${t.gangFair.minWalletsLeft} 地址` : '');
 const gangVer = (t) => ({ v3: 'V3', v3fair: 'V3 打新', v2: 'V2' }[t.gangTrack] || 'V1');
 const gangVerChip = (t) => (t.platform !== 'gang' ? '' : `<i class="chip gv ${/^v3/.test(t.gangTrack || '') ? 'v3' : ''}" title="${esc(t.gangTrack === 'v3' ? v3Tip(t) : 'gang.fun ' + gangVer(t))}">Gang ${gangVer(t)}</i>`);
 const gangBadge = (t) => (/^v3/.test(t.gangTrack || '') ? 'G3' : t.gangTrack === 'v2' ? 'G2' : 'G1');
@@ -991,7 +993,7 @@ function renderMyPos(t) {
   const ps = S.positions.filter((p) => p.token === t.address);
   const sum = (k) => ps.reduce((a, p) => a + (p[k] || 0), 0);
   const hr = LIVE() ? holdRow(t) : null;   /* 实盘：和一键买卖、我的持仓用同一份持仓快照（报价币已按 BNB 价换算成美元） */
-  const plat = t.platform === 'four' ? 'Four · Agent ID 专属' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `Gang ${t.gangTrack === 'v3fair' ? 'V3 打新' : 'V3'} · 计价 ${esc(t.quote || '')}` : t.gangTrack === 'v2' ? `Gang V2 · 计价 ${esc(t.quote || '')}` : 'Gang · Agent ID 专属') : 'Flap · Agent 曲线';
+  const plat = t.platform === 'four' ? 'Four · Agent ID 专属' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `Gang ${t.gangTrack === 'v3fair' ? (t.stage === 'dex' ? '打新 · 已发射（外盘）' : 'V3 打新') : 'V3'} · 计价 ${esc(t.quote || '')}` : t.gangTrack === 'v2' ? `Gang V2 · 计价 ${esc(t.quote || '')}` : 'Gang · Agent ID 专属') : 'Flap · Agent 曲线';
   const tag = LIVE() ? `${plat} · 资格以合约为准` : t.platform === 'four' ? `Four：${eligible(wallet(S.activeWallet), t).ok ? '钱包已在白名单' : '钱包不在白名单'}` : `${plat}`;
   const usd = (v) => (v == null ? '—' : '$' + v.toFixed(2)), sgn = (v) => (v == null ? '—' : `<b class="${v >= 0 ? 'g' : 'r'}">${v >= 0 ? '+' : '−'}$${Math.abs(v).toFixed(2)}</b>`);
   let amt, rows;
@@ -1145,7 +1147,7 @@ function topPop(o) {
   let el = $('#topPop'); if (!el) { el = document.createElement('div'); el.id = 'topPop'; document.body.appendChild(el); }
   if (!o.wallet) POP.clear(); else POP.delete('_');   // 没有钱包名 = 页面刚提交（新的一次点击）；钱包结果回来后去掉「提交中」那行
   const now = Date.now(); for (const [k, v] of POP) if (v.o.status !== 'pending' && now - v.at > 10_000) POP.delete(k);
-  POP.set(o.wallet ? `${o.walletSlot ?? o.wallet}|${o.token || ''}` : '_', { o, at: now });
+  POP.set(o.wallet ? `${o.wallet}|${o.token || ''}` : '_', { o, at: now });   // 按钱包名：本钱包的订单推送时没有 walletSlot、接口返回时有，以前会算成两行（同一个失败显示两遍）
   const row = (o) => {
     const buy = o.side === 'buy', act = buy ? '买入' : '卖出';
     const amt = o.amountIn != null ? (buy ? `${bnb(o.amountIn)} BNB` : `${o.amountIn}%`) : '';
@@ -1335,7 +1337,7 @@ async function pulseBuy1(token) {
     try {
       const pct = qPct(t); topPop({ status: 'pending', side: 'buy', symbol: t.symbol });
       const r = [].concat(await api('/api/order', { wallets: ws, token: t.address, side: 'buy', amount: 0, pctSupply: pct, slippage: S.slippage, via: 'quick' }));
-      if (r.length && r.every((o) => o?.status === 'failed')) topPop({ status: 'failed', side: 'buy', symbol: t.symbol, reason: r.map((o) => o.reason).filter(Boolean).join('；') });
+      if (r.length && r.every((o) => o?.status === 'failed')) topPop({ status: 'failed', side: 'buy', symbol: t.symbol, reason: (() => { const u = [...new Set(r.map((o) => o.reason).filter(Boolean))]; return u.length > 1 ? r.filter((o) => o.reason).map((o) => `${o.wallet || ''}：${o.reason}`).join('；') : u[0] || ''; })() });   // 两个钱包同一个原因只显示一次
     } catch (e) { topPop({ status: 'failed', side: 'buy', symbol: t.symbol, reason: e.message }); }
     finally { pBusy.delete(token); }
     return;
@@ -2367,7 +2369,7 @@ function tcCard(t, k) {
   const hr = holdRow(t), myAmt = hr?.amount > 0 ? hr.amount : (S.positions || []).filter((p) => p.token === t.address && p.amount > 0).reduce((a, p) => a + p.amount, 0);
   const hp = myAmt > 0 ? { amount: myAmt, pct: hr?.amount > 0 ? hr.supplyPct : null } : null;
   const fb = t.firstBuyer ? (t.firstBuyerName || nameOf({ trader: t.firstBuyer }) || short(t.firstBuyer, 4, 4)) : '';
-  const route = curve ? `${esc(t.quote || 'BNB')} | ${amtFmt(t.raised)}/${amtFmt(t.target)} → ${prog.toFixed(1)}%` : `${esc(t.quote || 'BNB')} | 已迁移 DEX`;
+  const route = curve ? `${esc(t.quote || 'BNB')} | ${amtFmt(t.raised)}/${amtFmt(t.target)} → ${prog.toFixed(1)}%${fairLeft(t)}` : `${esc(t.quote || 'BNB')} | ${t.gangFair ? '打新已发射 · 外盘' : '已迁移 DEX'}`;
   return `<div class="tcard ${plat} ${hp ? 'held' : ''} " data-pa="${t.address}">
     <div class="tc-l"><div class="tc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: gangBadge(t) }[plat]}</i></div>
       <div class="tc-prog"><i style="width:${curve ? prog : 100}%"></i></div><div class="tc-dev ${isMe(t.creator) ? 'me' : ''}" title="创建者（Dev）：${esc(t.creator || '')}${isMe(t.creator) ? '（我）' : ''}">${esc(dev)}</div></div>
@@ -2388,7 +2390,7 @@ const amtFmt = (v) => amt(v);
 function tlCard(t) {
   const plat = platOf(t), curve = t.stage === 'curve', prog = Math.min(100, Number(t.progress) || 0), k = curve ? 'new' : 'dex', st = tcState.get(t.address);
   const dev = t.creatorName || (t.creator ? short(t.creator, 6, 4) : '');
-  const route = curve ? `${amtFmt(t.raised)}/${amtFmt(t.target)} ${esc(t.quote || 'BNB')} · ${prog.toFixed(1)}%` : `已迁移 DEX · ${esc(t.quote || 'BNB')}`;
+  const route = curve ? `${amtFmt(t.raised)}/${amtFmt(t.target)} ${esc(t.quote || 'BNB')} · ${prog.toFixed(1)}%${fairLeft(t)}` : `${t.gangFair ? '打新已发射 · 外盘' : '已迁移 DEX'} · ${esc(t.quote || 'BNB')}`;
   return `<div class="tlc ${plat} ${t.address === S.selected ? 'sel' : ''}" data-pa="${t.address}" title="${esc(t.name || t.symbol)}${dev ? ' · Dev ' + esc(dev) : ''}">
     <div class="tlc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: gangBadge(t) }[plat]}</i></div>
     <div class="tlc-m">
