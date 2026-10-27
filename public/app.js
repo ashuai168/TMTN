@@ -2028,7 +2028,7 @@ function renderQuoteBal() {
   const q = (HOLD.quote || []).filter((r) => !(r.valueUsd != null && r.valueUsd < 0.5));   // 价值不到 $0.5 的零头不显示（只是不显示，余额和换回逻辑不变）
   if (!q.length && !HOLD.quoteErr) { box.innerHTML = ''; return; }
   const busy = (a) => S.orders?.some((o) => o.status === 'pending' && String(o.token).toLowerCase() === a.toLowerCase());
-  box.innerHTML = `<div class="hq-h"><b>计价币余额</b><span class="hsub">Flap / Gang V2 买卖时中间换出来、还没换回 BNB 的币。按钮按点击那一刻的余额全部换回</span></div>
+  box.innerHTML = `<div class="hq-h"><b>计价币余额</b><span class="hsub">Flap / Gang V2 买卖时中间换出来、还没换回 BNB 的币。按钮按点击那一刻的余额全部换回</span><span class="spacer" style="flex:1"></span><button class="qb" data-q2ball title="${(HOLD.data?.wallets || []).length > 1 && !HOLD.wslot ? '所有「参与下单」的钱包' : '当前选中的钱包'}：每个计价币先报价，确认后才发交易">一键全部兑换成 BNB</button></div>
     ${HOLD.quoteErr ? `<div class="hsub r">读取失败：${esc(HOLD.quoteErr)}</div>` : ''}
     <table><tr><th class="l">币</th><th>余额</th><th>单价</th><th>价值 (BNB)</th><th>价值 (USD)</th><th class="l">操作</th></tr>
     ${q.map((r) => `<tr><td class="l"><b>${esc(r.symbol)}</b> <span class="hsub mono">${short(r.token, 6, 4)}</span></td><td class="mono">${esc(r.balance)}</td><td>${r.priceUsd ? usd(r.priceUsd) : '—'}</td>
@@ -2056,6 +2056,38 @@ async function quoteToBnb(token) {
     <button class="big-btn sell" id="confirmGo">确认换回 BNB</button>`;
   $('#confirmModal').classList.remove('hidden');
   $('#confirmGo').onclick = () => { $('#confirmModal').classList.add('hidden'); go(); };
+}
+// 一键全部兑换成 BNB：全部钱包模式 = 所有「参与下单」的钱包，选了某个钱包 = 只那一个。先给每个钱包 × 计价币报价（不发交易），确认框列出来；确认后各钱包同时换、同一钱包按顺序
+async function quoteSweepAll() {
+  note('正在按每个钱包当前余额报价…', 'info');
+  let plan; try { plan = await api('/api/quote-to-bnb/plan', { slot: HOLD.wslot || 0, slippage: 1 }); } catch (e) { return toast({ status: 'failed', symbol: '一键换回 BNB', reason: e.message }); }
+  const ok = (w) => !w.error && w.auth === 'ok', todo = plan.filter((w) => ok(w) && w.items.length);
+  const total = todo.reduce((a, w) => a + w.items.reduce((x, i) => x + (i.out || 0), 0), 0);
+  const why = (w) => (w.error ? `<span class="r">${esc(w.error)}</span>` : !ok(w) ? '<span class="r">币安钱包未登录，跳过</span>' : '<span class="hsub">没有要换的计价币</span>');
+  $('#confirmBody').innerHTML = `
+    ${plan.map((w) => `<div class="kv"><span><b>${esc(w.label)}</b></span><b>${ok(w) && w.items.length ? `${w.items.length} 个币` : why(w)}</b></div>
+      ${ok(w) ? w.items.map((i) => `<div class="kv"><span>${esc(String(i.balance))} ${esc(i.symbol)}<br><span class="hsub">${esc(i.route)}</span></span><b class="g">≈ ${bnb(i.out, 6)} BNB</b></div>`).join('') : ''}
+      ${(w.skipped || []).map((i) => `<div class="kv"><span class="hsub">${esc(String(i.balance))} ${esc(i.symbol)}</span><span class="hsub">跳过：${esc(i.reason)}</span></div>`).join('')}`).join('<hr style="border:0;border-top:1px solid var(--line,#2b3139);margin:6px 0">')}
+    ${todo.length ? `<div class="kv"><span>合计预计到手</span><b class="g">${bnb(total, 6)} BNB</b></div>
+    <div class="note" style="color:#f6465d">真实交易：每个币一笔（Ondo 类经 USDT 两笔），用各自的币安 Agentic 钱包上链，无法撤回。按点击时的余额全部换，滑点 1%；如果币安 App 弹出确认，请在 App 里处理。</div>
+    <button class="big-btn sell" id="confirmGo">确认全部换回 BNB</button>` : '<div class="note">没有可以换的计价币（零头和没有路线的已跳过）。</div>'}`;
+  $('#confirmModal').classList.remove('hidden');
+  if (!todo.length) return;
+  $('#confirmGo').onclick = async () => {
+    $('#confirmModal').classList.add('hidden');
+    topPop({ status: 'pending', side: 'sell', symbol: '计价币全部换回 BNB' });
+    let res; try { res = await api('/api/quote-to-bnb/sweep', { plan: todo.map((w) => ({ slot: w.slot, tokens: w.items.map((i) => i.token) })), slippage: 1 }); }
+    catch (e) { POP.clear(); topPop({ status: 'failed', side: 'sell', symbol: '计价币全部换回 BNB', reason: e.message }); return; }
+    // 一个弹窗：每个钱包 × 币一行（钱包名开头）；没有要换的钱包灰色「无余额」
+    POP.clear();
+    for (const w of plan) {
+      const r = res.find((x) => x.slot === w.slot), base = { wallet: w.label, walletSlot: w.slot, side: 'sell' };
+      if (!r) { if (ok(w)) topPop({ ...base, token: '', status: 'failed', noBalance: true, symbol: '计价币' }); else topPop({ ...base, token: '', status: 'failed', symbol: '计价币', reason: w.error || '币安钱包未登录' }); continue; }
+      if (r.error) topPop({ ...base, token: '', status: 'failed', symbol: '计价币', reason: r.error });
+      for (const o of r.orders) topPop({ ...base, token: o.token, status: o.status, stage: o.stage, symbol: `${o.symbol || '?'} → BNB`, out: o.out, tx: o.tx, reason: o.reason });
+    }
+    setTimeout(() => loadQuoteBal(true), 3000); setTimeout(() => loadHold(true), 8000);
+  };
 }
 // 带正负号的数：格式化用绝对值，避免小数格式化函数遇到负数出 NaN
 const sgn = (v, f) => (v == null || !isFinite(v) ? '—' : `<span class="${v >= 0 ? 'g' : 'r'}">${v >= 0 ? '+' : '−'}${f(Math.abs(v))}</span>`);
@@ -2096,6 +2128,7 @@ document.addEventListener('click', (e) => {
   const chip = e.target.closest('#holdPlats [data-hp]');
   if (chip) { const p = chip.dataset.hp; if (HOLD.plats.has(p)) { if (HOLD.plats.size > 1) HOLD.plats.delete(p); } else HOLD.plats.add(p); try { localStorage.setItem('holdPlats', JSON.stringify([...HOLD.plats])); } catch { /* ignore */ } return renderHold(); }
   if (e.target.closest('[data-hshow]')) { e.preventDefault(); $('#holdDust').checked = false; return renderHold(); }
+  const q2a = e.target.closest('[data-q2ball]'); if (q2a) { e.stopPropagation(); q2a.disabled = true; quoteSweepAll().finally(() => { q2a.disabled = false; }); return; }
   const q2b = e.target.closest('[data-q2b]'); if (q2b) { e.stopPropagation(); q2b.disabled = true; quoteToBnb(q2b.dataset.q2b).finally(() => { q2b.disabled = false; }); return; }
   const sell = e.target.closest('[data-hsell]');
   if (sell) { e.stopPropagation(); const [w, tk, pct] = sell.dataset.hsell.split(':'); return submitOrder({ token: tk, side: 'sell', wallets: [w], amountFor: () => +pct }); }
@@ -2118,10 +2151,18 @@ const TR = (() => {
   let s = null; try { s = JSON.parse(localStorage.getItem('trench') || 'null'); } catch { /* ignore */ }
   const st = s && s.cols ? s : { cols: {}, hidden: [] };
   for (const k of Object.keys(TCOLS)) st.cols[k] = { preset: 1, presets: { 1: defPreset(), 2: defPreset(), 3: defPreset() }, q: '', sound: false, sort: 'pct', showHidden: false, ...(st.cols[k] || {}) };
+  // 市值筛选改成以 K（千美元）为单位：旧存档里是美元，除以 1000 换算一次
+  if (!st.mcUnitK) {
+    const toK = (v) => { const x = Number(v); return v === '' || v == null || !isFinite(x) ? v : String(+(x / 1000).toFixed(6)); };
+    for (const k of Object.keys(TCOLS)) for (const p of Object.values(st.cols[k].presets || {})) if (p?.f) { p.f.minMc = toK(p.f.minMc); p.f.maxMc = toK(p.f.maxMc); }
+    st.mcUnitK = true; try { localStorage.setItem('trench', JSON.stringify(st)); } catch { /* ignore */ }
+  }
   return st;
 })();
 const trSave = () => { try { localStorage.setItem('trench', JSON.stringify(TR)); } catch { /* ignore */ } };
 const P = (k) => TR.cols[k].presets[TR.cols[k].preset];
+// 市值输入以 K（千美元）为单位：「5」「5k」= $5K，「1.2m」= $1.2M，全角数字也认；返回美元，解析不了当作不限
+const mcK = (v) => { if (v === '' || v == null) return null; const s = String(v).replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).trim().toLowerCase(); const x = parseFloat(s.replace(/[^\d.]/g, '')); return isFinite(x) ? x * (/m/.test(s) ? 1e6 : 1e3) : null; };
 // 税率输入宽松解析：「10%」「１０」「 5 」都认；解析不了当作不限
 const taxNum = (v) => { if (v === '' || v == null) return null; const x = parseFloat(String(v).replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[^\d.]/g, '')); return isFinite(x) ? x : null; };
 // 税率条件是全局的：三列 × P1-P3 都用同一个，切预设也不会「突然失效」
@@ -2183,7 +2224,7 @@ function tcFilterSummary(k) {
   if (f.plats.length < 3) x.push('平台 ' + f.plats.join('/'));
   if (f.maxTax !== '' && f.maxTax != null) x.push(`税率 ≤ ${f.maxTax}%`);
   if (f.hideUnknownTax) x.push('隐藏税率未知');
-  if (f.minMc || f.maxMc) x.push(`市值 ${f.minMc || 0}~${f.maxMc || '∞'}`);
+  if (f.minMc || f.maxMc) x.push(`市值 ${f.minMc || 0}K~${f.maxMc || '∞'}K`);
   if (f.minAge || f.maxAge) x.push(`创建 ${f.minAge || 0}~${f.maxAge || '∞'} 分钟`);
   if (f.minHolders) x.push(`持有人 ≥ ${f.minHolders}`);
   if (f.minProg) x.push(`进度 ≥ ${f.minProg}%`);
@@ -2195,7 +2236,7 @@ function tcFilterPop(k) {
   const f = P(k).f;
   return `<div class="tc-pop" data-tpop="${k}">
     <div class="tp-row"><span>平台</span>${PLATS.map((p) => `<label><input type="checkbox" data-tfp="${k}:${p}" ${f.plats.includes(p) ? 'checked' : ''}/>${{ flap: 'Flap', four: 'Four', gang: 'Gang' }[p]}</label>`).join('')}</div>
-    <div class="tp-row"><span>市值 $</span><input data-tff="${k}:minMc" value="${f.minMc}" placeholder="最低"/><input data-tff="${k}:maxMc" value="${f.maxMc}" placeholder="最高"/></div>
+    <div class="tp-row"><span>市值（K$）</span><input data-tff="${k}:minMc" value="${f.minMc}" placeholder="最低，如 5"/><input data-tff="${k}:maxMc" value="${f.maxMc}" placeholder="最高，如 50"/></div>
     <div class="tp-row"><span>持有人 ≥</span><input data-tff="${k}:minHolders" value="${f.minHolders}"/><span>进度 ≥ %</span><input data-tff="${k}:minProg" value="${f.minProg}"/></div>
     <div class="tp-row"><span>报价币</span><input data-tff="${k}:quote" value="${esc(f.quote)}" placeholder="BNB, BNCB…"/><label><input type="checkbox" data-tfs="${k}" ${f.social ? 'checked' : ''}/>有社交链接</label></div>
     <div class="tp-row"><span>最高税率 %</span><input data-tff="${k}:maxTax" value="${f.maxTax ?? ''}" placeholder="如 5"/><label><input type="checkbox" data-tfu="${k}" ${f.hideUnknownTax ? 'checked' : ''}/>税率未知也隐藏</label><button class="qb" data-tfall="${k}" title="把这一列的税率条件复制到三列">应用到全部列</button></div>
@@ -2207,8 +2248,9 @@ function tcMatch(k, t) {
   if (!f.plats.includes(platOf(t))) return false;
   if (isBlocked(t)) return false;
   const n = (v) => (v === '' || v == null ? null : Number(v));
-  if (n(f.minMc) != null && !((t.mcapUsd || 0) >= n(f.minMc))) return false;
-  if (n(f.maxMc) != null && !((t.mcapUsd || 0) <= n(f.maxMc))) return false;
+  const mcMin = mcK(f.minMc), mcMax = mcK(f.maxMc);
+  if (mcMin != null && !((t.mcapUsd || 0) >= mcMin)) return false;
+  if (mcMax != null && !((t.mcapUsd || 0) <= mcMax)) return false;
   if (n(f.minHolders) != null && !((t.holders || 0) >= n(f.minHolders))) return false;
   if (n(f.minProg) != null && !((t.progress || 0) >= n(f.minProg))) return false;
   // 创建时间（分钟）：从创建到现在过了多久，最少 ~ 最多
@@ -2478,7 +2520,7 @@ function tfModal(k) {
           <div class="tfm-chips">${PLATS.map((p) => `<button class="tfm-c pf-${p}${dr.plats.includes(p) ? ' on' : ''}" data-plat="${p}">${PN[p]}</button>`).join('')}</div></div>
         <div class="tfm-s"><div class="tfm-t"><span>报价代币</span><span class="muted">不选 = 全部</span></div>
           <div class="tfm-chips">${quotes.map((q) => `<button class="tfm-c${qs.has(q) ? ' on' : ''}" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>
-        <div class="tfm-s"><div class="tfm-t"><span>市值 $</span></div><div class="tfm-row"><input data-f="minMc" value="${esc(dr.minMc)}" placeholder="最低"/><span>~</span><input data-f="maxMc" value="${esc(dr.maxMc)}" placeholder="最高"/></div></div>
+        <div class="tfm-s"><div class="tfm-t"><span>市值（K$）</span><span class="muted">填 5 = $5K</span></div><div class="tfm-row"><input data-f="minMc" value="${esc(dr.minMc)}" placeholder="最低，如 5"/><span>~</span><input data-f="maxMc" value="${esc(dr.maxMc)}" placeholder="最高，如 50"/></div></div>
         <div class="tfm-s"><div class="tfm-t"><span>创建时间（分钟）</span><span class="muted">创建到现在过了多久</span></div><div class="tfm-row"><input data-f="minAge" value="${esc(dr.minAge ?? '')}" placeholder="最少，如 0"/><span>~</span><input data-f="maxAge" value="${esc(dr.maxAge ?? '')}" placeholder="最多，如 5"/></div></div>
         <div class="tfm-s tfm-2"><div><div class="tfm-t"><span>持有人 ≥</span></div><input data-f="minHolders" value="${esc(dr.minHolders)}" placeholder="不限"/></div>
           <div><div class="tfm-t"><span>进度 ≥ %</span></div><input data-f="minProg" value="${esc(dr.minProg)}" placeholder="不限"/></div></div>
