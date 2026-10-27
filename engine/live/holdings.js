@@ -4,11 +4,14 @@
 import * as baw from './baw.js';
 import { QUOTE_TOKENS } from './config.js';
 import { ethers } from 'ethers';
+import { cache } from './cache.js';
 
 const HIST_MS = 60_000;
 const lc = (a) => String(a || '').toLowerCase();
 const BNB = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const WBNB = lc(QUOTE_TOKENS.WBNB);
+// 一笔钱包交易的唯一键：它的链上交易哈希（没有就用时间 + 内容）
+const txId = (t) => (t.txHashList || []).map((h) => h.txHash).filter(Boolean).join(',') || t.id || `${t.txTime}:${JSON.stringify(t).length}`;
 
 export class Holdings {
   constructor(market, trader) { this.market = market; this.trader = trader; this.hist = new Map(); this.histAt = 0; this.loading = null; this.swaps = new Map(); this.checks = new Map(); this.bnbH = new Map(); }
@@ -16,13 +19,16 @@ export class Holdings {
   // 历史 BNB/USDT 价格：币安 1 小时 K 线（每根取开盘和收盘的平均），用来把每笔成交的 BNB 折成当时的美元
   async loadBnbHourly(fromMs) {
     const H = 3600_000; let start = Math.floor(fromMs / H) * H; const end = Date.now();
+    if (!this.bnbHDb) { const rows = await cache.loadBnbHourly(start).catch(() => null); if (rows) { this.bnbHDb = true; for (const [h, px] of rows) this.bnbH.set(h, px); } }   // MySQL 缓存：存过的小时价不再请求币安
+    const fresh = [];
     while (start < end) {
       if (this.bnbH.has(start) && start < end - 2 * H) { start += H; continue; }
       const j = await (await fetch(`https://api.binance.com/api/v3/klines?symbol=BNBUSDT&interval=1h&startTime=${start}&limit=1000`)).json();
       if (!Array.isArray(j) || !j.length) break;
-      for (const k of j) this.bnbH.set(k[0], (Number(k[1]) + Number(k[4])) / 2);
+      for (const k of j) { const px = (Number(k[1]) + Number(k[4])) / 2; this.bnbH.set(k[0], px); if (k[0] < end - 2 * H) fresh.push([k[0], px]); }   // 最近 2 小时的还会变，不存
       start = j.at(-1)[0] + H;
     }
+    if (this.bnbHDb && fresh.length) cache.saveBnbHourly(fresh).catch(() => {});
   }
   usdAt(ts) { const v = this.bnbH.get(Math.floor(ts / 3600_000) * 3600_000); return v || this.market.bnbUsd || 0; }
 
@@ -41,11 +47,20 @@ export class Holdings {
     if (!force && Date.now() - this.histAt < HIST_MS) return;
     if (this.loading) return this.loading;
     this.loading = (async () => {
-      const txs = []; let cursor = null;
+      // MySQL 缓存：钱包交易记录存下来，之后只翻到碰上已存的、已确认的那笔为止（通常 1 页），不再每次翻 5 页
+      const wallet = this.trader.wallets?.[0]?.address; const stored = wallet ? await cache.loadWalletTx(wallet, 500).catch(() => null) : null;
+      const known = new Set((stored || []).filter((t) => t.status === 'confirmed').map(txId));
+      let txs = []; let cursor = null;
       for (let i = 0; i < 5; i++) {
         const args = ['wallet', 'tx-history', '--binanceChainId', '56', '--size', '100']; if (cursor) args.push('--nextCursor', cursor);
         const d = (await baw.runBaw(args, { timeoutMs: 30_000 })).data || {};
         txs.push(...(d.transactions || [])); cursor = d.nextCursor; if (!cursor || !(d.transactions || []).length) break;
+        if (known.size && (d.transactions || []).some((t) => known.has(txId(t)))) break;   // 接上已存的了
+      }
+      if (stored) {
+        cache.saveWalletTx(wallet, txs, txId).catch(() => {});
+        const m = new Map(stored.map((t) => [txId(t), t])); for (const t of txs) m.set(txId(t), t);
+        txs = [...m.values()].sort((a, b) => (Date.parse(b.txTime) || 0) - (Date.parse(a.txTime) || 0)).slice(0, 500);   // 和以前一样最多最近 500 笔
       }
       const minTs = Math.min(...txs.map((t) => Date.parse(t.txTime)).filter(Number.isFinite));
       if (isFinite(minTs)) await this.loadBnbHourly(minTs).catch(() => {});   // 拿不到就用现价

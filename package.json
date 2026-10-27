@@ -19,5 +19,9 @@
     "express": "5.1.0",
     "ws": "8.18.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "optionalDependencies": {
+    "ioredis": "5.11.1",
+    "mysql2": "3.24.6"
+  }
 }

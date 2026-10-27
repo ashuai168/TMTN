@@ -17,6 +17,7 @@ import { DexFeed, dexBars, compactCandles } from './dexFeed.js';
 import { NameCache } from './names.js';
 import { ShrineFeeds, tokenInfo } from './shrine.js';
 import * as fsi from './fsi.js';
+import { cache } from './cache.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 const FOUR_REG = dataFile('fourTokens.json');
 const FLAP_REG = dataFile('flapCreated.json');
@@ -505,14 +506,23 @@ export class LiveMarket extends EventEmitter {
     if (t.dexAt && Date.now() - t.dexAt < 20_000) { merge(); return; } t.dexAt = Date.now();
     try {
       {
-        const r = await (await fetch('https://api.dexscreener.com/tokens/v1/bsc/' + t.address)).json();
+        const r = await cache.fetchJson('https://api.dexscreener.com/tokens/v1/bsc/' + t.address, 15);   // Redis 共用 15 秒（几个钱包后端同时看同一个币时只请求一次）
         const ps = (Array.isArray(r) ? r : []).filter((p) => String(p.baseToken?.address).toLowerCase() === t.address && +p.priceUsd).sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
         if (!ps[0]) return; t.dexPool = ps[0].pairAddress; t.dexPoolAt = Date.now();
         Object.assign(t, { pair: ps[0].pairAddress, dexLiqUsd: ps[0].liquidity?.usd || 0, dexMcapUsd: +ps[0].marketCap || +ps[0].fdv || 0, dexPriceUsd: +ps[0].priceUsd });
       }
       const q = this.quoteUsd(t); if (!q) return;
-      const j = await (await fetch(`https://api.geckoterminal.com/api/v2/networks/bsc/pools/${t.dexPool}/ohlcv/minute?aggregate=1&limit=1000&currency=usd&token=${t.address}`, { headers: { accept: 'application/json' } })).json();
-      const list = (j?.data?.attributes?.ohlcv_list || []).slice().sort((a, b) => a[0] - b[0]);
+      const j = await cache.fetchJson(`https://api.geckoterminal.com/api/v2/networks/bsc/pools/${t.dexPool}/ohlcv/minute?aggregate=1&limit=1000&currency=usd&token=${t.address}`, 15, { headers: { accept: 'application/json' } });
+      let list = (j?.data?.attributes?.ohlcv_list || []).slice().sort((a, b) => a[0] - b[0]);
+      // MySQL 缓存：分钟 K 线存下来，接口只给最近 1000 根，更早的从库里接上（重启后也在）
+      if (list.length) {
+        if (t._barsPool !== t.dexPool) { const old = await cache.loadBars(t.dexPool, 4000).catch(() => null); Object.assign(t, { _barsPool: t.dexPool, _barT: 0, _usdBars: old ? new Map(old.map((x) => [x[0], x])) : null }); }
+        if (t._usdBars) {
+          cache.saveBars(t.dexPool, list.filter((x) => x[0] >= t._barT)).catch(() => {}); t._barT = list.at(-1)[0];   // 只存新的（最后一根会变，所以含等于）
+          for (const x of list) t._usdBars.set(x[0], x);
+          list = [...t._usdBars.values()].sort((a, b) => a[0] - b[0]).slice(-4000); if (t._usdBars.size > 4500) t._usdBars = new Map(list.map((x) => [x[0], x]));
+        }
+      }
       if (!list.length) {   // GeckoTerminal 没收录这个池子：用 DexScreener 实时价按分钟攒 K 线
         const p = t.dexPriceUsd / q, m = Math.floor(Date.now() / 60_000) * 60; t.dexBars = t.dexBars || []; const l = t.dexBars[t.dexBars.length - 1];
         if (l && l.t === m) { l.h = Math.max(l.h, p); l.l = Math.min(l.l, p); l.c = p; } else t.dexBars.push({ t: m, o: l ? l.c : p, h: Math.max(p, l ? l.c : p), l: Math.min(p, l ? l.c : p), c: p, v: 0, dex: 1 });

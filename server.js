@@ -15,6 +15,7 @@ import { MODE, LIVE_TRADE, WALLET_SLOT, WALLET_PEERS, BAW_DIR, WALLET_LABEL } fr
 import * as latency from './engine/live/latency.js';
 import { redactSecrets } from './engine/live/rpc.js';
 import { dataFile } from './engine/live/config.js';
+import { cache } from './engine/live/cache.js';
 
 // 日志脱敏：控制台 / live.log 里出现的 RPC 地址（含 NodeReal key）一律打码
 for (const k of ['log', 'info', 'warn', 'error']) { const f = console[k].bind(console); console[k] = (...a) => f(...a.map((x) => (typeof x === 'string' ? redactSecrets(x) : x instanceof Error ? redactSecrets(x.stack || x.message) : x))); }
@@ -201,6 +202,8 @@ app.post('/api/quote-to-bnb', async (req, res) => { if (!LIVE) return res.status
 app.get('/api/trades/:token', async (req, res) => { try { const v = LIVE ? await market.tradesPage(req.params.token, Number(req.query.before) || 0, Math.min(500, Number(req.query.limit) || 100)) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/trader/:token/:addr', async (req, res) => { try { const v = LIVE ? await market.traderStats(req.params.token, req.params.addr) : null; v ? res.json(v) : res.status(404).json({ error: '没有数据' }); } catch (e) { res.status(500).json({ error: e.message }); } });
 app.get('/api/rpc-usage', (req, res) => res.json(rpcUsageLog));
+app.get('/api/cache-status', (req, res) => res.json(cache.status()));   // 历史数据缓存（MySQL / Redis）是否启用、连上没有、命中次数
+cache.mysql(); cache.redis();   // 启动时先连一下（没配置就什么都不做），日志里能看到连上没有
 // 页面布局偏好（左侧钱包追踪栏开 / 关、宽度）：服务器也存一份，浏览器数据丢了或换了地址也能恢复
 const UI_PREFS = path.join(DATA_DIR_UI, 'ui-prefs.json');
 app.get('/api/ui-prefs', (req, res) => { try { res.json(JSON.parse(fs.readFileSync(UI_PREFS, 'utf8'))); } catch { res.json({}); } });

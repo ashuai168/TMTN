@@ -3,6 +3,7 @@
 // 最近有成交的几个盘每 10 秒拉一次成交，进成交流和 K 线。V2 盘的价格和金额按报价币美元价换算成 BNB。
 // 下单在 gangTrade.js：老盘（0x315B…23A7，BNB 计价）支持内盘买卖；V2 报价币盘只看行情。
 import { EventEmitter } from 'node:events';
+import { cache } from './cache.js';
 
 const API = 'https://gang.fun/api';
 const LIST_MS = 5_000, LIST_SLOW_MS = 20_000, TRADES_MS = 10_000, HOT = 5;
@@ -103,14 +104,21 @@ export class GangFun extends EventEmitter {
   }
 
   // 全部成交历史（翻页，最多 max 条），只用来从开盘起重建 K 线，不当作新成交推送。返回按时间升序的 { ts, price, bnb }
+  // 有 MySQL 缓存：从最新往回翻，接上库里最新的那笔（多翻 5 分钟重叠）就停，旧的从库里读。cursor = 1 表示库里已经从开盘起拉全
   async history(address, max = 4000) {
-    const v2 = this.v2.get(address); const out = [];
-    for (let off = 0; off < max;) {
-      const j = await this.get(`${v2 ? '/stocks' : ''}/tokens/${address}/trades?limit=200&offset=${off}&sort=ts_desc`);
-      for (const x of j.items || []) out.push({ ts: x.ts * 1000, price: Number(x.price), bnb: GangFun.amt(x, v2), tx: x.tx, side: x.side, trader: x.trader, name: x.traderHandle || null, tokens: Number(x.tokens) });
-      if (!j.hasMore || !j.nextOffset) break; off = j.nextOffset; await sleep(250);
-    }
-    return out.reverse();
+    const v2 = this.v2.get(address);
+    const rows = await cache.history('gang', address, async (cur, old) => {
+      const have = old?.rows || [], stopAt = have.length ? have.at(-1).ts - 300_000 : 0; const out = []; let full = false;
+      for (let off = 0; off < max;) {
+        const j = await this.get(`${v2 ? '/stocks' : ''}/tokens/${address}/trades?limit=200&offset=${off}&sort=ts_desc`);
+        for (const x of j.items || []) out.push({ ts: x.ts * 1000, price: Number(x.price), bnb: GangFun.amt(x, v2), tx: x.tx, side: x.side, trader: x.trader, name: x.traderHandle || null, tokens: Number(x.tokens) });
+        if (!j.hasMore || !j.nextOffset) { full = true; break; }
+        if (stopAt && out.at(-1)?.ts < stopAt && (cur === 1 || have.length + out.length >= max)) { full = cur === 1; break; }   // 接上已存的了
+        off = j.nextOffset; await sleep(250);
+      }
+      return { rows: out.reverse(), cursor: full ? 1 : 0 };
+    }, (x) => `${x.tx}:${x.side}:${x.tokens}`);
+    return rows.length > max ? rows.slice(-max) : rows;
   }
 
   // 拉一个盘的成交（选中代币时也会调用，limit 大一些用来画 K 线）

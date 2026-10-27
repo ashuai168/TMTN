@@ -89,6 +89,10 @@ scripts/add-wallet.sh --peers --write-env         # 写进 .env 的 WALLET_PEERS
 
 页面右上角的钱包菜单里打开钱包 2 的「参与下单」后：买入时每个钱包各花输入的 BNB；卖出时每个钱包卖自己持仓的同样比例；两个钱包并行执行，结果分别提示。没登录 / 后端没启动的钱包自动跳过。持仓页可以看全部钱包合并，或者只看某一个钱包。
 
+### 历史数据缓存（可选，MySQL + Redis）
+
+配上之后，各盘从开盘起的成交、外盘分钟 K 线、BNB 小时价、钱包交易记录会存进 MySQL，重启或再次点开同一个币只补新的（Gang 大盘从翻 100 页变成 1 页，Four / Flap 门槛盘不再从创建区块重扫）。不配也照常运行，数据库连不上时自动走原来的路径。步骤见 **[docs/cache.md](docs/cache.md)**。
+
 ### 环境变量
 
 | 变量 | 默认 | 说明 |
@@ -113,6 +117,8 @@ scripts/add-wallet.sh --peers --write-env         # 写进 .env 的 WALLET_PEERS
 | `DATA_DIR` | `data/` | 数据目录（多钱包时每个后端各用一个） |
 | `WALLET_SLOT` / `WALLET_PEERS` | `1` / `[]` | 多钱包：本后端是第几个钱包 / 一起下单的其他钱包后端 |
 | `WALLET_ADDRESS` | （空） | 本后端只允许这个钱包地址；baw 登录成别的账号时拒绝使用（防止拿错账号下单） |
+| `MYSQL_URL` | （空） | 可选：历史数据缓存的 MySQL，如 `mysql://tmtn:密码@127.0.0.1:13306/tmtn`（只放 `.env`），见 [docs/cache.md](docs/cache.md) |
+| `REDIS_URL` | （空） | 可选：接口短时缓存的 Redis，如 `redis://127.0.0.1:16379` |
 | `FEEDS_PUBLIC` | `0` | `1` = 行情订阅只用公共节点（第二个钱包的后端用，省 NodeReal 额度） |
 | `NAME_RPC` | publicnode / bnbchain（逗号分隔） | 解析 `.ai` 域名用的 RPC |
 | `BSC_TESTNET_RPC` | `https://data-seed-prebsc-1-s1.bnbchain.org:8545` | 测试网 RPC（模拟 / 测试网钱包用） |

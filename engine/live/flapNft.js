@@ -12,6 +12,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { ethers } from 'ethers';
 import { dataFile, NODEREAL_WSS, ZERO } from './config.js';
 import { WsLogs, PUBLIC_WSS } from './rpc.js';
+import { cache } from './cache.js';
 import { capFor, capLabel, sendApproval } from './approvals.js';
 
 export const FLAP_PORTAL = '0xe2cE6ab80874Fa9Fa2aAE65D277Dd6B8e65C9De0';
@@ -117,9 +118,13 @@ export class FlapNft extends EventEmitter {
     const k = String(token).toLowerCase(), g = this.reg.tokens[k]; if (!g) return Promise.resolve([]);
     const h = this.hist.get(k) || {}; if (h.p) return h.p;
     h.p = this.histQ = this.histQ.catch(() => {}).then(async () => {
+      if (!h.to && !h.db) {   // 第一次：先从 MySQL 缓存读出已补过的成交，只补那之后的（往回多查 15 块防重组）
+        const c = await cache.loadTrades('flap-nft', k).catch(() => null); h.db = !!c;
+        if (c?.cursor) { for (const tr of c.rows) this.keep(tr); h.to = Math.max(0, c.cursor - 15); }
+      }
       const head = await this.provider.getBlockNumber();
       const from = h.to ? h.to + 1 : g.block || head - BACKFILL, to = g.dexBlock ? Math.min(head, g.dexBlock) : head;
-      if (from <= to) { for (const tr of await this.tradesAt(await this.portalBlocks([k], from, to))) this.keep(tr); h.to = to; }
+      if (from <= to) { const got = await this.tradesAt(await this.portalBlocks([k], from, to)); for (const tr of got) this.keep(tr); h.to = to; if (h.db) cache.saveTrades('flap-nft', k, got, to, (x) => `${x.tx}:${x.idx}`).catch(() => {}); }
       h.at = Date.now(); return this.trades(k);
     }).finally(() => { h.p = null; });
     this.hist.set(k, h); return h.p;

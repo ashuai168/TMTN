@@ -5,6 +5,7 @@ import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
 import { maskRpc, FailoverProvider, WsLogs, PUBLIC_WSS } from './rpc.js';
 import { env, NODEREAL_URLS, NODEREAL_WSS } from './config.js';
+import { cache } from './cache.js';
 
 export const CORE = '0xebe7b6c1089d9f72ad07f34e36d898e44e5e27f3';
 export const AGENT_ID_TEMPLATE = 1778027615735n;
@@ -17,6 +18,7 @@ const FALLBACK_LOG_RPC = 'https://bsc-rpc.publicnode.com';
 // 启动时回补的区块数：以前是 2 万块（BSC 出块快，只有两三个小时），更早发射、又没进 data/fourTokens.json 的盘（如 4AGENT）就再也不出现，「已迁移」里也看不到。
 // 改成 15 万块（约一天），回补完的盘都会存进 fourTokens.json，之后重启从那里恢复
 const BACKFILL = Number(env('FOUR_BACKFILL_BLOCKS', 150000));
+const REORG = 15;   // 增量补历史时往回多查的区块数
 const POLL_MS = 1000, POLL_SLOW_MS = 3000;
 // 限流自动降速：连续 3 次限流 → 退回旧间隔 3000ms，冷却 10 分钟后再试快速
 const RL_RE = /429|rate.?limit|too many requests|-32005|limit exceeded|限流/i;
@@ -108,19 +110,24 @@ export class FourMeme extends EventEmitter {
   }
 
   // 某个币从创建到现在的全部成交（链上 TradeExecuted，按 token 过滤），旧→新
+  // 有 MySQL 缓存时只查上次查到的区块之后（往回多查 REORG 块防重组），旧的从库里读
   async tokenTrades(token) {
-    const info = await this.core.tokens(token).catch(() => null);
-    const head = await this.provider.getBlockNumber(); let from = Number(info?.createBlock || 0) || head - BACKFILL;
-    const out = [];
-    for (; from <= head; from += STEP) {
-      const logs = await this.logs([T_TRADE, ethers.zeroPadValue(token, 32)], from, Math.min(from + STEP - 1, head));
-      for (const l of logs) { const a = tradeIface.parseLog(l).args; out.push({ ts: this.tsOf(l.blockNumber), side: a.isBuy ? 'buy' : 'sell', tokens: f18(a.tokenAmount), bnb: f18(a.traderQuoteAmount), price: f18(a.lastPrice), trader: a.trader, tx: l.transactionHash }); }
-    }
-    return out;
+    return cache.history('four', token, async (cur) => {
+      const head = await this.provider.getBlockNumber(); let from;
+      if (cur != null) from = Math.max(0, cur - REORG);
+      else { const info = await this.core.tokens(token).catch(() => null); from = Number(info?.createBlock || 0) || head - BACKFILL; }
+      const out = [];
+      for (; from <= head; from += STEP) {
+        const logs = await this.logs([T_TRADE, ethers.zeroPadValue(token, 32)], from, Math.min(from + STEP - 1, head));
+        for (const l of logs) { const a = tradeIface.parseLog(l).args; out.push({ ts: this.tsOf(l.blockNumber), side: a.isBuy ? 'buy' : 'sell', tokens: f18(a.tokenAmount), bnb: f18(a.traderQuoteAmount), price: f18(a.lastPrice), trader: a.trader, tx: l.transactionHash, uid: `${l.transactionHash}:${l.index ?? l.logIndex}` }); }
+      }
+      return { rows: out, cursor: head };
+    }, (x) => x.uid || `${x.tx}:${x.side}:${x.tokens}`);
   }
 
   // 某个地址在某个币上的全部成交（链上 TradeExecuted，按 token + trader 过滤，从创建区块查到最新，每次 STEP 块）
   async traderTrades(token, trader) {
+    if (cache.enabled && await cache.mysql()) { const me = String(trader).toLowerCase(); return (await this.tokenTrades(token)).filter((x) => String(x.trader).toLowerCase() === me); }   // 有缓存：整盘成交基本已在库里，筛出这个地址
     const info = await this.core.tokens(token).catch(() => null);
     const head = await this.provider.getBlockNumber(); let from = Number(info?.createBlock || 0) || head - BACKFILL;
     const pad = (a) => ethers.zeroPadValue(a, 32); const out = [];
