@@ -463,6 +463,8 @@ export class LiveTrader extends EventEmitter {
         const out = Number(q?.toCoinAmount || 0);
         v = { ...base, amountIn: qty, out, minOut: out * (1 - slippage / 100), feeBnb: null, feePct: this.market.buyFeePct(t) };
       }
+      if (side === 'buy' && !DRY_RUN) {   // BNB 不够时报价就说明会用哪个币付款
+        const f = await this.fundingPlan(w, t, Number(amount)).catch(() => null); if (f) v = { ...v, fund: { mode: f.mode, symbol: f.symbol || null, qty: f.qty || null, note: f.note } }; }
       this.quoteCache.set(key, { v, at: Date.now() });
       return v;
     } catch (e) { return { ...base, error: e.message }; }
@@ -526,6 +528,27 @@ export class LiveTrader extends EventEmitter {
       const usd = Number(r.value || 0) || Number(r.balance) * (this.market.qUsd?.[String(r.address).toLowerCase()] || 0);
       return { token: r.address, symbol: r.symbol, balance: r.balance, priceUsd: Number(r.price || 0) || null, valueUsd: usd, valueBnb: bnbUsd ? usd / bnbUsd : null, wbnb: String(r.address).toLowerCase() === QUOTE_TOKENS.WBNB.toLowerCase() };
     }).sort((a, b) => b.valueUsd - a.valueUsd);
+  }
+
+  // BNB 不够时用钱包里的计价币付款（jak 2026-10-27 要求）。只做规划，不发交易：
+  // 这个盘的报价币本身就够（Gang V2 / Flap 报价币盘）→ 直接用它买，省掉 BNB→报价币那一步；
+  // 否则挑价值最高、够用的计价币（BNCB / GANG / USDT / FXIon …）先换出差额 BNB 再按原来的路线买
+  async fundingPlan(w, t, amt) {
+    if (!(amt > 0) || (w.bnb || 0) >= amt + FUND_GAS) return null;
+    const bnbUsd = this.market.bnbUsd || 0; if (!bnbUsd) return null;
+    const set = this.quoteSet(); set.add(USDT.toLowerCase());
+    const held = (await baw.walletBalance()).filter((r) => r.address && set.has(String(r.address).toLowerCase()) && Number(r.balance) > 0).map((r) => {
+      const k = String(r.address).toLowerCase(), usd = Number(r.value || 0) || Number(r.balance) * (this.market.qUsd?.[k] || 0);
+      return { token: r.address, symbol: r.symbol, balance: Number(r.balance), valueBnb: usd / bnbUsd, wbnb: k === QUOTE_TOKENS.WBNB.toLowerCase() };
+    }).filter((x) => x.valueBnb > 0);
+    const q = (this.useGangV2(t) || this.usePortal(t, 'buy')) && t.quoteAddress ? String(t.quoteAddress).toLowerCase() : null;
+    const own = q && held.find((x) => x.token.toLowerCase() === q);
+    if (own && !own.wbnb && own.valueBnb >= amt * 1.02) return { mode: 'direct', token: own.token, symbol: own.symbol, qty: own.balance * amt / own.valueBnb, bnb: w.bnb || 0, note: `BNB 不够（${(w.bnb || 0).toFixed(4)}），直接用钱包里约 ${fmtQ(own.balance * amt / own.valueBnb)} ${own.symbol} 付款` };
+    const need = (amt + FUND_GAS - (w.bnb || 0)) * 1.05;   // 多换 5%：兑换滑点 + 手续费
+    const pick = held.filter((x) => !x.wbnb && x.valueBnb >= need).sort((a, b) => b.valueBnb - a.valueBnb)[0];
+    if (!pick) return { mode: 'none', bnb: w.bnb || 0, note: `BNB 余额不足（${(w.bnb || 0).toFixed(4)}），钱包里也没有够换 ${need.toFixed(4)} BNB 的计价币` };
+    const qty = Math.floor(pick.balance * need / pick.valueBnb * 1e8) / 1e8;
+    return { mode: 'swap', token: pick.token, symbol: pick.symbol, qty, needBnb: need, bnb: w.bnb || 0, note: `BNB 不够（${(w.bnb || 0).toFixed(4)}），先用约 ${fmtQ(qty)} ${pick.symbol} 换出 ${need.toFixed(4)} BNB 再买（多 1～2 笔交易）` };
   }
 
   async quoteBal(token) { const r = (await baw.walletBalance({ tokenAddress: token })).find((x) => String(x.address || '').toLowerCase() === token.toLowerCase()); return { balance: Number(r?.balance || 0), symbol: r?.symbol || '?' }; }
@@ -613,12 +636,24 @@ export class LiveTrader extends EventEmitter {
       if (cap > 0 && amt > cap) throw new Error(`单笔上限 ${cap} BNB（可在交易设置里修改）`);
       // BNB 余额用后台每 20 秒刷新的缓存；超过 30 秒没刷新才当场查
       if (!this.balAt || Date.now() - this.balAt > 30_000) { const t0 = Date.now(); await this.refreshBalance(); step('检查 BNB 余额（baw）', Date.now() - t0); }
-      if (w.bnb && amt > w.bnb) throw new Error(`BNB 余额不足（${w.bnb.toFixed(4)}）`);
-      r = this.useGangV2(t) ? await this.gangV2.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
+      let payQuote = null;
+      if ((w.bnb || 0) < amt + FUND_GAS) {
+        const f = await this.fundingPlan(w, t, amt);
+        if (!f || f.mode === 'none') throw new Error(f?.note || `BNB 余额不足（${(w.bnb || 0).toFixed(4)}）`);
+        if ((w.bnb || 0) < 0.0005) throw new Error(`BNB 只剩 ${(w.bnb || 0).toFixed(5)}，不够付 gas，没法用 ${f.symbol} 付款`);
+        order.fund = { mode: f.mode, symbol: f.symbol, token: f.token, qty: f.qty }; step(f.note, 0);
+        if (f.mode === 'direct') payQuote = f.qty;
+        else {
+          await this.swapReal({ from: f.token, to: BNB_NATIVE, qty: trim(f.qty), slippage: 2, step, label: `${f.symbol}→BNB（补足买入 BNB）` });
+          await this.refreshBalance();
+          if ((w.bnb || 0) < amt) throw new Error(`已用 ${f.symbol} 换出 BNB，但余额 ${(w.bnb || 0).toFixed(4)} 仍不够 ${amt}，没有买入（换出的 BNB 留在钱包）`);
+        }
+      }
+      r = this.useGangV2(t) ? await this.gangV2.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, payQuote })
         : this.useGang(t) ? await this.gangTrade.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
         : this.useOpenFour(t) ? await this.openFourBuy({ w, t, amt, slippage, step })
         : this.usePortal(t, 'buy')
-        ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step })
+        ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step , payQuote })
         : await this.swapReal({ from: BNB_NATIVE, to: t.address, qty: amt, slippage, step, label: `BNB→${t.symbol}` });
       if (!p.openedAt) p.openedAt = Date.now();
       p.boughtBnb += amt; p.costBnb += amt; p.amount += r.expected || 0;
@@ -847,6 +882,8 @@ LiveTrader.prototype.setMaxTrade = function (v) {
   return n;
 };
 
+const FUND_GAS = 0.002;   // 用计价币补 BNB 时给 gas 留的 BNB
+const fmtQ = (n) => (n >= 100 ? n.toFixed(2) : n >= 1 ? n.toFixed(4) : n.toPrecision(4));
 const trim = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
 // 会真实上链的订单来源：页面手动点击（手动），以及本人在页面上关掉「模拟」并启动的跟单任务（跟单 任务名）。
 // 以前只认「手动」，跟单任务传来的「跟单 xxx」被当成自动订单，真实模式的跟单永远只报价、从不下单，也不计次数

@@ -185,12 +185,14 @@ export class GangV2 {
   }
 
   // 真实买入：先拿报价币（已有足够的就直接用）→ 授权 → 报价 + 模拟 → buy
-  async buy({ wallet, token, amountBnb, slippage, step }) {
+  // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
+  async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
     const { pad: p, c } = await this.curve(token); const q = this.quoteToken(c); const hashes = [];
     const dec = await this.decimals(q); const qSym = isWbnb(q) ? 'WBNB' : '报价币';
     // 只用来判断钱包里现有报价币够不够（够就直接用这么多）；不够时下面按实际到账数量买。用 30 秒内的汇率，省掉 1～2 次 baw 报价
     let need = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * await this.quoteRate(q, { stale: 30_000 })).toFixed(Math.min(12, dec)), dec);
     const have = await this.balanceOf(q, wallet);
+    if (payQuote != null) { const want = ethers.parseUnits(Number(payQuote).toFixed(Math.min(12, dec)), dec); need = want < have ? want : have; if (need <= 0n) throw new Error('钱包里没有这个盘的报价币'); }
     if (have < need) {
       const before = have; const t0 = Date.now();
       if (isWbnb(q)) hashes.push(await this.send({ wallet, to: WBNB, valueWei: ethers.parseEther(String(amountBnb)), inputData: erc20.encodeFunctionData('deposit', []), label: 'BNB→WBNB 包装', step }));

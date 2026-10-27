@@ -904,12 +904,14 @@ function refreshQuote() {
     try {
       const q = await api(`/api/preview?wallet=${wid}&token=${t.address}&side=${S.side}&amount=${amount || 0}&slippage=${S.slippage}`);
       $('#route').textContent = '✦ ' + q.route; $('#route').title = q.route;
+      S.fund = S.side === 'buy' ? q.fund || null : null; S.fundFor = t.address;   // BNB 不够时后端算好的付款方式（用哪个计价币）
       const sym = S.side === 'buy' ? t.symbol : 'BNB';
       const f = (v) => (S.side === 'buy' ? K(v) : bnb(v, 6));
       $('#quote').innerHTML = q.out != null ? `
         ${S.side === 'buy' && S.amtMode === 'pct' ? `<div><span>需花费</span><b>${bnb(amount, 6)} BNB${S.pctNote ? ` <span style="color:#8fb3d9">ⓘ ${esc(S.pctNote)}</span>` : ''}</b></div>` : ''}<div><span>预计获得</span><b>${f(q.out)} ${esc(sym)}</b></div><div><span>最少获得</span><b>${f(q.minOut)} ${esc(sym)}</b></div>
         <div><span>手续费</span><b>${bnb(q.feeBnb, 6)} BNB</b></div><div><span>税率 买/卖</span><b class="${taxHi(t) ? 'r' : ''}">${pctTxt(t.buyFeePct)} / ${pctTxt(t.sellFeePct)}</b></div>${S.side === 'buy' ? (() => { const rt = roundTrip(t, S.amtMode === 'pct' ? S.pctBnb : amount); return rt ? `<div><span>买入再卖出预计损耗</span><b class="${rt.pct >= 5 ? 'r' : ''}">${bnb(rt.cost, 5)} BNB（${rt.pct.toFixed(1)}%）</b></div>` : ''; })() : ''}`
         : '<div><span>预计获得</span><b>—</b></div><div><span>最少获得</span><b>—</b></div><div><span>手续费</span><b>—</b></div><div><span>—</span><b>—</b></div>';
+      if (S.fund) $('#quote').insertAdjacentHTML('afterbegin', `<div><span>付款</span><b style="color:${S.fund.mode === 'none' ? '#f6465d' : '#f0b90b'};white-space:normal">${esc(S.fund.note)}</b></div>`);
     } catch { /* ignore */ }
   }, 150);
 }
@@ -952,6 +954,7 @@ async function submitOrder({ token = S.selected, side = S.side, wallets = [...S.
     <div class="kv"><span>税率 买/卖</span><b class="${taxHi(t) ? 'r' : ''}">${pctTxt(t.buyFeePct)} / ${pctTxt(t.sellFeePct)}</b></div>
     ${taxHi(t) && side === 'buy' ? (() => { const rt = roundTrip(t, items[0]?.amount); return `<div class="note" style="color:#f6465d">⚠ 当前税率 买 ${pctTxt(t.buyFeePct)} / 卖 ${pctTxt(t.sellFeePct)}${rt ? `，买入再卖出预计损耗约 ${rt.pct.toFixed(1)}%（${bnb(rt.cost, 5)} BNB，不含价格变动）` : ''}</div>`; })() : ''}
     ${REAL() ? `<div class="note" style="color:var(--red,#f6465d)">真实交易：会用你的币安 Agentic 钱包上链，花费真实 BNB，可能亏损，无法撤回。单笔上限 ${S.baw.maxTradeBnb || '不限'} BNB。${S.tokens.get(token)?.quote && S.tokens.get(token).quote !== 'BNB' && side === 'buy' ? `路径：BNB→${esc(S.tokens.get(token).quote)}→Portal.buyWithQuote，会有 2～4 笔交易。` : ''}</div>` : ''}
+    ${side === 'buy' && S.fund && S.fundFor === token ? `<div class="note" style="color:${S.fund.mode === 'none' ? '#f6465d' : '#f0b90b'}">${S.fund.mode === 'none' ? '⚠ ' : '💱 '}${esc(S.fund.note)}</div>` : ''}
     <div class="note">打开「极速模式（免确认）」可跳过此确认，点击即直接提交链上请求。</div>
     <button class="big-btn ${side === 'buy' ? '' : 'sell'}" id="confirmGo">确认${side === 'buy' ? '买入' : '卖出'}</button>`;
   $('#confirmModal').classList.remove('hidden');
