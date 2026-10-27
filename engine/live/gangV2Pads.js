@@ -197,7 +197,8 @@ export class GangV2 {
   // 真实买入：先拿报价币（已有足够的就直接用）→ 授权 → 报价 + 模拟 → buy
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
   async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
-    const { pad: p, c } = await this.curve(token); this.notGraduated(c); if (c.v3) assertV3Trade();   // V3 默认只报价 const q = this.quoteToken(c); const hashes = [];
+    const { pad: p, c } = await this.curve(token); this.notGraduated(c); if (c.v3) assertV3Trade();   // V3 默认只报价
+    const q = this.quoteToken(c); const hashes = [];
     // 并行读（狙击要快）：小数位、报价币余额、授权额度、剩余额度一次读完；钱包里报价币够用时后面不再重读曲线
     const [dec, have0, alw0, room0] = await Promise.all([isWbnb(q) ? 18 : this.decimals(q), this.balanceOf(q, wallet), this.call(q, erc20, 'allowance', [wallet, p]).then((x) => x[0]).catch(() => 0n), this.call(p, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null)]);
     const qSym = isWbnb(q) ? 'WBNB' : '报价币'; let fresh = true;
