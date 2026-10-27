@@ -1158,3 +1158,10 @@ h1, h2, h3, h4, .lh b, .tch b, .trkp-h b { font-weight: var(--fw-head); }
 .wl-code { font-size: 26px; letter-spacing: 6px; color: var(--y); text-align: center; padding: 6px 0; }
 .wl-msg { margin: 8px 0; line-height: 1.6; }
 .wl-acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; } .wl-acts button { padding: 5px 14px; border-radius: 6px; border: 1px solid var(--line2); background: var(--panel2); color: var(--text); cursor: pointer; } .wl-acts button.go { background: var(--y); color: #111; border-color: var(--y); }
+
+/* 定时换 BNB 弹窗 */
+.q2b-grid{display:flex;flex-direction:column;gap:8px;margin:12px 0}
+.q2b-grid label{display:flex;align-items:center;gap:6px}
+.q2b-in{background:var(--bg2,#0d1117);border:1px solid var(--line,#30363d);color:inherit;border-radius:6px;padding:4px 6px}
+.q2b-st{margin-top:10px;display:flex;flex-direction:column;gap:8px}
+.q2b-w .ui-note{margin-top:2px}
