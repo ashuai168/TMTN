@@ -490,18 +490,22 @@ export class LiveMarket extends EventEmitter {
       this._gv2 ||= new GangV2(this.provider, null);
       const { pad } = await this._gv2.curve(t.address);
       const head = await this.provider.getBlockNumber();
-      let from = h.block + 1;
       if (!h.block) {   // 按平均出块时间从创建时间倒推起始区块，多往前 600 块
         const [a, b] = await Promise.all([this.provider.getBlock(head), this.provider.getBlock(head - 10_000)]);
-        const bt = (a.timestamp - b.timestamp) / 10_000 || 0.45, age = Math.max(0, a.timestamp - Math.floor((t.createdAt || (a.timestamp - 86_400) * 1000) / 1000));
-        from = Math.max(1, head - 400_000, head - Math.ceil(age / bt) - 600);
+        let c = t.createdAt || (a.timestamp - 86_400) * 1000; if (c > 1e14) c /= 1000;   // 接口给毫秒时 createdAt 会被多乘一次 1000
+        const bt = (a.timestamp - b.timestamp) / 10_000 || 0.45, age = Math.max(0, a.timestamp - Math.floor(c / 1000));
+        h.block = Math.max(1, head - 400_000, head - Math.ceil(age / bt) - 600) - 1;
       }
-      const add = from <= head ? await this.gangPads.history(t.address, pad, from, head) : [];
-      const seen = new Set(h.rows.map((x) => `${x.tx}:${x.side}:${x.tokens}`));
-      for (const x of add) if (!seen.has(`${x.tx}:${x.side}:${x.tokens}`)) h.rows.push(x);
-      h.block = head; h.at = Date.now();
-      this.applyV3History(t);
-      return add.length;
+      // 每 2000 块记一次进度：中途被限流 / 出错，下次从断点接着查，不从头重来；出错 60 秒后再试
+      const seen = new Set(h.rows.map((x) => `${x.tx}:${x.side}:${x.tokens}`)); let n = 0;
+      try {
+        while (h.block < head) {
+          const to = Math.min(head, h.block + 2000);
+          for (const x of await this.gangPads.history(t.address, pad, h.block + 1, to)) { const id = `${x.tx}:${x.side}:${x.tokens}`; if (!seen.has(id)) { seen.add(id); h.rows.push(x); n++; } }
+          h.block = to;
+        }
+      } finally { h.at = Date.now() + (h.block < head ? 45_000 : 0); if (n) this.applyV3History(t); }
+      return n;
     })().finally(() => { h.busy = null; });
     return h.busy;
   }
