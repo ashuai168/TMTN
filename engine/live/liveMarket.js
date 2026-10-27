@@ -13,6 +13,7 @@ import { FlapNft } from './flapNft.js';
 import { GangPadChain } from './gangPadChain.js';
 import { GangV2 } from './gangV2Pads.js';
 import { V3_TRADE } from './gangV3.js';
+import { fairList } from './gangFair.js';
 import { DexFeed, dexBars, compactCandles } from './dexFeed.js';
 import { NameCache } from './names.js';
 import { ShrineFeeds, tokenInfo } from './shrine.js';
@@ -74,6 +75,7 @@ export class LiveMarket extends EventEmitter {
     this.four.start();
     this.fourRestore();
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
+    this.loadFairSales(); setInterval(() => this.loadFairSales(), 30_000).unref?.();   // 打新盘：gang.fun 普通代币接口不列，重启后链上订阅也不会补以前的，从打新列表接口补
     this.gang.start(); this.gangChain.start(); this.flapChain.start(); this.gangPads.start(); this.flapNft.start();
     this.feeds.start();
     const blk = async () => { const t0 = Date.now(); try { this.block = await this.provider.getBlockNumber(); this.rpcMs = Date.now() - t0; this.rpcError = null; } catch (e) { this.rpcError = e.shortMessage || e.message; } };
@@ -267,6 +269,7 @@ export class LiveMarket extends EventEmitter {
     if (!t && await this.four.lookup(address)) t = this.get(address);
     if (!t) t = await this.lookupGangV2(address).catch(() => null);
     if (!t && await this.flapNft.check(address).catch(() => null)) t = this.get(address);
+    if (!t) t = await this.lookupFair(address).catch(() => null);
     if (!t) return null;
     t.pinned = true;               // 手动打开的盘不被自动淘汰
     return this.summary(t);
@@ -282,6 +285,41 @@ export class LiveMarket extends EventEmitter {
     if (this.get(address)) return this.get(address);   // 读链期间订阅已经收录
     this.upsertGang({ address: address.toLowerCase(), name, symbol, creator: String(c.creator).toLowerCase(), createdAt: Math.floor(Date.now() / 1000), graduated: !!c.graduated, raisedQuote: 0, progressPct: 0, quoteSymbol, quoteAddress: q, track: c.v3 ? 'v3' : 'v2', taxed: !!c.taxed }, false);
     return this.get(address);
+  }
+
+  // Gang V3 曲线盘 + 打新盘：以前只靠链上 Created 事件收录，重启后之前创建的都没了。启动时和每 30 秒从 gang.fun 列表补齐：
+  // V3 = /api/v3/tokens（没毕业的 + 24 小时内毕业的），打新 = /api/fair/sales 的认购中 + 24 小时内开盘的（进度等从 pad 读，见 gangFairState）
+  async loadFairSales() {
+    const day = Date.now() / 1000 - 86_400;
+    try {
+      const j = await fetch('https://gang.fun/api/v3/tokens?limit=100', { signal: AbortSignal.timeout(10_000) }).then((r) => r.json());
+      for (const x of j?.items || []) {
+        if (!x?.address || this.get(x.address) || (x.graduated && !(x.graduatedAt > day))) continue;
+        const qa = String(x.quoteAddress || '').toLowerCase(), dec = Number(x.quoteDecimals) || 18;
+        this.upsertGang({ address: x.address.toLowerCase(), name: x.name, symbol: x.symbol, creator: String(x.creator || '').toLowerCase(), creatorHandle: x.creatorHandle, logo: x.hasLogo ? x.logoUrl : null,
+          createdAt: x.createdAt || Math.floor(Date.now() / 1000), graduated: !!x.graduated, graduatedAt: x.graduatedAt || null, pair: x.pair || null, quoteAddress: qa,
+          quoteSymbol: qa === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' ? 'BNB' : x.quoteSymbol, raisedQuote: Number(ethers.formatUnits(BigInt(x.realQuote || 0), dec)), progressPct: Number(x.progressPct) || 0,
+          gradAmtQuote: Number(ethers.formatUnits(BigInt(x.gradAmt || 0), dec)) || undefined, priceQuote: Number(x.priceQuote) || 0, trades: x.trades || 0, track: 'v3', taxed: Number(x.dividendBps) > 0 }, false);
+        const t = this.get(x.address); if (t && !x.graduated) this.gangV2Curve(t).catch(() => {});
+      }
+    } catch { /* 下次再补 */ }
+    const lists = await Promise.all(['minting', 'launched'].map((st) => fairList(st).catch(() => [])));
+    for (const x of lists.flat()) {
+      if (this.get(x.token) || (x.status === 'launched' && !(x.createdAt > day))) continue;
+      this.upsertGang({ address: x.token.toLowerCase(), name: x.name, symbol: x.symbol, creator: String(x.creator || '').toLowerCase(), creatorHandle: x.creatorHandle, logo: x.logo, createdAt: x.createdAt || Math.floor(Date.now() / 1000),
+        graduated: x.status === 'launched', raisedQuote: 0, progressPct: 0, quoteSymbol: 'BNB', quoteAddress: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', track: 'v3fair' }, false);
+    }
+  }
+  // 搜索 / 下单时本后端还没收录的打新币：pad.sales() 有这个币就加进来
+  async lookupFair(address) {
+    const I = new ethers.Interface(['function sales(address) view returns (address creator)', 'function name() view returns (string)', 'function symbol() view returns (string)']);
+    const r = await this.provider.call({ to: '0x15cfd2dc8278fb87a1783ef42111618e20874365', data: I.encodeFunctionData('sales', [address]) });
+    const creator = ethers.AbiCoder.defaultAbiCoder().decode(['address'], r.slice(0, 66))[0];
+    if (creator === ethers.ZeroAddress) return null;
+    const rd = (fn) => this.provider.call({ to: address, data: I.encodeFunctionData(fn) }).then((x) => I.decodeFunctionResult(fn, x)[0]).catch(() => '');
+    const [name, symbol] = await Promise.all([rd('name'), rd('symbol')]);
+    if (!this.get(address)) this.upsertGang({ address: address.toLowerCase(), name, symbol: symbol || '?', creator: creator.toLowerCase(), createdAt: Math.floor(Date.now() / 1000), graduated: false, raisedQuote: 0, progressPct: 0, quoteSymbol: 'BNB', quoteAddress: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', track: 'v3fair' }, false);
+    const t = this.get(address); await this.gangFairState(t).catch(() => {}); return t;
   }
 
   // gang.fun：接口给的列表（已筹 / 进度 / 价格 / FDV / 持有人）；毕业门槛按 已筹 ÷ 进度 推算
