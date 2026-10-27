@@ -206,6 +206,9 @@ export class GangV2 {
     let need = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * await this.quoteRate(q, { stale: 30_000 })).toFixed(Math.min(12, dec)), dec);
     const have = have0;
     if (payQuote != null) { const want = ethers.parseUnits(Number(payQuote).toFixed(Math.min(12, dec)), dec); need = want < have ? want : have; if (need <= 0n) throw new Error('钱包里没有这个盘的报价币'); }
+    // 不超过这个钱包剩余额度（每个钱包最多 1%）要花的报价币，多留 2% 抵价格变动：「买 1%」直接给 0.1 BNB 时不会多换报价币；额度已满就不发任何交易
+    if (room0 === 0n) throw new Error('已达单钱包上限 1%（没有发出交易）');
+    if (room0 != null && payQuote == null) { const sp = this.buyQuote(c, need, room0).spent * 102n / 100n; if (sp > 0n && sp < need) { amountBnb = Number(amountBnb) * Number(sp) / Number(need); need = sp; } }
     if (have < need) {
       // 钱包里已有的报价币先用上，只把差额用 BNB 换；多换 3% 抵滑点，多的留在钱包
       const before = have; const t0 = Date.now(); fresh = false;
