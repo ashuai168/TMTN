@@ -19,6 +19,7 @@ import { redactSecrets } from './engine/live/rpc.js';
 import { dataFile } from './engine/live/config.js';
 import { cache } from './engine/live/cache.js';
 import { fairPctBnb } from './engine/live/gangFair.js';
+import { mountUpdater } from './engine/updater.js';
 
 // 日志脱敏：控制台 / live.log 里出现的 RPC 地址（含 NodeReal key）一律打码
 for (const k of ['log', 'info', 'warn', 'error']) { const f = console[k].bind(console); console[k] = (...a) => f(...a.map((x) => (typeof x === 'string' ? redactSecrets(x) : x instanceof Error ? redactSecrets(x.stack || x.message) : x))); }
@@ -125,6 +126,7 @@ app.get(['/', '/index.html'], (req, res) => {
   } catch (e) { res.status(500).send(e.message); }
 });
 app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));   // 每次都向服务器确认有没有更新（没变就 304），避免浏览器一直用旧的 app.js / style.css
+mountUpdater(app, { rootDir: __dirname, peers: WALLET_PEERS.length });   // 版本管理：检查更新 / 切换版本 / 恢复备份（页面右下角的版本号）
 
 const state = () => ({
   ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, net,
