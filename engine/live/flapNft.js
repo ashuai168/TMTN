@@ -19,6 +19,12 @@ const T_GATED = '0x2179156b3d2ade0f0de96eff28a7c29d924002784e113e69108d91a02cbf9
 const T_GATE_UPD = '0xef4dac2f9b1190c744c50eaead877aa2f222bafb1ef8bb2c60baed13f4b63cd8';   // FlapNFTGateUpdated(address token, address oldNft, address newNft)
 const T_DEX = '0x6e4f47630b8745b8cacbd44f42a8a33e7eea7cc08ef22fc7630f4f385784ff7d';        // LaunchedToDEX(address token, address pool, uint256 amount, uint256 eth)
 const TOPICS = [[T_GATED, T_GATE_UPD, T_DEX]];
+// 内盘成交（链上核对过 FI 0x779c…7777 的买卖交易）：TokenBought / TokenSold(uint256 ts, address token, address trader, uint256 amount, uint256 eth, uint256 fee, uint256 postPrice)，
+// 全在 data 里（没有 indexed）。ts = 区块时间（秒），amount = 代币数量，eth = 报价币金额（含手续费；BNCB 盘就是 BNCB），postPrice = 成交后价格（报价币 wei / 个）
+const T_BUY = '0xa800a2038683844fac66747f771bfdfae862eb28b16bcfa387afa9fbacce8ff7';
+const T_SELL = '0x03a4693e592f5e75dc7c136acb39b146d2b4966c0e509c34f362dee02b3b861a';
+const T_XFER = ethers.id('Transfer(address,address,uint256)');
+const PORTAL_T = ethers.zeroPadValue(FLAP_PORTAL, 32).toLowerCase();
 const REG = dataFile('flapNftGated.json');
 const BACKFILL = 450_000;   // 第一次启动往回补约 4 天（功能 10-24 才上线），之后从记下的区块接着补
 export const AGENT_ID_NFT = '0x60b9262456de011f7d15a54cdd8c48baaa8b022f';   // Binance Agent ID（SPACE ID）
@@ -45,6 +51,7 @@ export class FlapNft extends EventEmitter {
     this.reg = (() => { try { return JSON.parse(readFileSync(REG, 'utf8')); } catch { return {}; } })();
     this.reg.tokens ||= {}; this.reg.nfts ||= {};
     this.holdCache = new Map();
+    this.tr = new Map(); this.hist = new Map(); this.histQ = Promise.resolve();   // 每个门槛盘的成交（tx:logIndex → 成交）、历史补到哪个区块
     this.status = { connected: false, wss: null, lastBlock: this.reg.lastBlock || 0, lastLogAt: 0, gated: 0, lastError: null, pollError: null };
   }
   save() { try { mkdirSync(new URL('.', REG), { recursive: true }); writeFileSync(REG, JSON.stringify(this.reg)); } catch { /* ignore */ } }
@@ -54,7 +61,86 @@ export class FlapNft extends EventEmitter {
   async start() {
     for (const g of this.list()) this.emit('gated', g, { restore: true });
     this.sub = new WsLogs({ label: 'flap-nft', urls: [...NODEREAL_WSS, PUBLIC_WSS], filters: [{ address: FLAP_PORTAL, topics: TOPICS }], onLog: (l) => this.handle(l), status: this.status }).start();
-    this.pollLoop();
+    this.pollLoop(); this.tradeLoop();
+  }
+
+  // ---- 内盘成交 ----
+  // Portal 上所有 Flap 币的成交很多（约 8700 笔 / 5000 块），不整条订阅：只订阅门槛盘代币自己的 Transfer，
+  // 有一边是 Portal 的就是买卖，再按区块去读 Portal 的 TokenBought / TokenSold，只留门槛盘的
+  parseTrade(l) {
+    if (l.topics[0] !== T_BUY && l.topics[0] !== T_SELL) return null;
+    const [ts, token, trader, amount, eth, fee, post] = coder.decode(['uint256', 'address', 'address', 'uint256', 'uint256', 'uint256', 'uint256'], l.data);
+    const k = token.toLowerCase(); if (!this.reg.tokens[k]) return null;
+    const tokens = f18(amount), bnb = f18(eth);
+    return { token: k, trader: trader.toLowerCase(), side: l.topics[0] === T_BUY ? 'buy' : 'sell', tokens, bnb, fee: f18(fee), price: f18(post) || (tokens > 0 ? bnb / tokens : 0),
+      tx: l.transactionHash, block: l.blockNumber, idx: l.index ?? l.logIndex, ts: Number(ts) * 1000 };
+  }
+  keep(tr) {
+    let m = this.tr.get(tr.token); if (!m) this.tr.set(tr.token, (m = new Map()));
+    const key = `${tr.tx}:${tr.idx}`; if (m.has(key)) return false; m.set(key, tr); return true;
+  }
+  trades(token) { return [...(this.tr.get(String(token).toLowerCase())?.values() || [])].sort((a, b) => a.block - b.block || a.idx - b.idx); }
+  // 这些代币在 [from, to] 里哪些区块有经过 Portal 的转账（代币地址过滤的 getLogs 很轻，一次 2 万块；节点嫌多就减半）
+  async portalBlocks(addrs, from, to) {
+    const out = new Set();
+    for (let a = from, span = 20_000; a <= to;) {
+      const b = Math.min(to, a + span - 1);
+      let ls; try { ls = await this.provider.getLogs({ address: addrs, topics: [T_XFER], fromBlock: a, toBlock: b }); }
+      catch (e) { if (span > 2000) { span = Math.floor(span / 2); continue; } throw e; }
+      for (const l of ls) if (String(l.topics[1]).toLowerCase() === PORTAL_T || String(l.topics[2]).toLowerCase() === PORTAL_T) out.add(l.blockNumber);
+      a = b + 1;
+    }
+    return [...out].sort((x, y) => x - y);
+  }
+  // 区块 → 读 Portal 成交（相邻的区块合成一段，一段最多 500 块）
+  async tradesAt(blocks) {
+    const ranges = [];
+    for (const b of blocks) { const r = ranges.at(-1); if (r && b - r[1] <= 20 && b - r[0] < 500) r[1] = b; else ranges.push([b, b]); }
+    const got = [];
+    for (const [a, b] of ranges) for (const l of await this.provider.getLogs({ address: FLAP_PORTAL, topics: [[T_BUY, T_SELL]], fromBlock: a, toBlock: b })) { const tr = this.parseTrade(l); if (tr) got.push(tr); }
+    return got;
+  }
+  // 一个门槛盘从创建起的全部内盘成交（补过的接着补，排队一个一个来，启动时几十个币不会一起打节点）
+  history(token) {
+    const k = String(token).toLowerCase(), g = this.reg.tokens[k]; if (!g) return Promise.resolve([]);
+    const h = this.hist.get(k) || {}; if (h.p) return h.p;
+    h.p = this.histQ = this.histQ.catch(() => {}).then(async () => {
+      const head = await this.provider.getBlockNumber();
+      const from = h.to ? h.to + 1 : g.block || head - BACKFILL, to = g.dexBlock ? Math.min(head, g.dexBlock) : head;
+      if (from <= to) { for (const tr of await this.tradesAt(await this.portalBlocks([k], from, to))) this.keep(tr); h.to = to; }
+      h.at = Date.now(); return this.trades(k);
+    }).finally(() => { h.p = null; });
+    this.hist.set(k, h); return h.p;
+  }
+  // 实时：WS 订阅内盘门槛盘的 Transfer（币列表变了就重订），另外每 30 秒（WS 不通时 5 秒）用 getLogs 补一遍，两边按 tx:logIndex 去重
+  curveTokens() { return this.list().filter((g) => !g.dex).map((g) => g.token).sort(); }
+  resubTrades() {
+    const addrs = this.curveTokens(), key = addrs.join(','); if (key === this.trKey) return; this.trKey = key;
+    const old = this.trSub; if (old) { old.urls = []; clearTimeout(old.pending); clearTimeout(old.backT); old.drop(old.ws); }
+    this.trStatus ||= { connected: false };
+    this.trSub = addrs.length ? new WsLogs({ label: 'flap-nft成交', urls: [...NODEREAL_WSS, PUBLIC_WSS], filters: [{ address: addrs, topics: [T_XFER] }], onLog: (l) => this.onXfer(l), status: this.trStatus }).start() : null;
+  }
+  onXfer(l) {
+    if (String(l.topics[1]).toLowerCase() !== PORTAL_T && String(l.topics[2]).toLowerCase() !== PORTAL_T) return;
+    (this.xferBlocks ||= new Set()).add(l.blockNumber);
+    clearTimeout(this.xferT); this.xferT = setTimeout(() => this.flushXfer(), 300);
+  }
+  async flushXfer() {
+    const bs = [...(this.xferBlocks || [])].sort((a, b) => a - b); this.xferBlocks = new Set(); if (!bs.length) return;
+    try { this.emitTrades(await this.tradesAt(bs)); } catch { for (const b of bs) this.xferBlocks.add(b); clearTimeout(this.xferT); this.xferT = setTimeout(() => this.flushXfer(), 3000); }
+  }
+  emitTrades(list) { for (const tr of list) if (this.keep(tr)) this.emit('trade', tr); }
+  async tradeLoop() {
+    for (let first = true; ; first = false) {
+      if (!first) await new Promise((r) => setTimeout(r, this.trSub?.live ? 30_000 : 5_000));
+      try {
+        this.resubTrades();
+        const head = await this.provider.getBlockNumber(), addrs = this.curveTokens();
+        if (!this.trTo) { this.trTo = head; continue; }   // 更早的由 history() 按币补
+        if (addrs.length && head > this.trTo) this.emitTrades(await this.tradesAt(await this.portalBlocks(addrs, this.trTo + 1, head)));
+        this.trTo = head;
+      } catch { /* 下一轮 */ }
+    }
   }
 
   async pollLoop() {
@@ -82,13 +168,13 @@ export class FlapNft extends EventEmitter {
         if (this.reg.tokens[k]) return;
         const g = { token: k, nft: nft.toLowerCase(), block: l.blockNumber, tx: l.transactionHash, seenAt: Date.now(), at: null };
         this.reg.tokens[k] = g; this.status.gated++; this.save();
-        this.emit('gated', g, { restore: false });
+        this.emit('gated', g, { restore: false }); this.resubTrades();
       } else if (t0 === T_GATE_UPD) {
         const [token, , newNft] = coder.decode(['address', 'address', 'address'], l.data); const g = this.get(token);
         if (g && newNft === ZERO && !g.removed) { g.removed = true; this.save(); this.emit('ungated', g); }
       } else if (t0 === T_DEX) {
         const [token] = coder.decode(['address', 'address', 'uint256', 'uint256'], l.data); const g = this.get(token);
-        if (g && !g.dex) { g.dex = true; this.save(); this.emit('dex', g); }
+        if (g && !g.dex) { g.dex = true; g.dexBlock = l.blockNumber; this.save(); this.emit('dex', g); this.resubTrades(); }
       }
     } catch { /* 解析失败的跳过 */ }
   }
