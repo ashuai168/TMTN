@@ -60,8 +60,11 @@ function myWallets() {
 }
 const isMe = (a) => !!a && myWallets().has(String(a).toLowerCase());
 const meTag = (a) => { const slot = myWallets().get(String(a || '').toLowerCase()); return `<i class="me-tag" title="${MW() ? '我的钱包 ' + slot : '我的钱包'}">我${MW() && slot ? '·' + slot : ''}</i>`; };
-// 备注过的钱包 = 追踪列表里填了备注名的地址（比如「鸡腿 AI」「发呆」）；只追踪、没填备注的仍算没备注
-const noteOf = (addr) => (addr && TRK.targets.length && typeof trkRemark === 'function' && trkRemark(addr)) || '';
+// 备注过的钱包 = 追踪列表里填了备注名的地址（比如「鸡腿 AI」「发呆」），或在「查域名」里直接备注过的地址（REMARKS）；只追踪、没填备注的仍算没备注
+const REMARKS = {};
+const loadRemarks = () => api('/api/remarks').then((o) => { for (const k of Object.keys(REMARKS)) delete REMARKS[k]; Object.assign(REMARKS, o || {}); }).catch(() => {});
+setTimeout(loadRemarks, 0);
+const noteOf = (addr) => (addr && typeof trkRemark === 'function' && trkRemark(addr)) || '';
 const whoHtml = (addr, name0, a = 6, b = 4) => {
   const t = noteOf(addr), name = t || name0;
   if (isMe(addr)) return `<b class="me">${esc(name || short(addr, a, b))}</b>${meTag(addr)}`;
@@ -1449,11 +1452,16 @@ let searchIdx = 0;
 function renderSearch() {
   const q = sIn.value.trim().toLowerCase(); const box = $('#searchResults');
   if (!q) return renderHist();
-  const isAddr = /^0x[0-9a-f]{40}$/.test(q);
+  const isAddr = /^0x[0-9a-f]{40}$/.test(q), isDom = /^[a-z0-9][a-z0-9_-]*\.(ai|bnb)$/.test(q);
   const hits = [...S.tokens.values()].filter((t) => t.address.toLowerCase().startsWith(q) || t.symbol.toLowerCase().includes(q) || String(t.name || '').toLowerCase().includes(q)).slice(0, 12);
-  searchIdx = Math.min(searchIdx, Math.max(0, hits.length - 1));
-  box.innerHTML = hits.length ? hits.map((t, i) => `<div data-a="${t.address}" class="${i === searchIdx ? 'on' : ''}">${logoHtml(t, 'xs')}<b>${esc(t.symbol)}</b><span class="mono muted">${short(t.address)}</span><span class="spacer"></span>${isBlocked(t) ? '<span class="blk-tag">已屏蔽</span><button class="qb" data-unblock="' + t.address + '">取消屏蔽</button>' : ''}<span class="mono">${usd(t.mcapUsd)}</span></div>`).join('')
-    : isAddr ? `<div data-lookup="${q}" class="on">在链上查找 <span class="mono">${short(q)}</span> …</div>` : '<div class="muted">没有匹配</div>';
+  const rows = hits.map((t) => ['a', t]); if (isAddr && !hits.length) rows.push(['lookup']); if (isAddr || isDom) rows.push(['wlook']);   // 钱包地址 / 域名：查 .ai 域名 + 备注
+  searchIdx = Math.min(searchIdx, Math.max(0, rows.length - 1));
+  const wl = isAddr ? (noteOf(q) || NAMES[q] || '') : '';
+  box.innerHTML = rows.length ? rows.map(([k, t], i) => { const on = i === searchIdx ? 'on' : '';
+    return k === 'a' ? `<div data-a="${t.address}" class="${on}">${logoHtml(t, 'xs')}<b>${esc(t.symbol)}</b><span class="mono muted">${short(t.address)}</span><span class="spacer"></span>${isBlocked(t) ? '<span class="blk-tag">已屏蔽</span><button class="qb" data-unblock="' + t.address + '">取消屏蔽</button>' : ''}<span class="mono">${usd(t.mcapUsd)}</span></div>`
+      : k === 'lookup' ? `<div data-lookup="${q}" class="${on}">在链上查找代币 <span class="mono">${short(q)}</span> …</div>`
+      : `<div data-wlook="${esc(q)}" class="${on}">🔎 ${isAddr ? `查这个钱包的 .ai 域名 / 写备注${wl ? ` <span class="spacer"></span>${whoHtml(q, NAMES[q])}` : ''}` : `查 <b>${esc(q)}</b> 的地址 / 写备注`}</div>`; }).join('')
+    : '<div class="muted">没有匹配</div>';
   box.classList.remove('hidden');
 }
 async function openFromSearch(addr) {
@@ -1483,14 +1491,15 @@ sIn.addEventListener('input', () => { searchIdx = 0; renderSearch(); });
 $('#searchResults').addEventListener('mousedown', (e) => {
   if (histClick(e)) return;
   if (e.target.closest('[data-unblock]')) return;   // 取消屏蔽按钮：交给 click 处理，不打开代币
-  const el = e.target.closest('[data-a],[data-lookup]'); if (!el) return;
-  e.preventDefault(); e.stopPropagation(); openFromSearch(el.dataset.a || el.dataset.lookup);
+  const el = e.target.closest('[data-a],[data-lookup],[data-wlook]'); if (!el) return;
+  e.preventDefault(); e.stopPropagation(); pickSearch(el);
 });
-$('#searchResults').addEventListener('click', (e) => { if (e.target.closest('[data-unblock]')) return; if (e.target.closest('[data-a],[data-lookup]')) { e.preventDefault(); e.stopPropagation(); } }, true);
+function pickSearch(el) { if (!el.dataset.wlook) return openFromSearch(el.dataset.a || el.dataset.lookup); $('#searchResults').classList.add('hidden'); sIn.value = ''; sIn.blur(); walletLookup(el.dataset.wlook); }
+$('#searchResults').addEventListener('click', (e) => { if (e.target.closest('[data-unblock]')) return; if (e.target.closest('[data-a],[data-lookup],[data-wlook]')) { e.preventDefault(); e.stopPropagation(); } }, true);
 sIn.addEventListener('keydown', (e) => {
-  const items = $$('#searchResults [data-a],#searchResults [data-lookup]');
+  const items = $$('#searchResults [data-a],#searchResults [data-lookup],#searchResults [data-wlook]');
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); searchIdx = (searchIdx + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % Math.max(1, items.length); renderSearch(); return; }
-  if (e.key === 'Enter') { const q = sIn.value.trim(); const f = items[searchIdx] || items[0]; if (f) openFromSearch(f.dataset.a || f.dataset.lookup); else if (/^0x[0-9a-fA-F]{40}$/.test(q)) openFromSearch(q.toLowerCase()); }
+  if (e.key === 'Enter') { const q = sIn.value.trim(); const f = items[searchIdx] || items[0]; if (f) pickSearch(f); else if (/^0x[0-9a-fA-F]{40}$/.test(q)) openFromSearch(q.toLowerCase()); }
   if (e.key === 'Escape') sIn.blur();
 });
 sIn.addEventListener('blur', () => setTimeout(() => $('#searchResults').classList.add('hidden'), 200));
@@ -1633,6 +1642,11 @@ const ui = (() => {
         (k) => (k === 'ok' ? (input = document.querySelector('.ui-dlg input'))?.value ?? null : null));
       return p;
     },
+    // 带输入框的对话框：确认时返回 { 输入框 name: 值（勾选框为 true/false） }，取消返回 null
+    form: ({ title, body = '', address = '', confirmText = '确定' }) => show(
+      `<div class="ui-h">${esc(title)}</div><div class="ui-b">${body}${addr(address)}</div>
+       <div class="ui-f"><button class="ui-btn" data-ui="cancel">取消</button><button class="ui-btn ok" data-ui="ok">${esc(confirmText)}</button></div>`,
+      (k) => { if (k !== 'ok') return null; const o = {}; document.querySelectorAll('.ui-dlg [name]').forEach((el) => { o[el.name] = el.type === 'checkbox' ? el.checked : el.value; }); return o; }),
   };
 })();
 
@@ -2711,10 +2725,38 @@ function setTrkMin(v) { TRK.fMin = Math.max(0, Number(v) || 0); try { localStora
 function trkPass(e) { const tg = TRK.targets.find((x) => x.address === e.target); return (!TRK.fGroup || (tg?.group || '默认') === TRK.fGroup) && trkMinPass(e); }
 // 追踪地址的显示名：备注名 > 域名 > 短地址（备注存服务器的追踪数据里，和钱包无关）
 function trkT(addr) { return TRK.targets.find((x) => x.address === String(addr || '').toLowerCase()) || null; }
-function trkRemark(addr) { const t = trkT(addr); return t ? (t.remark || (t.name && t.name !== t.domain ? t.name : '')) : ''; }
+function trkRemark(addr) { const t = trkT(addr); return (t ? (t.remark || (t.name && t.name !== t.domain ? t.name : '')) : '') || REMARKS[String(addr || '').toLowerCase()] || ''; }
 function trkName(addr) { const t = trkT(addr); return trkRemark(addr) || t?.domain || NAMES[String(addr || '').toLowerCase()] || short(addr, 6, 4); }
 function trkSub(addr) { const t = trkT(addr), dom = t?.domain || NAMES[String(addr || '').toLowerCase()]; return trkRemark(addr) ? (dom || short(addr, 6, 4)) : dom ? short(addr, 6, 4) : ''; }
-async function trkSaveRemark(addr, v) { const t = trkT(addr); v = String(v || '').trim().slice(0, 40); await api('/api/track/targets', { address: addr, remark: v, name: v || t?.domain || '', domain: t?.domain || null, group: t?.group }); await loadTrack(); renderTrkPanel(); }
+async function trkSaveRemark(addr, v) { const t = trkT(addr); v = String(v || '').trim().slice(0, 40); await saveRemark(addr, v); if (!t) return; await api('/api/track/targets', { address: addr, remark: v, name: v || t?.domain || '', domain: t?.domain || null, group: t?.group }); await loadTrack(); renderTrkPanel(); }
+// 备注：总是写进 data/remarks.json（没追踪也能备注）；追踪中的地址由 trkSaveRemark 同时改追踪列表
+async function saveRemark(addr, v) { Object.assign(REMARKS, await api('/api/remarks', { address: addr, remark: String(v || '').trim().slice(0, 40) })); if (!String(v || '').trim()) delete REMARKS[String(addr).toLowerCase()]; scheduleRender(); }
+// 查域名：粘贴钱包地址（或 .ai / .bnb 域名）→ 显示它的 .ai 域名、SPACE ID 域名，可以直接写备注 / 顺手追踪
+async function walletLookup(q) {
+  q = String(q || '').trim().toLowerCase(); if (!q) return;
+  let addr = q, r;
+  try {
+    if (!/^0x[0-9a-f]{40}$/.test(q)) addr = (await api(`/api/track/resolve?name=${encodeURIComponent(q)}`)).address;
+    r = await api(`/api/names/lookup?address=${addr}`);
+  } catch (err) { return toast({ status: 'failed', symbol: '查域名', reason: err.message }); }
+  if (r.name) NAMES[addr] = r.name;
+  await trkEnsure();
+  const tracked = TRK.targets.some((x) => x.address === addr), old = trkRemark(addr);
+  const row = (k, v, failed) => `<div class="wl-row"><span class="muted">${k}</span>${v ? `<b class="wl-dom">${esc(v)}</b><button class="ui-copy" data-ui="copy" data-v="${esc(v)}">复制</button>` : `<span class="dim">${failed ? '查询失败，稍后再试' : '没有'}</span>`}</div>`;
+  const body = `${row('.ai 域名', r.ai, r.aiFailed)}${row('SPACE ID', r.sid && r.sid !== r.ai ? r.sid : '', r.sidFailed)}
+    ${isMe(addr) ? '<p class="g">这是你自己的钱包</p>' : ''}
+    <label class="ui-in wl-in">备注<input name="remark" value="${esc(old)}" maxlength="40" placeholder="留空 = 显示域名 / 地址" /></label>
+    ${LIVE() && !tracked && !isMe(addr) ? '<label class="wl-ck"><input type="checkbox" name="track" /> 同时追踪这个地址</label>' : tracked ? '<p class="ui-note">已在追踪列表里，备注会同步到追踪</p>' : ''}
+    <p class="ui-note"><a href="https://gmgn.ai/bsc/address/${esc(addr)}" target="_blank" rel="noopener noreferrer">在 GMGN 查看 ↗</a></p>`;
+  const v = await ui.form({ title: r.ai || r.sid || '钱包查询', body, address: addr, confirmText: '保存备注' }); if (!v) return;
+  const rm = String(v.remark || '').trim();
+  try {
+    if (rm !== old) await trkSaveRemark(addr, rm);
+    if (v.track) { await api('/api/track/targets', { address: addr, domain: r.ai || r.sid || null, name: rm || r.ai || r.sid || '', remark: rm }); await loadTrack(); }
+    note(v.track ? `已追踪 ${rm || r.ai || short(addr, 6, 4)}` : rm !== old ? (rm ? '备注已保存' : '已清除备注') : '没有改动', 'info');
+    $$('.trd-acts').forEach((x) => { x.outerHTML = trdActs(addr); }); if (S.view === 'track') renderTrack();
+  } catch (err) { toast({ status: 'failed', symbol: '备注', reason: err.message }); }
+}
 // 就地编辑：点 ✎ 把名字换成输入框，回车保存、Esc 取消；清空 = 恢复显示域名 / 地址
 function trkEditInline(btn) {
   const addr = btn.dataset.trkedit, host = btn.closest('[data-trkname]') || btn.parentElement; if (!addr || host.querySelector('input.trk-ed')) return;
@@ -2938,6 +2980,7 @@ $('#track').addEventListener('change', (e) => {
   if (e.target.id === 'trkFMin') setTrkMin(e.target.value);
   if (e.target.id === 'trkSound') { TRK.sound = e.target.checked; try { localStorage.trkSound = TRK.sound ? '1' : '0'; } catch { /* ignore */ } }
 });
+$('#trkLookBtn')?.addEventListener('click', () => { const q = $('#trkAddr').value.trim(); if (!q) return note('先在左边填 0x 地址或 .ai / .bnb 域名', 'info'); walletLookup(q); });
 $('#trkAddr')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#trkAddBtn').click(); });
 setInterval(() => { if (S.view === 'track' && TRK.tab === 'feed') renderTrkFeed(); }, 15_000);   // 「多久前」刷新
 setTimeout(() => { if (LIVE()) api('/api/copy').then((b) => { TRK.tasks = b.tasks || []; TRK.paused = !!b.paused; renderTrkKill(); }).catch(() => {}); }, 4000);   // 顶栏跟单状态
@@ -2946,7 +2989,7 @@ setTimeout(() => { if (LIVE()) api('/api/copy').then((b) => { TRK.tasks = b.task
 function trdActs(addr) {
   if (!LIVE() || !addr || isMe(addr)) return '';
   const on = TRK.targets.some((x) => x.address === String(addr).toLowerCase());
-  return `<div class="trd-acts"><button class="trd-track ${on ? 'on' : ''}" data-trdtrack="${esc(addr)}">${on ? '✓ 已追踪（点击取消）' : '＋ 追踪'}</button>${on ? `<button class="trd-remark" data-trdremark="${esc(addr)}" title="编辑备注名">✎ ${esc(trkRemark(addr) || '备注')}</button>` : ''}<button class="trd-copy" data-trdcopy="${esc(addr)}">跟单</button></div>`;
+  return `<div class="trd-acts"><button class="trd-track ${on ? 'on' : ''}" data-trdtrack="${esc(addr)}">${on ? '✓ 已追踪（点击取消）' : '＋ 追踪'}</button><button class="trd-remark" data-trdremark="${esc(addr)}" title="编辑备注名（不追踪也能备注）">✎ ${esc(trkRemark(addr) || '备注')}</button><button class="trd-copy" data-trdcopy="${esc(addr)}">跟单</button></div>`;
 }
 async function trkEnsure() { if (!TRK.loaded) await loadTrack().catch(() => {}); }
 document.addEventListener('click', async (e) => {
@@ -2960,7 +3003,7 @@ document.addEventListener('click', async (e) => {
     if (tb) {
       if (tracked) { await api('/api/track/targets', { address: addr, remove: true }); note('已取消追踪'); }
       else {
-        const v = await ui.prompt({ title: `追踪 ${dom || short(addr, 6, 4)}`, label: '备注名（可选，留空 = 显示域名 / 地址）', value: '' });
+        const v = await ui.prompt({ title: `追踪 ${dom || short(addr, 6, 4)}`, label: '备注名（可选，留空 = 显示域名 / 地址）', value: REMARKS[addr] || '' });
         if (v === null) return;   // 取消
         await api('/api/track/targets', { address: addr, domain: dom, name: String(v).trim() || dom || '', remark: String(v).trim() }); note(`已追踪 ${String(v).trim() || dom || short(addr, 6, 4)}`);
       }

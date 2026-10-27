@@ -39,6 +39,18 @@ export class NameCache {
     return null;
   }
 
+  // 页面「查域名」：.ai（币安 Agent ID）和 SPACE ID 主域名都现查一遍（不排队），查到的写进缓存
+  async lookupBoth(address) {
+    const k = this.key(address); let ai = null, sid = null, aiErr = null, sidErr = null;
+    for (let i = 0; i < regs.length; i++) {
+      try { const h = await regs[(this.rr++) % regs.length].handleOf(k); ai = h ? h + '.ai' : null; aiErr = null; break; } catch (e) { aiErr = e; }
+    }
+    try { const j = await (await fetch(API + k, { signal: AbortSignal.timeout(8_000) })).json(); sid = j?.data?.name || null; } catch (e) { sidErr = e; }
+    if (aiErr && sidErr) throw aiErr;
+    const name = ai || sid; if (name) { this.map.set(k, { name, at: Date.now() }); this.ver++; this.save(); }
+    return { ai, sid, name, aiFailed: !!aiErr, sidFailed: !!sidErr };
+  }
+
   kick() { while (this.running < 2 && this.queue.length) this.worker(); }
   async worker() {
     this.running++;

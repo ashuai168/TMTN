@@ -467,6 +467,24 @@ app.get('/api/names', (req, res) => {
   res.json({ ver: n.ver, names: n.all() });
 });
 
+// 地址备注（不用追踪也能备注；追踪列表里的备注名优先）：data/remarks.json { 地址小写: 备注 }
+const REMARKS_FILE = dataFile('remarks.json');
+let remarks = {}; try { remarks = JSON.parse(fs.readFileSync(REMARKS_FILE, 'utf8')) || {}; } catch { /* 第一次没有文件 */ }
+app.get('/api/remarks', (req, res) => res.json(remarks));
+app.post('/api/remarks', (req, res) => {
+  const a = String(req.body?.address || '').toLowerCase(); if (!/^0x[0-9a-f]{40}$/.test(a)) return res.status(400).json({ error: '地址格式不对' });
+  const v = String(req.body?.remark ?? '').trim().slice(0, 40); if (v) remarks[a] = v; else delete remarks[a];
+  try { fs.writeFileSync(REMARKS_FILE, JSON.stringify(remarks, null, 1)); } catch (e) { return res.status(500).json({ error: `保存失败：${e.message}` }); }
+  res.json(remarks);
+});
+// 地址 → .ai / .bnb 域名（反查，现查不排队）；模拟盘没有实盘行情的域名缓存，就临时建一个
+let lookupNames = null;
+app.get('/api/names/lookup', async (req, res) => {
+  const a = String(req.query.address || '').trim().toLowerCase(); if (!/^0x[0-9a-f]{40}$/.test(a)) return res.status(400).json({ error: '请填 0x 地址' });
+  try { const nc = market.names || (lookupNames ||= new (await import('./engine/live/names.js')).NameCache()); res.json({ address: a, ...(await nc.lookupBoth(a)) }); }
+  catch (e) { res.status(502).json({ error: `查询失败：${e.message}` }); }
+});
+
 app.get('/api/preview', async (req, res) => {
   const q = req.query;
   res.json(await trader.preview({ walletId: q.wallet, token: q.token, side: q.side, amount: Number(q.amount), slippage: Number(q.slippage || 35) }));

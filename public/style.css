@@ -1226,3 +1226,12 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .chips .lf-funnel:disabled { opacity: .35; cursor: default; }
 /* 详情页底部「持有人」表：金额下面的笔数 / 占比小字 */
 #bottomBody .ttable .hsub { color: var(--muted, #7d8794); font-size: 11px; font-weight: normal; } #bottomBody .ttable tr.trow { cursor: pointer; }
+
+/* 查域名对话框（按地址反查 .ai / .bnb，写备注） */
+.wl-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.wl-row > .muted { width: 72px; flex: none; }
+.wl-dom { color: var(--text); font-size: 14px; }
+.wl-in { display: flex; align-items: center; gap: 8px; margin: 10px 0 6px; }
+.wl-in input { flex: 1; min-width: 0; }
+.wl-ck { display: flex; align-items: center; gap: 6px; margin: 6px 0; cursor: pointer; }
+#searchResults [data-wlook] { color: var(--text); }
