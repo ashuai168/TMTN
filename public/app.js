@@ -96,7 +96,7 @@ const taxHi = (t) => (t.buyFeePct || 0) >= 5 || (t.sellFeePct || 0) >= 5;
 const taxChip = (t, cls = 'tag') => `<i class="${cls} tax ${taxHi(t) ? 'hi' : ''}" title="买入 / 卖出总费率（代币税 + 平台费${t.antiSniperPct ? ' + 防狙击税 ' + t.antiSniperPct.toFixed(1) + '%' : ''}）">税 ${pctTxt(t.buyFeePct)}/${pctTxt(t.sellFeePct)}${t.antiSniperPct >= 0.1 ? ' 🛡' : ''}</i>`;
 // Gang V2 分红：税币（taxed）内盘 + 外盘买卖 1% 税，一半按持仓分给持有 ≥1 万枚的地址（报价币发放）；普通币内盘 1% 平台费、毕业后 0 税、不分红。还不知道（老盘 / 其他平台）不显示
 const divTip = (t) => {
-  const d = t.gangDiv; if (!d) return ''; const st = d.stats || {}, q = st.quoteSymbol || t.quote || '报价币', pct = ((d.taxBps || 100) / 100).toFixed(d.taxBps % 100 ? 1 : 0);
+  const d = t.gangDiv; if (!d) return ''; if (d.flap) return flapTaxTip(t); const st = d.stats || {}, q = st.quoteSymbol || t.quote || '报价币', pct = ((d.taxBps || 100) / 100).toFixed(d.taxBps % 100 ? 1 : 0);
   if (!d.taxed) return `不分红（普通币 LaunchToken）\n内盘买卖 1% 平台费：80% 回购销毁 GANG / 20% 进平台金库\n毕业后 0 税，持有人没有分红`;
   const n = (v) => amt(Number(v) || 0), u = (v) => (Number(v) > 0 ? `（${usd(Number(v))}）` : '');
   return `分红币（税币 TaxLaunchToken）\n内盘 + 外盘买卖各 ${pct}% 税：50% 分给持有人，另 50% 中 80% 回购销毁 GANG / 20% 进平台金库\n分红币种：${q}；持仓超过 1 万枚才参与，按持仓比例分（keeper 定期结算，到分红金库领取）`
@@ -110,6 +110,24 @@ const gangKind = (t) => (t.gangTrack === 'v3' ? `<i class="tag gangy v3" title="
 const gangVer = (t) => ({ v3: 'V3', v3fair: 'V3 打新', v2: 'V2' }[t.gangTrack] || 'V1');
 const gangVerChip = (t) => (t.platform !== 'gang' ? '' : `<i class="chip gv ${/^v3/.test(t.gangTrack || '') ? 'v3' : ''}" title="${esc(t.gangTrack === 'v3' ? v3Tip(t) : 'gang.fun ' + gangVer(t))}">Gang ${gangVer(t)}</i>`);
 const gangBadge = (t) => (/^v3/.test(t.gangTrack || '') ? 'G3' : t.gangTrack === 'v2' ? 'G2' : 'G1');
+// Flap 税币（门槛盘）：买 / 卖税、税收怎么分（营销给受益人 / 分红 / 回流 / 销毁）、分红币、累计
+const bpsTxt = (b) => `${+(b / 100).toFixed(2)}%`;
+const flapSplit = (x) => [['营销', x.mktBps], ['分红', x.divBps], ['回流', x.lpBps], ['销毁', x.deflBps]].filter(([, b]) => b > 0).map(([n, b]) => `${n} ${bpsTxt(b)}`).join(' · ') || '—';
+const flapTaxTip = (t) => {
+  const x = t.flapTax; if (!x) return '';
+  return `Flap 税币：买税 ${bpsTxt(x.buyBps)} / 卖税 ${bpsTxt(x.sellBps)}（内盘和外盘都收）\n税收分配：${flapSplit(x)}`
+    + (x.beneficiary ? `\n受益人（营销收款）：${x.beneficiary}${x.sentMkt > 0 ? `，累计 ${amt(x.sentMkt)} BNB` : ''}` : '')
+    + (x.divBps > 0 ? `\n分红币种：${x.divSym || '?'}${x.divMin ? `；持有 ≥ ${K(x.divMin)} 枚参与` : ''}${x.sentDiv > 0 ? `；累计已分 ${amt(x.sentDiv)} ${x.divSym === 'BNB' ? 'BNB' : ''}` : ''}` : '\n不分红')
+    + `\n数据：链上 taxProcessor（${x.processor}）`;
+};
+const flapTaxStat = (t) => {
+  const x = t.flapTax; if (!x) return '';
+  const ben = x.beneficiary ? `<a href="https://bscscan.com/address/${esc(x.beneficiary)}" target="_blank" rel="noopener" title="${esc(x.beneficiary)}">${whoHtml(x.beneficiary, x.beneficiaryName || NAMES[x.beneficiary])}</a>` : '<span class="muted">无</span>';
+  return `<div title="${esc(flapTaxTip(t))}"><span>税收分配</span><b style="font-family:var(--sans)">${esc(flapSplit(x))}</b></div>
+      <div title="${esc(flapTaxTip(t))}"><span>分红</span><b class="${x.divBps > 0 ? 'g' : 'muted'}" style="font-family:var(--sans)">${x.divBps > 0 ? `${bpsTxt(x.divBps)} · ${esc(x.divSym || '?')}${x.sentDiv > 0 ? ' · 累计 ' + amt(x.sentDiv) : ''}` : '不分红'}</b></div>
+      <div><span title="营销那部分税收打给这个地址">受益人</span><b style="font-family:var(--sans)">${ben}</b></div>
+      <div><span>Flap</span><b style="font-family:var(--sans)"><a href="https://flap.sh/bnb/${esc(t.address)}" target="_blank" rel="noopener">详情页</a> · <a href="https://flap.sh/bnb/${esc(t.address)}/taxinfo?lang=zh" target="_blank" rel="noopener">税务</a></b></div>`;
+};
 // Flap Agent ID 门槛盘（NFT-gated）：内盘时只有持有门槛 NFT 的钱包能买卖，迁移后后端不再给 nftGate，标签自动消失
 const nftTip = (t) => `内盘门槛：钱包要持有 ${t.nftGate.name || 'NFT'}（${t.nftGate.nft}）里至少 1 个才能在内盘买卖，每个地址最多买总量 2%；迁移到外盘后谁都能买。没有这个 NFT 的钱包下单会自动跳过`;
 const nftChip = (t, cls = 'tag') => (t.nftGate ? `<i class="${cls} nftg" title="${esc(nftTip(t))}">🔒 ${t.nftGate.known ? 'Agent ID' : 'NFT'} 门槛</i>` : '');
@@ -652,7 +670,7 @@ function renderHead() {
       ${!(t.buyTax > 0 || t.sellTax > 0) ? '' : `<div><span title="代币税：只算代币自己设置的税，不含平台费">代币税</span><b><span class="${t.buyTax >= 5 ? 'r' : ''}">${pctTxt(t.buyTax)}</span> / <span class="${t.sellTax >= 5 ? 'r' : ''}">${pctTxt(t.sellTax)}</span></b></div>`}
       ${el.ok ? '' : `<div><span>资格</span><b class="${el.ok ? 'g' : 'r'}" style="font-family:var(--sans)">${el.ok ? '可交易' : el.why}</b></div>`}
       <div><span title="总费率 买/卖：代币税 + 平台费 + 防狙击税，和标题里的「税」标签是同一个数">总费率</span><b class="${taxHi(t) ? 'r' : 'g'}">${pctTxt(t.buyFeePct)} / ${pctTxt(t.sellFeePct)}${t.antiSniperPct >= 0.1 ? ` <span class="y" title="最近一笔买入含防狙击税">🛡${t.antiSniperPct.toFixed(1)}%</span>` : ''}</b></div>
-      ${t.gangDiv?.taxed == null ? '' : `<div title="${esc(divTip(t))}"><span>分红</span><b class="${t.gangDiv.taxed ? 'g' : 'muted'}" style="font-family:var(--sans)">${t.gangDiv.taxed ? `是 · ${esc(t.gangDiv.stats?.quoteSymbol || t.quote || '')}${Number(t.gangDiv.stats?.totalUsd) > 0 ? ' · 累计 ' + usd(t.gangDiv.stats.totalUsd) : ''}` : '不分红'}</b></div>`}
+      ${flapTaxStat(t)}${t.gangDiv?.taxed == null || t.flapTax ? '' : `<div title="${esc(divTip(t))}"><span>分红</span><b class="${t.gangDiv.taxed ? 'g' : 'muted'}" style="font-family:var(--sans)">${t.gangDiv.taxed ? `是 · ${esc(t.gangDiv.stats?.quoteSymbol || t.quote || '')}${Number(t.gangDiv.stats?.totalUsd) > 0 ? ' · 累计 ' + usd(t.gangDiv.stats.totalUsd) : ''}` : '不分红'}</b></div>`}
       <div><span title="涨幅（开盘以来）：${esc(chgTip(t, 'launch'))}">涨幅</span><b title="${esc(chgTip(t, 'launch'))}">${chgTxt(t.chg?.launch)}</b><small class="chg-row"> <span title="${esc(chgTip(t, 'm5'))}">5m ${chgTxt(t.chg?.m5)}</span> · <span title="${esc(chgTip(t, 'h1'))}">1h ${chgTxt(t.chg?.h1)}</span>${t.chg?.h24 != null ? ` · <span title="${esc(chgTip(t, 'h24'))}">24h ${chgTxt(t.chg.h24)}</span>` : ''}</small></div>
       <div><span>持有人</span><b>${t.holders ?? '—'}</b></div>
       

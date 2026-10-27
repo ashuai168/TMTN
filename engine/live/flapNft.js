@@ -104,6 +104,29 @@ export class FlapNft extends EventEmitter {
     return { status: Number(w(0)), reserve: w(1), circulating: w(2), price: w(3), dexThresh: w(8), quote, nativeSwap: w(10) !== 0n, progress: Number(w(15)) / 1e16 };
   }
 
+  // 税币信息（门槛盘都是 FlapTaxTokenV3，地址 …7777）：买 / 卖税率在代币合约上；受益人、分红币、税收分配在 taxProcessor 上。
+  // feeConfigV2() 前 4 个字 = 营销 / 销毁 / 回流 LP / 分红（万分比，合计 10000）。顺序按已迁移 Flap 币的实际流向核对过：
+  // 营销 10000 的币钱只进 totalQuoteSentToMarketing，分红 10000 的币只进 totalQuoteSentToDividend，回流的币有 totalQuoteAddedToLiquidity
+  async taxInfo(token) {
+    const sel = (s) => ethers.id(s).slice(0, 10);
+    const raw = (to, f) => this.provider.call({ to, data: sel(f) });
+    const u = async (to, f) => BigInt(await raw(to, f));
+    const a = async (to, f) => ethers.getAddress('0x' + (await raw(to, f)).slice(26)).toLowerCase();
+    const [buy, sell, proc] = await Promise.all([u(token, 'buyTaxRate()'), u(token, 'sellTaxRate()'), a(token, 'taxProcessor()').catch(() => ZERO)]);
+    const v = { buyBps: Number(buy), sellBps: Number(sell), processor: proc, at: Date.now() };
+    if (proc === ZERO) return v;
+    const [cfg, ben, divToken, divContract, sentMkt, sentDiv, lpQuote] = await Promise.all([raw(proc, 'feeConfigV2()').catch(() => '0x'), a(proc, 'marketAddress()').catch(() => null), a(proc, 'dividendToken()').catch(() => null),
+      a(proc, 'dividendAddress()').catch(() => null), u(proc, 'totalQuoteSentToMarketing()').catch(() => 0n), u(proc, 'totalQuoteSentToDividend()').catch(() => 0n), u(proc, 'totalQuoteAddedToLiquidity()').catch(() => 0n)]);
+    const w = (i) => (cfg.length >= 2 + (i + 1) * 64 ? Number(BigInt('0x' + cfg.slice(2 + i * 64, 2 + (i + 1) * 64))) : 0);
+    Object.assign(v, { mktBps: w(0), deflBps: w(1), lpBps: w(2), divBps: w(3), beneficiary: ben && ben !== ZERO ? ben : null, divToken, divContract, sentMkt: f18(sentMkt), sentDiv: f18(sentDiv), lpQuote: f18(lpQuote) });
+    if (divToken && divToken !== ZERO) {
+      v.divSym = divToken === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' ? 'BNB' : await this.call(divToken, erc, 'symbol').then((r) => r[0]).catch(() => '?');
+      if (divToken === String(token).toLowerCase()) v.divSym = '本币';
+    }
+    if (v.divBps > 0 && divContract && divContract !== ZERO) v.divMin = await u(divContract, 'minimumShareBalance()').then(f18).catch(() => null);
+    return v;
+  }
+
   // 门槛还在吗（管理员可能去掉了）：nftGate(token)，0 = 不再有门槛
   async gateOf(token) { return (await this.call(FLAP_PORTAL, iface, 'nftGate', [token]))[0].toLowerCase(); }
 

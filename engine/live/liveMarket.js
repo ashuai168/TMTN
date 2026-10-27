@@ -203,6 +203,7 @@ export class LiveMarket extends EventEmitter {
       Object.assign(t, { symbol: symbol || t.symbol, name: name || t.name, createdAt: g.at || g.seenAt });
       if (info) Object.assign(t.nftGate, { name: info.name, symbol: info.symbol, image: info.image, known: info.known });
       if (st) await this.applyFlapNftState(t, st);
+      await this.flapNftTax(t).catch(() => {});
       this.loadMeta(t, ipfsUrl(meta));
       if (!existed && !restore && t.stage === 'curve') this.emit('launch', { ...this.summary(t), detectMs: Math.max(0, Date.now() - (t.createdAt || Date.now())) });
     }
@@ -221,12 +222,21 @@ export class LiveMarket extends EventEmitter {
     if (st.status === 4 && t.stage === 'curve') { t.stage = 'dex'; t.progress = 100; this.emit('migrate', this.summary(t)); }
     else if (st.status === 1 && !t.migrated) t.stage = 'curve';
   }
+  // 税率 / 受益人 / 分红：读链上（flapNft.taxInfo），5 分钟刷新一次（累计分红、营销金额会变）
+  async flapNftTax(t, force = false) {
+    if (!force && t.flapTax && Date.now() - t.flapTax.at < 300_000) return;
+    const v = await this.flapNft.taxInfo(t.address); t.flapTax = v;
+    t.buyTax = v.buyBps / 100; t.sellTax = v.sellBps / 100;
+    const q = v.divSym === 'BNB' ? this.bnbUsd : 0;
+    t.gangDiv = { flap: true, taxed: v.divBps > 0, taxBps: Math.round(Math.max(v.buyBps, v.sellBps) * v.divBps / 10000), vault: v.divContract || null,
+      stats: v.divBps > 0 ? { quoteSymbol: v.divSym || '?', total: v.sentDiv, totalUsd: q ? v.sentDiv * q : null } : null };
+  }
   // 门槛盘数量很少（每天几个）：内盘的每 6 秒读一次 Portal 状态（价格 / 进度 / 是否迁移）；已迁移的交给外盘逻辑
   async flapNftTick() {
     if (this.nftBusy) return; this.nftBusy = true;
     try {
       for (const t of [...this.tokens.values()].filter((x) => x.source === 'flap-nft' && x.stage === 'curve')) {
-        try { await this.applyFlapNftState(t, await this.flapNft.state(t.address)); } catch { /* 下一轮 */ }
+        try { await this.applyFlapNftState(t, await this.flapNft.state(t.address)); await this.flapNftTax(t); } catch { /* 下一轮 */ }
       }
     } finally { this.nftBusy = false; }
   }
@@ -487,6 +497,7 @@ export class LiveMarket extends EventEmitter {
         if (t.price) t.mcapUsd = t.price * (t.maxSupply || 1e9) * this.quoteUsd(t);
         if (t.stage === 'dex') await this.dexRefresh(t);
       } else if (t.source === 'flap-nft') {
+        await this.flapNftTax(t).catch(() => {});
         if (t.stage === 'curve') await this.applyFlapNftState(t, await this.flapNft.state(t.address));
         else await this.dexRefresh(t);
       } else if (t.source === 'gang') {
@@ -562,7 +573,7 @@ export class LiveMarket extends EventEmitter {
       remaining: t.remaining, holders: t.holders, buys: t.buys, sells: t.sells, volume: t.volume, dexVol24: t.dexVol24 ?? null, dexBuys24: t.dexBuys24 ?? null, dexSells24: t.dexSells24 ?? null, dexCountMin: t.dexCountMin || 0, buyTax: t.buyTax, sellTax: t.sellTax,
       buyFeePct: t.source === 'four-agent' && t.feeBps == null ? null : this.buyFeePct(t), sellFeePct: this.sellFeePct(t), antiSniperPct: t.antiSniperPct || 0, antiSniper: !!t.antiSniper, lastTradeAt: t.lastTradeAt || 0, realToken: t.realToken !== false,
       chg: this.change(t),
-      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, gangDiv: t.gangDiv || null, gangV3: t.gangV3 || null, nftGate: t.source === 'flap-nft' && t.stage === 'curve' && t.nftGate && !t.nftGate.removed ? t.nftGate : null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
+      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, gangDiv: t.gangDiv || null, gangV3: t.gangV3 || null, flapTax: t.flapTax ? { ...t.flapTax, beneficiaryName: t.flapTax.beneficiary ? this.names.peek(t.flapTax.beneficiary) : null } : null, nftGate: t.source === 'flap-nft' && t.stage === 'curve' && t.nftGate && !t.nftGate.removed ? t.nftGate : null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
     };
   }
 
