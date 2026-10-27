@@ -2528,7 +2528,9 @@ const pulseScroll = {};
 function openToken(t) {
   if (S.view === 'pulse') $$('.tcb').forEach((b) => { pulseScroll[b.id] = b.scrollTop; });
   if (S.view === 'hold') pulseScroll.hold = $('#hold')?.scrollTop || 0;
-  location.hash = `#/${t.platform}/${t.stage === 'dex' ? 'dex' : 'curve'}/${t.address}`;
+  // 左栏当前标签（即将发射 / 我的 等）能显示这个币就保持不变，不跳回「内盘中」
+  const fits = S.listTab === 'mine' || t.platform === S.platform && ({ curve: t.stage !== 'dex', soon: t.stage === 'curve' && t.progress > 0, dex: t.stage === 'dex' }[S.listTab]);
+  location.hash = `#/${t.platform}/${fits ? S.listTab : t.stage === 'dex' ? 'dex' : 'curve'}/${t.address}`;
 }
 setInterval(() => { if (S.view === 'pulse' && Date.now() - lastPulse > 1000) { renderPulse(); lastPulse = Date.now(); } }, 1000);
 /* 鼠标侧键（后退/前进）返回战壕 */
