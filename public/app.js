@@ -1866,16 +1866,16 @@ function holdersHtml(t) {
   if (!t) return { html: '<div class="empty">先选一个币</div>', cnt: '' };
   const o = holdersState(); loadHolders(); const d = o.data;
   if (!d) return { html: `<div class="empty">${o.err ? '读取失败：' + esc(o.err) : '正在汇总这个币的全部成交…'}</div>`, cnt: '' };
-  const U = (q) => q * d.qUsd, B = (q) => q * d.qBnb;
-  const money = (qv, n) => `<b>$${U(qv).toFixed(2)}</b><div class="hsub">${bnb(B(qv))} BNB${n != null ? ` · ${n} 笔` : ''}</div>`;
+  const U = (q) => q * d.qUsd, pm = (v) => (v >= 0 ? '+' : '−') + '$' + Math.abs(v).toFixed(2);
+  const money = (qv, n) => `<b>$${U(qv).toFixed(2)}</b>${n != null ? `<div class="hsub">${n} 笔</div>` : ''}`;
   const rows = o.exited ? d.exited : d.holders;
   const head = `<div class="note" style="margin:4px 0 6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="muted">${esc(d.coverage)}。统计 ${d.trades} 笔成交、${d.traders} 个地址${d.complete ? '' : '（成交太多，只统计了最近一部分）'}；持仓：前 ${d.checked} 名读链上余额，其余按买卖差估算，<span class="y">⚠</span> = 有转入 / 转出（买卖差和链上余额对不上，成本、利润只按买卖算）</span><span class="spacer"></span>
     <button class="qb" style="display:inline" data-hexited>${o.exited ? `看持有中（${d.holderCount}）` : `看已清仓（${d.exitedCount}）`}</button> <button class="qb" style="display:inline" data-hrefresh>${o.loading ? '刷新中…' : '刷新'}</button></div>`;
-  const html = head + (rows.length ? `<table class="ttable"><tr><th>#</th><th class="l">钱包</th><th title="当前持有数量 / 占总量">持有</th><th title="买入按实际付出（含平台费）；美元 / BNB 按报价币现价换算">总买入</th><th title="卖出按到手金额">总卖出</th><th title="已实现 + 未实现（按现价），不含 gas">利润</th><th title="买入均价 × 总量 × 报价币现价">买入市值</th><th>最近交易</th></tr>
+  const html = head + (rows.length ? `<table class="ttable"><tr><th>#</th><th class="l">钱包</th><th title="当前持有数量 / 占总量">持有</th><th title="买入按实际付出（含平台费）；美元按报价币现价换算">总买入</th><th title="卖出按到手金额">总卖出</th><th title="已实现 + 未实现（按现价），不含 gas">利润</th><th title="买入均价 × 总量 × 报价币现价">买入市值</th><th>最近交易</th></tr>
     ${rows.map((r, i) => `<tr class="${isMe(r.trader) ? 'mine' : ''} trow" data-trader="${esc(r.trader)}" title="点击查看这个地址在 ${esc(t.symbol)} 上的每一笔买卖"><td class="dim">${i + 1}</td><td class="l addr"><span class="tr-who">${gmgnWho(r.trader, r.name || NAMES[r.trader.toLowerCase()])}</span></td>
     <td><b>${K(r.hold)}</b>${r.xfer ? ` <span class="y" title="链上余额 ${K(r.hold)}，买卖差 ${K(r.net)}：有转入 / 转出">⚠</span>` : ''}<div class="hsub">${r.pctSupply.toFixed(r.pctSupply < 0.1 ? 3 : 2)}%${r.holdSrc === 'chain' ? '' : ' · 估算'}</div></td>
     <td>${money(r.boughtQ, r.buys)}</td><td>${money(r.soldQ, r.sells)}</td>
-    <td>${sgn(U(r.total), (v) => '$' + v.toFixed(2))}${r.pct != null ? ' <span class="hsub">' + sgn(r.pct, (v) => v.toFixed(1) + '%') + '</span>' : ''}<div class="hsub" title="已实现 / 未实现">${sgn(U(r.realized), (v) => '$' + v.toFixed(2))} / ${sgn(U(r.unrealized), (v) => '$' + v.toFixed(2))}</div></td>
+    <td title="已实现 ${pm(U(r.realized))} / 未实现 ${pm(U(r.unrealized))}"><b>${sgn(U(r.total), (v) => '$' + v.toFixed(2))}</b></td>
     <td>${r.buyMcUsd ? usd(r.buyMcUsd) : '—'}</td><td class="dim">${r.last ? relT(r.last) : '—'}</td></tr>`).join('')}</table>` : `<div class="empty">${o.exited ? '没有已清仓的地址' : '没有持有人'}</div>`);
   return { html, cnt: o.exited ? `${d.exitedCount} 个已清仓` : `${d.holderCount} 个持有人` };
 }
