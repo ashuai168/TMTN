@@ -540,7 +540,9 @@ app.get('/api/cost-for-pct', async (req, res) => res.json(await costForPct(req.q
 // Gang V2 / V3 内盘每个钱包最多买 1%：「买 ≥1%」不先报价，直接给这么多 BNB，下单时按剩余额度只换需要的报价币、额度满了不发交易（jak 2026-10-27：省掉下单前约 1 秒的报价）
 const PCT_FAST_BNB = Number(process.env.PCT_FAST_BNB ?? 0.1);
 // Flap Agent ID 门槛盘每个地址最多买 2%：swapExactInput 到上限只成交到上限、多余 BNB 同笔退回（报价也按剩余额度给），「买 ≥2%」直接给这么多 BNB（jak 2026-10-27 定 0.3）
-const PCT_FAST_FLAP_BNB = Number(process.env.PCT_FAST_FLAP_BNB ?? 0.3);
+const PCT_FAST_FLAP_BNB = Number(process.env.PCT_FAST_FLAP_BNB ?? 0.3), PCT_FAST_FLAP_LOW = Number(process.env.PCT_FAST_FLAP_LOW ?? 0.2);
+// 余额（后台缓存，不另查）不够 0.3 + gas 就用 0.2；也不超过交易设置里的单笔上限
+const flapFastBnb = (w) => { const bal = Number(trader.wallet?.(w)?.bnb), cap = Number(trader.status?.maxTradeBnb) || 0; let a = Number.isFinite(bal) && bal > 0 && bal < PCT_FAST_FLAP_BNB + 0.005 ? PCT_FAST_FLAP_LOW : PCT_FAST_FLAP_BNB; if (cap > 0 && a > cap) a = cap; return a; };
 // 主后端把 Gang 盘的基本信息一起转给其他钱包：对方还没收录这个币时直接用，不用先去链上查（jak 2026-10-27）
 const gangHint = (t) => (t && t.source === 'gang' && ['v2', 'v3'].includes(t.gangTrack) ? { address: t.address, name: t.name, symbol: t.symbol, creator: t.creator, createdAt: Math.floor((t.createdAt || Date.now()) / 1000), graduated: t.stage === 'dex', quoteSymbol: t.quote, quoteAddress: t.quoteAddress, track: t.gangTrack, taxed: !!t.gangDiv?.taxed } : null);
 function useHint(token, h) {
@@ -556,7 +558,7 @@ async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, vi
       let amt = amount;
       const tk = market.get(token);
       if (side === 'buy' && Number(pctSupply) >= 1 && PCT_FAST_BNB > 0 && LIVE && tk && trader.useGangV2?.(tk)) amt = PCT_FAST_BNB;
-      else if (side === 'buy' && Number(pctSupply) >= 2 && PCT_FAST_FLAP_BNB > 0 && LIVE && tk && trader.useFlapNft?.(tk)) amt = PCT_FAST_FLAP_BNB;
+      else if (side === 'buy' && Number(pctSupply) >= 2 && PCT_FAST_FLAP_BNB > 0 && LIVE && tk && trader.useFlapNft?.(tk)) amt = flapFastBnb(w);
       else if (side === 'buy' && Number(pctSupply) > 0) {   // 每个钱包自己报价：买到总量的 X% 要多少 BNB
         const c = await costForPct({ wallet: w, token, pct: Number(pctSupply), slippage });
         if (!(c.bnb > 0)) { const o = { id: `pct-${Date.now()}`, ts: Date.now(), wallet: WALLET_LABEL, token, symbol: market.get(token)?.symbol || '', side, amount: 0, status: 'failed', reason: c.capReached ? c.error : `买 ${pctSupply}% 报价失败：${c.error || '拿不到报价'}` }; broadcast({ type: 'order', data: o }); return o; }
