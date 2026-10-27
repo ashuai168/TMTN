@@ -1020,4 +1020,6 @@ const trim = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
 // 会真实上链的订单来源：页面手动点击（手动），以及本人在页面上关掉「模拟」并启动的跟单任务（跟单 任务名）。
 // 以前只认「手动」，跟单任务传来的「跟单 xxx」被当成自动订单，真实模式的跟单永远只报价、从不下单，也不计次数
 // 2026-10-27 起还有本人在页面上打开、并关掉「模拟」的 Gang 新盘狙击（狙击 Gang，engine/live/sniper.js）
-const isRealSource = (s) => s === '手动' || /^跟单 /.test(String(s || '')) || s === '狙击 Gang';
+// 另外可以在环境变量 TMTN_EXTRA_SOURCES（逗号分隔，写在 .env 里）放行其他来源：本机脚本带访问令牌调 /api/order 时用。默认为空
+const EXTRA_SOURCES = new Set(String(process.env.TMTN_EXTRA_SOURCES || '').split(',').map((x) => x.trim()).filter(Boolean));
+const isRealSource = (s) => s === '手动' || /^跟单 /.test(String(s || '')) || s === '狙击 Gang' || EXTRA_SOURCES.has(String(s || ''));
