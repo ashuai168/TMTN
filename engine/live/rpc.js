@@ -2,7 +2,7 @@
 // 地址里含 key，显示到页面 / 日志时一律用 maskRpc() 隐藏
 import { ethers } from 'ethers';
 
-export const maskRpc = (u) => String(u || '').replace(/(nodereal\.io\/(?:ws\/)?v1\/)[A-Za-z0-9]+/ig, '$1***').replace(/(\.dwellir\.com\/)[A-Za-z0-9-]+/ig, '$1***').replace(/([?&](api[-_]?key|key|token)=)[^&\s"']+/ig, '$1***');
+export const maskRpc = (u) => String(u || '').replace(/(nodereal\.io\/(?:ws\/)?v1\/)[A-Za-z0-9]+/ig, '$1***').replace(/(\.dwellir\.com\/)[A-Za-z0-9-]+/ig, '$1***').replace(/(\.chainstack\.com\/)[A-Za-z0-9]+/ig, '$1***').replace(/([?&](api[-_]?key|key|token)=)[^&\s"']+/ig, '$1***');
 // 任意文本（日志、错误信息、记录文件）里的 RPC key 一律打码：NodeReal 地址 + .env 里 NODEREAL_KEYS 的 key 原文（用到时再读，.env 在 config.js 里才加载）
 export const redactSecrets = (s) => { let t = maskRpc(s); for (const k of (process.env.NODEREAL_KEYS || '').split(',').map((x) => x.trim()).filter((x) => x.length >= 16)) t = t.split(k).join('***'); return t; };
 
@@ -11,7 +11,7 @@ export const redactSecrets = (s) => { let t = maskRpc(s); for (const k of (proce
 const NR_SLOTS = [];
 export const setNodeRealSlots = (urls) => { NR_SLOTS.length = 0; for (const u of urls) NR_SLOTS.push(String(u).replace(/^wss:/, 'https:').replace('/ws/v1/', '/v1/')); };
 const nrName = (h) => { const i = NR_SLOTS.indexOf(String(h).replace(/^wss:/, 'https:').replace('/ws/v1/', '/v1/')); return NR_SLOTS.length > 1 && i >= 0 ? `NodeReal #${i + 1}` : 'NodeReal'; };
-export const nodeName = (u) => { const h = String(u || ''); return /nodereal/i.test(h) ? nrName(h) : /publicnode/i.test(h) ? 'PublicNode' : /dataseed|bnbchain/i.test(h) ? 'BNB Chain' : /48\.club/i.test(h) ? '48 Club' : /dwellir/i.test(h) ? 'Dwellir' : h ? (h.match(/\/\/([^/:]+)/)?.[1] || '自定义') : '—'; };
+export const nodeName = (u) => { const h = String(u || ''); return /nodereal/i.test(h) ? nrName(h) : /publicnode/i.test(h) ? 'PublicNode' : /dataseed|bnbchain/i.test(h) ? 'BNB Chain' : /48\.club/i.test(h) ? '48 Club' : /dwellir/i.test(h) ? 'Dwellir' : /chainstack/i.test(h) ? 'Chainstack' : h ? (h.match(/\/\/([^/:]+)/)?.[1] || '自定义') : '—'; };
 
 // 用量统计：每个节点、每个用途（label）、每个方法各请求了多少次（NodeReal 有额度，要盯着）
 export const RPC_USAGE = new Map();
@@ -64,6 +64,13 @@ export class WsLogs {
   drop(ws) { if (!ws) return; if (this.ws === ws) this.ws = null; try { ws.destroy(); } catch { /* ignore */ } }
 }
 
+// 付费的自定义节点（.env 的 RPC_URL，如 Chainstack）每分钟最多用 RPC_URL_MAX_PER_MIN 次（默认 250，约每月 1000 万次），所有用途合计；
+// 超了这一分钟就先用别的节点（别的都不可用时仍会用它），免得公共节点限流时 eth_call 全涌过去把月额度吃光
+const capUrl = () => process.env.RPC_URL || '', capMax = () => Number(process.env.RPC_URL_MAX_PER_MIN || 250);
+let capMin = 0, capUsed = 0;
+const capped = (u) => { if (!u || u !== capUrl() || /nodereal/i.test(u)) return false; const m = Math.floor(Date.now() / 60_000); if (m !== capMin) { capMin = m; capUsed = 0; } return capUsed >= capMax(); };
+const capBump = (u) => { if (u && u === capUrl()) capUsed++; };
+
 export class FailoverProvider extends ethers.JsonRpcProvider {
   // urls 按优先顺序；其中多个 NodeReal key 轮流用（round-robin）。某个节点被限流（429 等）就冷却 5 分钟，NodeReal 月额度用完冷却 1 小时，
   // 其他错误冷却 30 秒，期间用下一个；全都在冷却时只试冷却最快结束的 2 个（以前是全部硬试一遍，一个请求打 4 个节点）。
@@ -83,9 +90,10 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
       coolUntil: this.coolUntil, primaryErr: this.primaryErr, keys: this.nodes.filter((n) => n.nr).map((n) => ({ name: n.name, cooling: n.cool > now, err: n.cool > now ? n.err : null })) };
   }
   order(method) {
-    const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now);
+    const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now && !capped(n.url)), warm = pool.filter((n) => n.cool <= now);
     const nr = ok.filter((n) => n.nr);
     if (nr.length > 1) { this.rr = (this.rr + 1) % nr.length; const rot = nr.slice(this.rr).concat(nr.slice(0, this.rr)); let k = 0; for (let i = 0; i < ok.length; i++) if (ok[i].nr) ok[i] = rot[k++]; }
+    if (!ok.length && warm.length) return warm;
     return ok.length ? ok : [...(pool.length ? pool : this.nodes)].sort((a, b) => a.cool - b.cool).slice(0, 2);
   }
   // 调用位置要在入口处抓（到 _send 时已经过了 ethers 的请求队列，调用栈里没有业务代码了）
@@ -96,12 +104,13 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
     const method = Array.isArray(payload) ? payload[0]?.method : payload?.method;
     let last; const list = this.order(method);
     for (let i = 0; i < list.length; i++) {
-      const n = list[i]; bumpUsage(this.label, n.url, payload);
+      const n = list[i]; bumpUsage(this.label, n.url, payload); capBump(n.url);
       try {
         const r = await n.p._send(payload);
         const errs = (Array.isArray(r) ? r : [r]).filter((x) => x?.error).map((x) => String(x.error.message || ''));
         // 限流 / 额度：冷却这个节点换下一个；节点不支持（如 bsc-dataseed 的 getLogs「limit exceeded」）：换下一个；合约 revert 之类的正常错误直接返回
         const rl = errs.find((m) => /429|rate|too many|quota|exceed|limit/i.test(m));
+        if (errs.some((m) => /not available on your current plan|archive/i.test(m)) && i < list.length - 1) { last = new Error(errs[0]); continue; }   // Chainstack 非归档档：只能查最近约 128 块的日志，更早的换下一个节点（不冷却）
         if (rl && method === 'eth_getLogs' && !n.nr && /^limit exceeded$/i.test(rl.trim())) { n.noLogs = Date.now() + 600_000; last = new Error(rl); continue; }
         if (rl && i < list.length - 1) { n.cool = Date.now() + (/monthly quota/i.test(rl) ? 3600_000 : n.nr ? 300_000 : 30_000); n.err = rl.slice(0, 120); if (n.nr) { this.primaryErr = n.err; this.coolUntil = n.cool; } last = new Error(rl); continue; }
         this.lastUsed = maskRpc(n.url); this.lastUrl = n.url; return r;
