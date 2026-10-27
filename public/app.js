@@ -1446,7 +1446,28 @@ $('#quickBuy').addEventListener('change', (e) => { const v = +e.target.value; if
 $('#walletMenu').addEventListener('change', async (e) => { const c = e.target.closest('[data-mwon]'); if (!c) return; try { S.walletsInfo = await api('/api/wallets', { slot: Number(c.dataset.mwon), on: c.checked }); renderWalletMenu(); renderAuth(); scheduleRender(); } catch (err) { toast({ status: 'failed', symbol: '钱包', reason: err.message }); } });
 $('#walletMenu').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; e.stopPropagation(); try { await copyOrThrow(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } });
 $('#walletSel').addEventListener('click', (e) => { if (e.target.closest('#walletMenu')) return; renderWalletMenu(); $('#walletMenu').classList.toggle('hidden'); });
-$$('.modal').forEach((m) => m.addEventListener('click', (e) => { if (e.target === m) m.classList.add('hidden'); }));
+/* ---------- 弹层统一「点外部关闭 + Esc」 ---------- */
+// 下拉 / 小面板：在 popEl 和它的按钮以外按下鼠标就关；在对话框里点（确认框、授权管理等）不算外部。登记：window.tmtnPop(el, [按钮], close, isOpen?)
+// 遮罩型弹窗：按下和松开都在遮罩上才关（在输入框里拖选文字拖到外面不会误关）
+const POPS = [];
+const popOpen = (p) => (p.isOpen ? p.isOpen() : p.el.isConnected && !p.el.classList.contains('hidden'));
+window.tmtnPop = (el, anchors, close, isOpen) => { if (el) POPS.push({ el, anchors: anchors.filter(Boolean), close, isOpen }); };
+const DLG_SEL = '.ui-dlg-back,.modal:not(.hidden),.tr-drawer-back,.tfm-bg,.wl-back';
+let downOn = null;
+window.addEventListener('pointerdown', (e) => {
+  downOn = e.target; const t = e.target; if (!(t instanceof Element)) return;
+  if (t.closest(DLG_SEL)) return;
+  POPS.forEach((p) => { if (popOpen(p) && !p.el.contains(t) && !p.anchors.some((a) => a.contains(t))) p.close(); });
+}, true);
+const backClick = (el, close) => el.addEventListener('click', (e) => { if (e.target === el && downOn === el) close(); });
+$$('.modal').forEach((m) => backClick(m, () => m.classList.add('hidden')));
+document.addEventListener('click', (e) => { const b = e.target; if (!b.classList?.contains('wl-back') || downOn !== b) return; if (b.id === 'wLoginDlg') closeWalletLoginDlg(); else b.remove(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || document.querySelector('.ui-dlg-back')) return;   // 有确认框时 Esc 先给确认框
+  const wl = [...document.querySelectorAll('.wl-back')].pop(); if (wl) { e.preventDefault(); return wl.id === 'wLoginDlg' ? closeWalletLoginDlg() : wl.remove(); }
+  POPS.forEach((p) => { if (popOpen(p)) p.close(); });
+});
+window.tmtnPop($('#walletMenu'), [$('#walletSel')], () => $('#walletMenu').classList.add('hidden'));
 
 // 搜索：粘贴地址直接打开 / 名称符号模糊搜索
 const sIn = $('#search');

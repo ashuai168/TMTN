@@ -127,6 +127,7 @@ pop.addEventListener('click', (e) => {
   else if (t.dataset.vmMsg != null) { msg = null; paint(); }
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open) { open = false; pop.classList.add('hidden'); paint(); } });
+window.tmtnPop?.(pop, [btn], () => { open = false; pop.classList.add('hidden'); paint(); }, () => open);   // 点面板外面关闭（app.js 里的统一机制）
 
 load(false);
 setInterval(() => { if (!open) load(false); }, 30 * 60e3);   // 后台每 30 分钟看一次（服务端缓存 10 分钟），有新版本时版本号旁边亮 NEW
