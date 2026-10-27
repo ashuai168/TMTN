@@ -2674,7 +2674,11 @@ $('#donateBtn')?.addEventListener('click', openDonate);
 // 追踪：关注的地址在内盘上的买卖（链上订阅筛出来，服务器推送）。跟单：每个任务跟一个目标，新建一律「暂停 + 模拟」，要本人打开
 const ACT_CLS = { 建仓: 'g', 加仓: 'g', 减仓: 'r', 清仓: 'r' };
 const trkAgo = (ts) => { const s = Math.max(0, (Date.now() - ts) / 1000); return s < 60 ? Math.floor(s) + '秒' : s < 3600 ? Math.floor(s / 60) + '分' : s < 86400 ? Math.floor(s / 3600) + '时' : Math.floor(s / 86400) + '天'; };
-function trkPass(e) { const tg = TRK.targets.find((x) => x.address === e.target); return (!TRK.fGroup || (tg?.group || '默认') === TRK.fGroup) && (!(TRK.fMin > 0) || (e.bnb || 0) >= TRK.fMin); }
+// 最小金额（BNB）：追踪抽屉和追踪页共用，记在浏览器里；没有 BNB 金额的成交（非 BNB 计价）不按金额过滤
+try { TRK.fMin = Number(localStorage.trkMin) || 0; } catch { /* ignore */ }
+function trkMinPass(e) { return !(TRK.fMin > 0) || !(e.bnb > 0) || e.bnb >= TRK.fMin; }
+function setTrkMin(v) { TRK.fMin = Math.max(0, Number(v) || 0); try { localStorage.trkMin = String(TRK.fMin); } catch { /* ignore */ } for (const id of ['trkFMin', 'trkpMin']) { const el = $('#' + id); if (el && document.activeElement !== el) el.value = TRK.fMin || ''; } if (S.view === 'track') renderTrack(); renderTrkPanel(); }
+function trkPass(e) { const tg = TRK.targets.find((x) => x.address === e.target); return (!TRK.fGroup || (tg?.group || '默认') === TRK.fGroup) && trkMinPass(e); }
 // 追踪地址的显示名：备注名 > 域名 > 短地址（备注存服务器的追踪数据里，和钱包无关）
 function trkT(addr) { return TRK.targets.find((x) => x.address === String(addr || '').toLowerCase()) || null; }
 function trkRemark(addr) { const t = trkT(addr); return t ? (t.remark || (t.name && t.name !== t.domain ? t.name : '')) : ''; }
@@ -2901,7 +2905,7 @@ $('#track').addEventListener('click', async (e) => {
 });
 $('#track').addEventListener('change', (e) => {
   if (e.target.id === 'trkFGroup') { TRK.fGroup = e.target.value; renderTrack(); }
-  if (e.target.id === 'trkFMin') { TRK.fMin = Number(e.target.value) || 0; renderTrack(); }
+  if (e.target.id === 'trkFMin') setTrkMin(e.target.value);
   if (e.target.id === 'trkSound') { TRK.sound = e.target.checked; try { localStorage.trkSound = TRK.sound ? '1' : '0'; } catch { /* ignore */ } }
 });
 $('#trkAddr')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#trkAddBtn').click(); });
@@ -2951,9 +2955,10 @@ function renderTrkPanel() {
   if (document.body.classList.contains('trkp-on') !== TP.open) { document.body.classList.toggle('trkp-on', TP.open); window.dispatchEvent(new Event('resize')); }   // 一栏：主内容右移让出宽度（K 线等跟着重新排版）
   $('#bbTrackN').textContent = TRK.targets.length || '';
   if (!TP.open) return;
-  const rows = TRK.feed;
+  const rows = TRK.feed.filter(trkMinPass);
   $('#trkpCount').textContent = TRK.targets.length;
   $('#trkpList').innerHTML = !TRK.targets.length ? '<div class="trkp-empty">还没有追踪的地址。<br>可以在交易者盈亏抽屉里点「追踪」，或者到追踪页添加 .ai / .bnb 域名、0x 地址。<br><button data-tpgo>去添加</button></div>'
+    : !rows.length && TRK.feed.length ? `<div class="trkp-empty">没有 ≥ ${TRK.fMin} BNB 的成交（最小金额过滤）</div>`
     : !rows.length ? '<div class="trkp-empty">追踪的地址在 Flap / Four / Gang V2 内盘上买卖时，会实时出现在这里。</div>'
     : rows.map((e) => `<div class="trkp-e" data-a="${e.token}" title="点击进入 ${esc(e.symbol)} 详情"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who ${trkRemark(e.target) ? 'y' : 'wn'}" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}">${e.bnb ? bnb(e.bnb, 3) : K(e.quoteAmt)}<small class="dim"> ${e.bnb ? 'BNB' : esc(e.quote)}</small></span></div>
       <div class="trkp-r2"><span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="dim">MC ${usd(e.mcapUsd)}</span><span class="spacer"></span><span class="dim" title="${fullTime(e.ts)}">${trkAgo(e.ts)}</span></div></div>`).join('');
@@ -2961,6 +2966,8 @@ function renderTrkPanel() {
 function setTrkPanel(on) { TP.open = on; try { localStorage.trkPanel = on ? '1' : '0'; } catch { /* ignore */ } tpSaveServer(); if (on && !TRK.loaded) loadTrack().then(renderTrkPanel); renderTrkPanel(); }
 $('#bbTrack')?.addEventListener('click', () => setTrkPanel(!TP.open));
 $('#trkpClose')?.addEventListener('click', () => setTrkPanel(false));
+$('#trkpMin')?.addEventListener('input', (e) => setTrkMin(e.target.value));
+for (const id of ['trkFMin', 'trkpMin']) { const el = $('#' + id); if (el) el.value = TRK.fMin || ''; }
 $('#trkpGo')?.addEventListener('click', () => { TRK.tab = 'feed'; setView('track'); });
 $('#trkPanel')?.addEventListener('click', (e) => {
   if (e.target.closest('input, [data-trkedit]')) return;   // 编辑备注时点输入框不跳转

@@ -1032,6 +1032,7 @@ body { --favH: 26px; } body.fav-on { --favH: 60px; }
 /* 左侧钱包追踪面板：覆盖在内容上（不改动下面的布局），宽度可拖 */
 .trk-panel { position: fixed; left: 0; top: calc(46px + var(--favH) - 26px); bottom: 26px; width: var(--trkpW, 340px); z-index: 39; display: flex; flex-direction: column; background: var(--panel); border-right: 1px solid var(--line2); box-shadow: 8px 0 24px rgba(0, 0, 0, .45); }
 .trkp-h { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); } .trkp-h b { font-size: 14px; }
+.trkp-min { width: 64px; height: 24px; padding: 0 6px; border: 1px solid var(--line2); background: var(--panel2); color: var(--text); font-size: 12px; }   /* 钱包追踪：最小金额 */
 .trkp-x { border: 1px solid var(--line2); color: var(--muted); padding: 0 8px; height: 24px; } .trkp-x:hover { color: var(--text); }
 .trkp-list { flex: 1; overflow: auto; }
 .trkp-e { padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 12px; } .trkp-e:hover { background: rgba(255, 255, 255, .03); }
