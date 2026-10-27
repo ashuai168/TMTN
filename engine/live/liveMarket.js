@@ -393,13 +393,6 @@ export class LiveMarket extends EventEmitter {
       price: (t._qDec && t._qDec !== 18 ? 0 : Number(it.priceQuote ?? it.priceBnb)) || t.price, mcapUsd: (t._qDec && t._qDec !== 18 ? 0 : Number(it.fdvUsd)) || t.mcapUsd || 0,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0
       holders: it.holders ?? null, pair: it.pair || t.pair || null, tradeCount: it.trades ?? t.tradeCount ?? 0,   // 2026-10-27 起这几项被上一行的注释吞掉没有赋值
     });
-    // 成交量统一按报价币计、从开盘起累计（和 Four / Flap / V3 一个口径）：V2 的全部成交在选中时从 gang.fun 拉（refresh → gang.history），之后实时累加；
-    // 还没拉过的先用接口的 24 小时美元成交量 ÷ 报价币美元价当占位，页面标成「24h」。以前接口给的是 24 小时 BNB 计的量，却按报价币显示
-    if (!t._volFull) {
-      const q = this.quoteUsd(t);
-      if (it.volume24hUsd != null && q > 0) { t.volume = it.volume24hUsd / q; t.volumeH24 = true; }
-      else if (it.volume24hBnb != null && (!t.quoteAddress || ['BNB', 'WBNB'].includes(String(t.quote).toUpperCase()))) { t.volume = Number(it.volume24hBnb) || 0; t.volumeH24 = true; }
-    }
     if (t.gangTrack === 'v3fair' && t._fair) this.applyFair(t);   // 打新币：接口 / 链上事件按内盘给的 0/15、curve 不对，用 pad 读到的覆盖
     else if (t.gangTrack === 'v3fair' && !t._fairAt) this.gangFairState(t).catch(() => {});   // 新打新盘（链上 Created 事件刚进来）：马上读一次 pad，不等 15 秒轮询
     if (!existed) t.createdAt = it.createdAt * 1000;
@@ -409,6 +402,13 @@ export class LiveMarket extends EventEmitter {
     if (it.taxed != null) t.gangDiv = { taxed: !!it.taxed, taxBps: it.taxBps ?? (it.taxed ? 100 : 0), vault: it.dividendVault || t.gangDiv?.vault || null, stats: it.dividends || t.gangDiv?.stats || null };   // 分红币 / 不分红（见 gangFun.fromV2）
     // V2 报价币（GANG / ZEC / 币股…）的美元价用 gang.fun 给的，quoteUsd() 换美元要用
     if (it.quoteAddress && it.quoteUsd && !(this.qUsd[it.quoteAddress.toLowerCase()] > 0)) this.qUsd[it.quoteAddress.toLowerCase()] = it.quoteUsd;
+    // 成交量统一按报价币计、从开盘起累计（和 Four / Flap / V3 一个口径）：V2 的全部成交在选中时从 gang.fun 拉（refresh → gang.history），之后实时累加；
+    // 还没拉过的先用接口的 24 小时美元成交量 ÷ 报价币美元价当占位，页面标成「24h」。以前接口给的是 24 小时 BNB 计的量，却按报价币显示
+    if (!t._volFull) {
+      const q = this.quoteUsd(t);
+      if (it.volume24hUsd != null && q > 0) { t.volume = it.volume24hUsd / q; t.volumeH24 = true; }
+      else if (it.volume24hBnb != null && (!t.quoteAddress || ['BNB', 'WBNB'].includes(String(t.quote).toUpperCase()))) { t.volume = Number(it.volume24hBnb) || 0; t.volumeH24 = true; }
+    }
     if (isNew && !existed) this.emit('launch', { ...this.summary(t), detectMs: Math.max(0, Date.now() - t.createdAt) });   // 链上已经先发现过的，接口再看到时不重复提示
     // 最近有成交的几个 + 当前选中的，定时拉成交。一次轮询会连着 upsert 几百个币，排序只做一次（1 秒内合并）
     clearTimeout(this._hotT); this._hotT = setTimeout(() => { this._hotT = null; this.gang.setHot([...this.tokens.values()].filter((x) => x.source === 'gang' && x.lastTradeAt).sort((a, b) => b.lastTradeAt - a.lastTradeAt).slice(0, 5).map((x) => x.address)); }, 1000);
