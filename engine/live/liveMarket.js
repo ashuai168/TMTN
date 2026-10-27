@@ -372,6 +372,33 @@ export class LiveMarket extends EventEmitter {
     t._chgAt = 0;
   }
 
+  // Four：从创建起的全部成交（fourMeme.tokenTrades，走 MySQL 缓存只补新区块）→ 内盘 K 线、最近 100 笔、买卖笔数和成交量。外盘 K 线（dex）留着
+  async fourHistory(t) {
+    const list = await this.four.tokenTrades(t.address); if (!list.length) return;
+    const q = this.quoteUsd(t);
+    t.candles = (t.candles || []).filter((c) => c.dex);
+    let buys = 0, sells = 0, vol = 0;
+    for (const x of list) { if (x.side === 'buy') buys++; else sells++; vol += x.bnb || 0; if (x.price) this.pushCandle(t, x.ts, x.price, x.bnb || 0); }
+    Object.assign(t, { buys: Math.max(t.buys || 0, buys), sells: Math.max(t.sells || 0, sells), volume: Math.max(t.volume || 0, vol) });
+    const seen = new Set(t.trades.map((x) => `${x.tx}:${x.side}`));
+    for (const x of list.slice(-100)) if (!seen.has(`${x.tx}:${x.side}`)) t.trades.push({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx, usd: x.bnb * q, mcapUsd: x.price * (t.maxSupply || 1e9) * q, name: this.names.peek(x.trader) });
+    t.trades.sort((a, b) => b.ts - a.ts); if (t.trades.length > 100) t.trades.length = 100;
+    t.lastTradeAt = Math.max(t.lastTradeAt || 0, list.at(-1).ts); t._chgAt = 0;
+  }
+
+  // Flap Agent 曲线：fsi 成交记录。有 MySQL 缓存时只拉最新一页（每边 200 笔），接不上库里最新那笔才整份重拉（每边 5000 笔）
+  async fsiHistory(t) {
+    return cache.history('fsi', t.market, async (cur, old) => {
+      if (cur && old?.rows.length) {
+        const page = await fsi.fetchTrades(t.market, 200);
+        const gap = ['buy', 'sell'].some((sd) => { const a = page.filter((x) => x.side === sd); return a.length >= 200 && a.at(-1).ts > cur; });
+        if (!gap) return { rows: page, cursor: Math.max(cur, ...page.map((x) => x.ts)) };
+      }
+      const all = await fsi.fetchTrades(t.market, 5000);
+      return { rows: all, cursor: all.length ? Math.max(...all.map((x) => x.ts)) : null };
+    }, (x) => `${x.tx}:${x.side}:${x.tokens}`);
+  }
+
   onGangTrade(tr, live) {
     const t = this.get(tr.token); if (!t || t.source !== 'gang') return;
     // 去重要看所有见过的成交，不能只看留着的最近 100 笔：选中时一次拉 200 笔，更早的那些以前会被当成新成交重复加，
@@ -568,7 +595,8 @@ export class LiveMarket extends EventEmitter {
         }
         if (t.stage === 'dex') await this.dexRefresh(t);   // 已发射：接上外盘池子的成交
       } else if (t.source === 'four-agent') {
-        // 已由链上事件实时更新，不再请求 shrine（经常 429）
+        // 已由链上事件实时更新，不再请求 shrine（经常 429）。有 MySQL 缓存时：用库里从创建起的全部成交重建 K 线和成交列表（重启后也完整），10 分钟一次，第一次最多等 3 秒
+        if (cache.my && (!t.fourHistAt || Date.now() - t.fourHistAt > 600_000)) { t.fourHistAt = Date.now(); await Promise.race([this.fourHistory(t).then(() => this.emit('detail', t.address)), new Promise((r) => setTimeout(r, 3000))]).catch(() => {}); }
         if (t.stage === 'dex') await this.dexRefresh(t);
       } else {
         const b = await tokenInfo(t.address);
@@ -663,7 +691,7 @@ export class LiveMarket extends EventEmitter {
     if (t.source === 'gang') { const k = this.qScale(t); list = (await this.gang.history(t.address, 20000)).map((x) => (k === 1 ? x : { ...x, price: x.price * k, bnb: x.bnb * k })); }
     else if (t.source === 'four-agent') list = await this.four.tokenTrades(t.address);
     else if (t.source === 'flap-nft') list = (await this.flapNft.history(t.address).catch(() => this.flapNft.trades(t.address))).map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx }));   // 门槛盘：Portal 内盘成交（从创建起）
-    else if (t.market) { list = await fsi.fetchTrades(t.market, 5000); complete = list.length < 9000; }
+    else if (t.market) { list = await this.fsiHistory(t); complete = list.length < 9000; }
     list = [...new Map(list.map((x) => [`${x.tx}:${x.side}:${x.tokens}`, x])).values()].sort((a, b) => b.ts - a.ts).slice(0, 20000);
     for (const x of list) { x.name ||= this.names.peek(x.trader); x.usd = (x.bnb || 0) * this.quoteUsd(t); }
     const v = { at: Date.now(), list, complete };
