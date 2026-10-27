@@ -152,3 +152,40 @@ html[data-theme="new"] {
 [data-theme="new"] .tc-mc b.cy { color: var(--text); }
 [data-theme="new"] .sw-go.buy { background: transparent; border-color: var(--g-line); color: var(--g); } [data-theme="new"] .sw-go.buy:hover { background: var(--g-bg); }
 [data-theme="new"] .sw-go.sell { background: transparent; border-color: var(--r-line); } [data-theme="new"] .sw-go.sell:hover { background: var(--r-bg); }
+
+/* ===== 第二轮：对照效果图收细节（字更细、更安静、少框） ===== */
+html[data-theme="new"] { --fw-strong: 400; --fw-head: 600; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+html[data-theme="new"] body { font-size: 13px; }
+/* 顶栏：圆胶囊 → 6px 圆角灰描边按钮 */
+[data-theme="new"] .topbar { height: 48px; }
+[data-theme="new"] .pill, [data-theme="new"] .wallet-sel, [data-theme="new"] .search { border-radius: 6px; border-color: var(--line2); background: transparent; color: var(--muted); }
+[data-theme="new"] .search { background: var(--panel); border-color: var(--line); }
+[data-theme="new"] .viewsw { background: transparent; border: 0; }
+[data-theme="new"] .viewsw button { color: var(--muted); border-radius: 6px; font-size: 13px; }
+[data-theme="new"] .brand-t { font-weight: 700; }
+[data-theme="new"] .fav-tg { filter: grayscale(1) brightness(.8); }
+[data-theme="new"] .follow-x:hover { border-color: var(--muted); color: var(--text); }
+/* 钱包追踪栏：去掉左侧竖条，和面板同底，名字常规字重 */
+[data-theme="new"] .trk-panel .trkp-e { border-left: 0; background: var(--panel); }
+[data-theme="new"] .trk-panel .trkp-e:hover { background: var(--hover); }
+[data-theme="new"] .trk-panel .trkp-who, [data-theme="new"] .trk-tbl a.wn { color: var(--text); }
+[data-theme="new"] .trk-panel .trkp-who.y, [data-theme="new"] .trk-tbl a.y, [data-theme="new"] .trk-nm b.y { color: var(--text); }
+/* 中间代币头：统计不要小框，标签在上、数值在下 */
+[data-theme="new"] .stats { gap: 6px 22px; border-top-color: var(--line); }
+[data-theme="new"] .stats > div { flex-direction: column; align-items: flex-start; gap: 1px; padding: 0; border: 0; background: none; }
+[data-theme="new"] .stats > div > span { font-size: 11px; color: var(--dim); }
+[data-theme="new"] .stats b { font: 500 13px var(--mono); }
+[data-theme="new"] .stats .hold-st { background: none; } [data-theme="new"] .stats .hold-st > span { color: var(--accent); }
+/* 按钮统一 6px 圆角 */
+[data-theme="new"] .ca-big, [data-theme="new"] .links a, [data-theme="new"] .links button, [data-theme="new"] .chips button, [data-theme="new"] .qbp-b, [data-theme="new"] .presets button, [data-theme="new"] .wchip, [data-theme="new"] .qtrade button { border-radius: 6px; }
+[data-theme="new"] .qbp * { border-radius: 6px !important; }
+[data-theme="new"] .qbp-b { font-weight: 400; }
+[data-theme="new"] .chips button { border-color: var(--line2); }
+/* 卡片：raised 底 + 细灰框 */
+[data-theme="new"] .tcard { border-color: var(--line); }
+[data-theme="new"] .act-r .sd.buy, [data-theme="new"] .act-r .sd.sell { background: transparent; }
+[data-theme="new"] .act-r { border-bottom-color: rgba(31, 38, 50, .6); } [data-theme="new"] .act-r:hover { background: var(--hover); } [data-theme="new"] .act-r.mine { background: var(--accent-bg); }
+[data-theme="new"] .big-btn { flex: none; min-height: 46px; height: auto; font-size: 14px; font-weight: 600; line-height: 1.3; padding: 6px 10px; }
+[data-theme="new"] .wchip.on { border-color: var(--line2); }
+/* 战壕卡片里的小标签是固定宽度的格子，不加描边（空格子会露出来） */
+[data-theme="new"] .tcard .chip, [data-theme="new"] .tlc .chip { box-shadow: none; }
