@@ -91,7 +91,7 @@ scripts/add-wallet.sh --peers --write-env         # 写进 .env 的 WALLET_PEERS
 
 ### 历史数据缓存（可选，MySQL + Redis）
 
-配上之后，各盘从开盘起的成交、外盘分钟 K 线、BNB 小时价、钱包交易记录会存进 MySQL，重启或再次点开同一个币只补新的（Gang 大盘从翻 100 页变成 1 页，Four / Flap 门槛盘不再从创建区块重扫）。不配也照常运行，数据库连不上时自动走原来的路径。步骤见 **[docs/cache.md](docs/cache.md)**。
+配上之后，各盘从开盘起的成交、外盘分钟 K 线、BNB 小时价、钱包交易记录会存进 MySQL，重启或再次点开同一个币只补新的（Gang 大盘从翻 100 页变成 1 页，Four / Flap 门槛盘不再从创建区块重扫）。不配也照常运行，数据库连不上时自动走原来的路径。装好 Docker 后一条命令开启：`scripts/enable-cache.sh`，然后重启。详细说明见 **[docs/cache.md](docs/cache.md)**。
 
 ### 环境变量
 
