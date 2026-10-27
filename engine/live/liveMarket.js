@@ -86,7 +86,9 @@ export class LiveMarket extends EventEmitter {
     this.curve.on('market', (item, { isNew }) => this.upsertCurve(item, isNew));
     this.four.on('token', (it, { isNew }) => this.upsertFour(it, isNew));
     this.four.on('trade', (tr) => this.onFourTrade(tr));
-    this.gang.on('token', (it, { isNew }) => this.upsertGang(it, isNew));
+    // 列表满 1000 时 gang.fun 接口每 5 秒给的老盘（比最近淘汰的还老）不再收录：以前每次轮询都是「加进来 → 马上被淘汰 → 下次再加」，
+    // 一轮一百多个币反复进出（每个都要排序淘汰、读一次报价币 decimals），白白占 CPU 和每分钟几百次 eth_call。链上新盘 / 搜索不受影响
+    this.gang.on('token', (it, { isNew }) => { if (!isNew && this.tokens.size >= MAX && !this.tokens.has(this.key(it.address)) && (Number(it.createdAt) || 0) * 1000 <= (this._evictFloor || 0)) return; this.upsertGang(it, isNew); });
     setInterval(() => { for (const t of this.tokens.values()) if (t.source === 'gang' && t.gangTrack === 'v3fair' && t.stage === 'curve') this.gangFairState(t).catch(() => {}); }, 15_000).unref?.();   // 打新盘：进度 / 是否已发射从 pad 读
     this.gang.on('trade', (tr, { live }) => this.onGangTrade(tr, live));
     this.feeds.on('launch', (l) => this.upsertShrine(l));
@@ -123,7 +125,7 @@ export class LiveMarket extends EventEmitter {
       if (this.tokens.size > MAX) {
         const keep = this.keepSet?.() || new Set();   // 持有中、收藏的币（server.js 设置），永远不淘汰
         const old = [...this.tokens.values()].filter((t) => !t.pinned && !keep.has(t.address) && t.source !== 'agent-curve' && t.source !== 'flap-nft' && !(t.source === 'four-agent' && t.stage === 'dex')).sort((a, b) => a.createdAt - b.createdAt)[0];
-        if (old) this.tokens.delete(old.address);
+        if (old) { this.tokens.delete(old.address); this._evictFloor = Math.max(this._evictFloor || 0, old.createdAt || 0); }   // 比这还老的盘不值得再收录（见 gang.on('token')）
       }
     }
     return this.tokens.get(k);
@@ -388,7 +390,8 @@ export class LiveMarket extends EventEmitter {
       source: 'gang', platform: 'gang', agentExclusive: true, symbol: it.symbol, name: it.name, quote: it.quoteSymbol || 'BNB', quoteAddress: it.quoteAddress || null, creator: it.creator,
       creatorName: it.creatorHandle || null, feeBps: 100, sellFeeBps: 100, stage: it.graduated ? 'dex' : 'curve', migratedAt: it.graduatedAt ? it.graduatedAt * 1000 : t.migratedAt, raised: t._qDec && t._qDec !== 18 ? t.raised : raised, progress: pct, target: t._qDec && t._qDec !== 18 ? t.target : it.gradAmtQuote || (pct > 0 ? Math.round((raised / (pct / 100)) * 10) / 10 : (t.target || 15)),   /* 非 18 位报价币（XAUt）接口按 18 位给，数会小 1e12 倍，用链上读的 */ gangTrack: /^v3/.test(t.gangTrack || '') ? t.gangTrack : it.track || 'v1' /* 链上认出的 V3 不被接口的 v2 覆盖 */, remaining: t._v2Rem ?? null,   // 剩余可售：V2 从合约读，读到之前 / 老盘未知 = null（页面显示「—」）
      
-      price: (t._qDec && t._qDec !== 18 ? 0 : Number(it.priceQuote ?? it.priceBnb)) || t.price, mcapUsd: (t._qDec && t._qDec !== 18 ? 0 : Number(it.fdvUsd)) || t.mcapUsd || 0, holders: it.holders ?? null,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0 volume: Number(it.volume24hBnb) || 0, pair: it.pair || null, tradeCount: it.trades || 0,
+      price: (t._qDec && t._qDec !== 18 ? 0 : Number(it.priceQuote ?? it.priceBnb)) || t.price, mcapUsd: (t._qDec && t._qDec !== 18 ? 0 : Number(it.fdvUsd)) || t.mcapUsd || 0,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0
+      holders: it.holders ?? null, volume: it.volume24hBnb != null ? Number(it.volume24hBnb) || 0 : t.volume || 0, pair: it.pair || t.pair || null, tradeCount: it.trades ?? t.tradeCount ?? 0,   // 2026-10-27 起这三项被上一行的注释吞掉没有赋值；V3 的成交量从链上算，接口没给时保留
     });
     if (t.gangTrack === 'v3fair' && t._fair) this.applyFair(t);   // 打新币：接口 / 链上事件按内盘给的 0/15、curve 不对，用 pad 读到的覆盖
     else if (t.gangTrack === 'v3fair' && !t._fairAt) this.gangFairState(t).catch(() => {});   // 新打新盘（链上 Created 事件刚进来）：马上读一次 pad，不等 15 秒轮询
@@ -400,9 +403,8 @@ export class LiveMarket extends EventEmitter {
     // V2 报价币（GANG / ZEC / 币股…）的美元价用 gang.fun 给的，quoteUsd() 换美元要用
     if (it.quoteAddress && it.quoteUsd && !(this.qUsd[it.quoteAddress.toLowerCase()] > 0)) this.qUsd[it.quoteAddress.toLowerCase()] = it.quoteUsd;
     if (isNew && !existed) this.emit('launch', { ...this.summary(t), detectMs: Math.max(0, Date.now() - t.createdAt) });   // 链上已经先发现过的，接口再看到时不重复提示
-    // 最近有成交的几个 + 当前选中的，定时拉成交
-    const hot = [...this.tokens.values()].filter((x) => x.source === 'gang' && x.lastTradeAt).sort((a, b) => b.lastTradeAt - a.lastTradeAt).slice(0, 5).map((x) => x.address);
-    this.gang.setHot(hot);
+    // 最近有成交的几个 + 当前选中的，定时拉成交。一次轮询会连着 upsert 几百个币，排序只做一次（1 秒内合并）
+    clearTimeout(this._hotT); this._hotT = setTimeout(() => { this._hotT = null; this.gang.setHot([...this.tokens.values()].filter((x) => x.source === 'gang' && x.lastTradeAt).sort((a, b) => b.lastTradeAt - a.lastTradeAt).slice(0, 5).map((x) => x.address)); }, 1000);
   }
 
   // 链上发现的 Gang 新盘：先上列表（名称、符号、创建者、计价币都来自事件），市值 / 头像等等接口轮询补上
@@ -907,7 +909,7 @@ export class LiveMarket extends EventEmitter {
       qUsd, qBnb: this.bnbUsd ? qUsd / this.bnbUsd : 0, buys: buys.length, sells: sells.length, boughtTokens: bT, boughtQ: bQ, soldTokens: sT, soldQ: sQ, avgBuy, avgSell, hold, holdSrc, holdQ,
       realized, unrealized: unreal, total: realized + unreal, pct: bQ ? ((realized + unreal) / bQ) * 100 : null, firstBuy: buys[0]?.ts || null, price: t.price,
       trades: list.slice(-200).reverse(), complete: t.source !== 'agent-curve' || (this._all?.get(t.address)?.complete ?? true) };
-    if (qUsd > 0) this._ts.set(key, { at: Date.now(), v }); return v;   // 报价币价格还没拿到时不缓存，免得美元一直显示 0
+    if (qUsd > 0) { this._ts.set(key, { at: Date.now(), v }); if (this._ts.size > 200) this._ts.delete(this._ts.keys().next().value); } return v;   // 报价币价格还没拿到时不缓存，免得美元一直显示 0；最多留 200 个（以前只增不减）
   }
 
   // 持有人（详情页底部「持有人」，HOLDERS_FEATURE）：这个币的全部成交按地址汇总（路由买卖已经记到真实发起人），按持仓从大到小排。

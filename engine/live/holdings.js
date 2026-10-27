@@ -169,7 +169,7 @@ export class Holdings {
         trades: h ? h.trades.sort((a, b) => b.ts - a.ts).slice(0, 30) : [],
       });
     }
-    rows.sort((a, b) => b.valueBnb - a.valueBnb || (b.firstAt || 0) - (a.firstAt || 0));
+    rows.sort((a, b) => (b.valueBnb || 0) - (a.valueBnb || 0) || (b.firstAt || 0) - (a.firstAt || 0));   // valueBnb 为 null 时以前比较出 NaN，排序顺序不稳定
     const open = rows.filter((r) => r.amount > 0);
     const tot = (k, list = rows) => list.reduce((a, r) => a + (r[k] || 0), 0);   // 不显示的（null）按 0 计
     return {

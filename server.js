@@ -463,7 +463,7 @@ app.get('/api/img', async (req, res) => {
     let p = imgInflight.get(key);
     if (!p) { p = imgFetch(u).then(({ ct, buf }) => { const file = key + '.' + (EXT[ct] || 'img'); fs.writeFileSync(path.join(IMG_DIR, file), buf); const m = { ct, file, url: u }; fs.writeFileSync(meta, JSON.stringify(m)); return m; }).finally(() => imgInflight.delete(key)); imgInflight.set(key, p); }
     send(await p);
-  } catch { imgFail.set(key, Date.now() + 600_000); res.status(404).set('Cache-Control', 'public, max-age=600').end(); }
+  } catch { imgFail.set(key, Date.now() + 600_000); if (imgFail.size > 5000) for (const [k, until] of imgFail) if (until < Date.now()) imgFail.delete(k);   /* 失败记录以前只增不减 */ res.status(404).set('Cache-Control', 'public, max-age=600').end(); }
 });
 app.get('/api/names', (req, res) => {
   const n = market.names; if (!n) return res.json({ ver: 0, names: {} });

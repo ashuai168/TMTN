@@ -19,17 +19,19 @@ export const bumpUsage = (label, url, payload) => { const node = nodeName(url); 
 // NodeReal（BSC）每个方法的 CU（docs.nodereal.io/docs/compute-units-cus）；WebSocket 推送按字节 0.04 CU；没列出的按 20 估
 export const CU = { eth_blockNumber: 5, eth_chainId: 5, eth_call: 20, eth_getLogs: 50, eth_getBalance: 15, eth_getTransactionReceipt: 15, eth_getBlockByNumber: 15, eth_subscribe: 10, eth_estimateGas: 75, eth_gasPrice: 15, eth_getCode: 15, eth_getTransactionCount: 25, eth_sendRawTransaction: 150, logs: 0 };
 export const cuOf = (method, n) => (method === 'ws_bytes' ? n * 0.04 : n * (CU[method] ?? 20));
-// 按调用位置计数（每 5 次抽 1 次看调用栈，乘 5 估算）：查 eth_call / getLogs 主要是哪段代码在用。键 = 用途|方法|文件:行 函数
+// 按调用位置计数（每 5 次抽 1 次看调用栈，乘 5 估算）：查 eth_call / getLogs 主要是哪段代码在用。键 = 用途|方法|文件:行 函数 < 上一层文件:行 函数
+// 记两层：最里面一层常常只是 GangV2.call / FlapNft.state 这种薄封装，看不出到底是谁在调
 export const RPC_CALLERS = new Map();
 let callerTick = 0;
 const callerOf = () => {
   const lim = Error.stackTraceLimit; Error.stackTraceLimit = 40; const st = new Error().stack || ''; Error.stackTraceLimit = lim;
+  const out = [];
   for (const l of st.split('\n').slice(1)) {
     if (/node_modules|node:|\/engine\/live\/rpc\.js/.test(l)) continue;
     const m = /at (?:async )?(?:(\S+) )?\(?(?:file:\/\/)?[^()]*\/((?:engine\/)?[\w/.-]+\.m?js):(\d+):\d+\)?$/.exec(l.trim());
-    if (m) return `${m[2]}:${m[3]}${m[1] ? ' ' + m[1] : ''}`;
+    if (m && out.push(`${m[2]}:${m[3]}${m[1] ? ' ' + m[1] : ''}`) >= 2) break;
   }
-  return '?';
+  return out.join(' < ') || '?';
 };
 export function takeCallers() { const out = {}; for (const [k, n] of RPC_CALLERS) out[k] = n; RPC_CALLERS.clear(); return out; }
 export function takeUsage() { const out = {}; for (const [k, n] of RPC_USAGE) out[k] = n; RPC_USAGE.clear(); return out; }
