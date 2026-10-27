@@ -807,6 +807,7 @@ $('#bottomBody').addEventListener('click', (e) => {
   const b = e.target.closest('[data-asell]'); if (!b) return; e.preventDefault(); e.stopPropagation();
   const [slot, w, tk, pct] = b.dataset.asell.split(':'), multi = (HOLD.data?.wallets?.length || 0) > 1;
   const lbl = multi ? HOLD.data.wallets.find((x) => x.slot === +slot)?.label : null;
+  if (multi && !S.orderSlots) return note('后端还是旧版本，不能只卖一个钱包：重启后端后再点（现在点会让所有钱包一起卖）', 'info');
   submitOrder({ token: tk, side: 'sell', wallets: [w], amountFor: () => +pct, ...(multi && +slot ? { slots: [+slot], label: lbl } : {}) });
 });
 function renderBottom() {
@@ -1973,6 +1974,7 @@ document.addEventListener('click', (e) => {
   try { S.fast = localStorage.fast === '1'; } catch { S.fast = false; }
   const st = await api('/api/state');
   if (st.holdings) setHoldSnap(st.holdings);
+  S.orderSlots = !!st.orderSlots;   // 后端支持「只在指定钱包下单」
   Object.assign(S, { mode: st.mode, baw: st.baw, block: st.block, bnbUsd: st.bnbUsd, net: st.net, wallets: st.wallets, settings: st.settings, config: st.config, usage: st.usage, positions: st.positions, orders: st.orders, logs: st.logs, records: st.records, flow: st.flow, snipeCurve: st.snipeCurve });
   S.tokens = new Map(st.tokens.map((t) => [t.address, t]));
   S.selWallets = new Set(S.wallets.map((w) => w.id)); S.activeWallet = S.wallets[0]?.id || S.activeWallet;

@@ -137,7 +137,7 @@ app.post('/api/auth/login-cancel', (req, res) => { res.json(LIVE ? loginView(tra
 app.post('/api/auth/check', async (req, res) => res.json(LIVE ? await trader.checkAuth() : null));
 setTimeout(() => { for (const o of [...trader.orders].reverse()) latency.record(o); }, 5000);   // 启动时把内存里已有订单补记一次（按 id/tx 去重）
 app.get('/api/latency-stats', (req, res) => res.json(latency.stats(Math.max(0.01, Number(req.query.days) || 1))));
-app.get('/api/state', (req, res) => res.json({ ...state(), holdings: holdView || holdSnap, orders: trader.orders.slice(0, 100), logs: agent.logs.slice(0, 150), records: agent.records, flow: market.named ? market.named(market.flow.slice(0, 80)) : market.flow.slice(0, 80) }));
+app.get('/api/state', (req, res) => res.json({ ...state(), orderSlots: true, holdings: holdView || holdSnap, orders: trader.orders.slice(0, 100), logs: agent.logs.slice(0, 150), records: agent.records, flow: market.named ? market.named(market.flow.slice(0, 80)) : market.flow.slice(0, 80) }));
 // 持仓快照：后台每 5 秒算一次（下单 / 领取 / 转账结束后立刻再算），通过 WebSocket 推给页面、也放进 /api/state，
 // 页面打开详情时直接用快照，不再每次现算（现算要读钱包历史和链上报价，慢）
 let holdSnap = null, holdView = null, holdBusy = false, holdAgain = false;   // holdSnap：本钱包；holdView：多钱包时合并后的（给页面）
