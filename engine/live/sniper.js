@@ -25,7 +25,7 @@ const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
 const VT = 1066666666666666666666666667n, BPS = 10000n, FEE = 100n, SUPPLY = 10n ** 27n;   // LaunchpadV2：虚拟代币储备、1% 平台费、总量 10 亿
 const ceil = (a, b) => (a + b - 1n) / b;
 // 已知的非 BNB 报价币（符号大写 → 地址）：开着狙击时后台每 20 秒刷新一次 BNB 汇率，新盘出现时不用冷等 baw 报价（约 1.8 秒）
-const QUOTE_ADDR = { XAUT: '0x21caef8a43163eea865baee23b9c2e327696a3bf', GANG: '0x0c6302401aa5325c2e36f170f52c00b1d220b405', BNCB: '0x4902c5ebc598265ed2212b559b042de8a5eeec3f', BEM: '0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a' };
+const QUOTE_ADDR = { XAUT: '0x21caef8a43163eea865baee23b9c2e327696a3bf', GANG: '0x0c6302401aa5325c2e36f170f52c00b1d220b405', BNCB: '0x4902c5ebc598265ed2212b559b042de8a5eeec3f', BEM: '0x5ce033b2bfca3af30b3e8c8457deaf776a8b695a', GOOGLB: '0x3f53de71c126bdabae20f9cd64848d317f6c3238' };
 export const HARD_MAX_BUY = 0.3;   // 无论参数怎么填，每个钱包单笔不超过 0.3 BNB
 
 export const SNIPE_DEFAULTS = {
