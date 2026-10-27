@@ -4,6 +4,8 @@ import http from 'node:http';
 import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { connect as tcpConnect } from 'node:net';
+import tls from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { Market, SNIPE_FEE_CURVE } from './engine/market.js';
 import { SimTrader, GAS_PRESETS } from './engine/trader.js';
@@ -320,6 +322,47 @@ app.post('/api/copy/tasks', (req, res) => {   // 新建：一律暂停 + 模拟�
 });
 app.post('/api/copy/pause-all', (req, res) => { if (!needTracker(res)) return; tracker.setAllPaused(req.body?.paused !== false); res.json(tracker.tasksView()); });
 app.get('/api/wallet-info', (req, res) => res.json(LIVE ? selfInfo() : null));
+// 登录遮罩下的网络检测（只读，返回里不带任何密钥 / 节点地址）：币安接口（baw 连的 WALLET_API_URL，默认 www.binance.com；配了代理就经代理）、
+// BSC 节点池 eth_blockNumber、本机代理端口。每项 5 秒超时；超过 NETCHECK_SLOW_MS（默认 1500ms）算高延迟
+const NET_SLOW_MS = Number(process.env.NETCHECK_SLOW_MS || 1500), NET_TO = 5000;
+const proxyUrl = () => { const v = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy; try { return v ? new URL(v) : null; } catch { return null; } };
+const netTimed = async (name, fn) => {
+  const t0 = Date.now(); let tm;
+  try { const detail = await Promise.race([fn(), new Promise((_, no) => { tm = setTimeout(() => no(new Error('超时（5 秒）')), NET_TO); })]); const ms = Date.now() - t0; return { name, state: ms > NET_SLOW_MS ? 'slow' : 'ok', ms, detail: detail ?? null }; }
+  catch (e) { return { name, state: 'fail', ms: Date.now() - t0, reason: String(e.code || e.message || e).slice(0, 100) }; }
+  finally { clearTimeout(tm); }
+};
+const tcpOpen = (host, port) => new Promise((ok, no) => { const s = tcpConnect({ host, port }, () => { s.destroy(); ok(); }); s.on('error', no); });
+const tlsHead = (opts, host) => new Promise((ok, no) => {   // 发一个 HEAD 请求，收到状态行就算通（不管状态码）
+  const t = tls.connect({ ...opts, servername: host }, () => t.write(`HEAD / HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\nUser-Agent: tmtn-netcheck\r\n\r\n`));
+  t.once('data', (d) => { const m = /^HTTP\/1\.[01] (\d{3})/.exec(d.toString('latin1')); t.destroy(); m ? ok(`HTTP ${m[1]}`) : no(new Error('响应格式不对')); });
+  t.on('error', no); t.setTimeout(NET_TO, () => t.destroy(new Error('超时')));
+});
+const httpsHead = (u) => new Promise((ok, no) => {
+  const url = new URL(u), host = url.hostname, port = Number(url.port || 443), px = proxyUrl();
+  if (!px) return tlsHead({ host, port }, host).then(ok, no);
+  const headers = px.username ? { 'proxy-authorization': 'Basic ' + Buffer.from(`${decodeURIComponent(px.username)}:${decodeURIComponent(px.password)}`).toString('base64') } : {};
+  const r = http.request({ host: px.hostname, port: Number(px.port || 80), method: 'CONNECT', path: `${host}:${port}`, headers });
+  r.on('connect', (res, sock) => { if (res.statusCode !== 200) { sock.destroy(); return no(new Error(`代理返回 ${res.statusCode}`)); } tlsHead({ socket: sock }, host).then(ok, no); });
+  r.on('error', no); r.end();
+});
+async function netCheckOwn() {
+  const px = proxyUrl(), api = process.env.WALLET_API_URL || 'https://www.binance.com', host = new URL(api).hostname;
+  return Promise.all([
+    netTimed(`币安接口 ${host}${px ? `（经代理 ${px.host}）` : ''}`, () => httpsHead(api)),
+    netTimed('BSC 节点（eth_blockNumber）', async () => '#' + await market.provider.getBlockNumber()),
+    ...(px ? [netTimed(`本机代理 ${px.host}`, () => tcpOpen(px.hostname, Number(px.port || 80)))] : []),
+  ]);
+}
+app.get('/api/netcheck', async (req, res) => {
+  if (req.query.own) return res.json(await netCheckOwn());
+  res.json(await Promise.all([{ slot: WALLET_SLOT, label: WALLET_LABEL, self: true }, ...WALLET_PEERS.map((p) => ({ slot: p.slot, label: p.label || `钱包 ${p.slot}`, peer: p }))].map(async (w) => {
+    if (w.self) return { slot: w.slot, label: w.label, items: await netCheckOwn() };
+    const t0 = Date.now();
+    try { return { slot: w.slot, label: w.label, items: await peerFetch(w.peer, '/api/netcheck?own=1', null, 12_000) }; }
+    catch (e) { return { slot: w.slot, label: w.label, items: [{ name: '钱包后端', state: 'fail', ms: Date.now() - t0, reason: String(e.message).slice(0, 100) }] }; }
+  })));
+});
 // 页面上按钱包点「登录」/「取消」：本钱包由自己的 baw 登录；其他钱包把请求转给它自己的后端（钱包 2 在 Docker 容器里用容器里的 baw 登录，绝不在本机为它发起）
 app.post('/api/wallets/login', async (req, res) => {
   if (!LIVE) return res.status(400).json({ error: '只有实盘支持' });

@@ -361,7 +361,7 @@ function renderAuth() {
       return;
     }
     pill.classList.add('bad'); pill.querySelector('span').textContent = '币安钱包都未登录';
-    modal.classList.remove('hidden');
+    modal.classList.remove('hidden'); loadNetCheck();
     const k = 'mw|' + on.map((w) => w.slot + w.auth).join(','); if (modal.dataset.k === k) return; modal.dataset.k = k;
     const cmd = (c) => `<div class="ag-cmd"><code>${esc(c)}</code><button class="ui-copy" data-agcopy="${esc(c)}">复制</button></div>`;
     $('#loginLead').innerHTML = '参与下单的币安钱包<b class="r">都没有登录</b>（或登录已过期）。至少登录一个才能使用。';
@@ -376,7 +376,7 @@ function renderAuth() {
   pill.title = a.message || '';
   if (a.state === 'checking') return;   // 还在检查（或只失败了一次）时不挡住页面
   // 未登录：整页遮罩，关不掉；登录检测通过后自动消失。登录命令要在终端里自己运行，页面不代为执行
-  modal.classList.remove('hidden');
+  modal.classList.remove('hidden'); loadNetCheck();
   const k = [a.state, a.message].join('|');
   if (modal.dataset.k === k) return; modal.dataset.k = k;
   const cmd = (c) => `<div class="ag-cmd"><code>${esc(c)}</code><button class="ui-copy" data-agcopy="${esc(c)}">复制</button></div>`;
@@ -465,10 +465,30 @@ function alertWalletDrop(w) {
 document.addEventListener('pointerdown', function askNotify(e) { if (e.target.closest?.('[data-cacopy],[data-ctick],[data-copy],[data-xsearch],[data-agcopy],[data-dcopy],[data-trd-copy],.ui-copy')) return; document.removeEventListener('pointerdown', askNotify, true); try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch { /* ignore */ } }, true);
    // 页面上不再提供登录按钮（登录命令在终端运行）
 $('#loginModal').addEventListener('click', async (e) => { const b = e.target.closest('[data-agcopy]'); if (!b) return; try { await copyOrThrow(b.dataset.agcopy); b.textContent = '已复制'; } catch { b.textContent = '请手动复制'; } setTimeout(() => (b.textContent = '复制'), 1500); });
+// 登录遮罩下的网络检测：每个钱包一组（币安接口 / BSC 节点 / 本机代理），正常 / 高延迟 / 失败 + 毫秒。遮罩显示时最多 10 秒测一次，「重新检测」时马上测
+const NETC = { at: 0 };
+async function loadNetCheck(force = false) {
+  if (NETC.busy || (!force && Date.now() - NETC.at < 10_000)) return renderNetCheck(); NETC.busy = true;   // 没到时间：用上次的结果重画（遮罩刚出现时） NETC.at = Date.now(); renderNetCheck();
+  try {
+    const r = await fetch('/api/netcheck'), j = /json/.test(r.headers.get('content-type') || '') ? await r.json().catch(() => null) : null;
+    if (!r.ok || !Array.isArray(j)) throw new Error(j?.error || (r.ok || r.status === 404 ? '检测接口不可用（服务未重启？）' : `HTTP ${r.status}`));   // 旧后端没有这个接口时会返回首页 HTML
+    NETC.data = j; NETC.err = null;
+  } catch (e) { NETC.err = e.message; }
+  NETC.busy = false; NETC.at = Date.now(); renderNetCheck();
+}
+function renderNetCheck() {
+  if ($('#loginModal').classList.contains('hidden')) return;
+  let el = $('#loginNet'); if (!el) { el = document.createElement('div'); el.id = 'loginNet'; el.style.cssText = 'text-align:left;margin:10px 0;font-size:12px'; $('#loginBody').after(el); }
+  const st = { ok: ['g', '正常'], slow: ['y', '高延迟'], fail: ['r', '失败'] };
+  el.innerHTML = `<div><b>网络检测</b> <span class="muted">${NETC.busy ? '检测中…' : NETC.at ? new Date(NETC.at).toLocaleTimeString('zh-CN', { hour12: false }) : ''}</span></div>
+    ${NETC.err ? `<div class="r">检测失败：${esc(NETC.err)}</div>` : ''}
+    ${(NETC.data || []).map((w) => `<div style="margin-top:4px"><b>${esc(w.label)}</b>${(w.items || []).map((i) => `<div class="kv"><span>${esc(i.name)}</span><b class="sans" title="${esc(i.reason || i.detail || '')}"><span class="${st[i.state]?.[0] || ''}">${st[i.state]?.[1] || esc(i.state)} · ${i.ms}ms${i.reason ? ' · ' + esc(i.reason) : ''}</span></b></div>`).join('')}</div>`).join('')}
+    <div class="muted" style="margin-top:4px">如果网络检测失败，先修好网络 / 代理，不需要重新登录。</div>`;
+}
 // 「我已登录，重新检测」：点了马上有反馈（转圈 + 禁用），检测完逐个钱包显示结果；能用了就淡出遮罩并提示
 $('#loginRecheck').addEventListener('click', async () => {
   const b = $('#loginRecheck'); if (b.disabled) return;
-  b.disabled = true; b.classList.add('busy'); b.innerHTML = '<i class="spin"></i>检测中…';
+  b.disabled = true; b.classList.add('busy'); b.innerHTML = '<i class="spin"></i>检测中…'; loadNetCheck(true);
   try {
     const r = await api('/api/auth/check', {}); if (r && S.baw) S.baw.auth = r;
     if (LIVE()) { try { S.walletsInfo = await api('/api/wallets'); } catch { /* 单钱包 */ } }
