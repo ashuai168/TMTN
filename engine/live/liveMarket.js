@@ -36,6 +36,17 @@ const isAgentish = (l) => l.agentExclusive === true || l.agent === true || l.isA
 const STABLE = new Set(['USDT', 'USDC', 'USD1', 'U', 'BUSD', 'FDUSD']);
 const POOL_ABI = ['function token0() view returns (address)', 'function token1() view returns (address)', 'function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint32,bool)', 'function getReserves() view returns (uint112,uint112,uint32)'];
 const DEC_ABI = ['function decimals() view returns (uint8)'];
+// DexScreener 没收录的 PancakeSwap Infinity CL 池（计价币的主池在这里）：直接读 CLPoolManager.getSlot0(poolId)。stable = 池子另一边的稳定币是 currency0 还是 currency1（两边都按 18 位小数）
+// xOPAI：USDT/xOPAI 费率 0.067%，DexScreener 只有一个 $0.07 的 V2 池，按它算价格偏高约 13%（2026-10-28 核对）
+const CL_POOL_MANAGER = '0xa0FfB9c1CE1Fe56963B0321B32E7A0302114058b';
+const INFINITY_POOLS = { '0x7ddef360f3c2db4cc41c3967984fefa2598cc9a6': { id: '0x50e12feaf029b39e3ead3a56942a212e550b2e4face238e936bd4a6b8d76ff80', stable: 0 } };
+async function infinityPriceUsd(provider, addr) {
+  const p = INFINITY_POOLS[String(addr).toLowerCase()]; if (!p) return 0;
+  const m = new ethers.Contract(CL_POOL_MANAGER, ['function getSlot0(bytes32) view returns (uint160,int24,uint24,uint24)'], provider);
+  const sq = Number((await m.getSlot0(p.id))[0]) / 2 ** 96, p1per0 = sq * sq;
+  if (!(p1per0 > 0) || !isFinite(p1per0)) return 0;
+  return p.stable === 0 ? 1 / p1per0 : p1per0;
+}
 async function poolPriceUsd(provider, addr, bnbUsd) {
   const k = String(addr).toLowerCase(), bp = getRoute(k)?.bestPool; if (!bp?.pair) return 0;
   const w = String(bp.with || '').toUpperCase(), wUsd = STABLE.has(w) ? 1 : w === 'WBNB' || w === 'BNB' ? bnbUsd : 0; if (!(wUsd > 0)) return 0;
@@ -104,7 +115,8 @@ export class LiveMarket extends EventEmitter {
     const blk = async () => { const t0 = Date.now(); try { this.block = await this.provider.getBlockNumber(); this.rpcMs = Date.now() - t0; this.rpcError = null; } catch (e) { this.rpcError = e.shortMessage || e.message; } };
     const px = async () => { try { const j = await (await fetch(BNB_PRICE_URL)).json(); if (+j.price) this.bnbUsd = +j.price; } catch { /* 保留上次 */ } };
     const qpx = async () => { const qs = new Set([GANG_TOKEN]); for (const t of this.tokens.values()) if (t.quoteAddress && t.quote && !['BNB','WBNB','USDT','USDC','USD1'].includes(String(t.quote).toUpperCase())) qs.add(String(t.quoteAddress).toLowerCase());
-      for (const a of qs) { try { const j = await (await fetch('https://api.dexscreener.com/latest/dex/tokens/' + a, { signal: AbortSignal.timeout(6000) })).json(); const ps = (j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === a && +x.priceUsd).sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0)); if (ps[0]) { this.qUsd[a] = +ps[0].priceUsd; if (a === GANG_TOKEN) this.gangMcap = +ps[0].marketCap || +ps[0].fdv || +ps[0].priceUsd * 1e9; } } catch { /* 保留上次 */ }
+      for (const a of qs) { if (INFINITY_POOLS[a]) { try { const v = await infinityPriceUsd(this.provider, a); if (v > 0) { this.qUsd[a] = v; continue; } } catch { /* 读不到就照旧走 DexScreener */ } }
+        try { const j = await (await fetch('https://api.dexscreener.com/latest/dex/tokens/' + a, { signal: AbortSignal.timeout(6000) })).json(); const ps = (j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === a && +x.priceUsd).sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0)); if (ps[0]) { this.qUsd[a] = +ps[0].priceUsd; if (a === GANG_TOKEN) this.gangMcap = +ps[0].marketCap || +ps[0].fdv || +ps[0].priceUsd * 1e9; } } catch { /* 保留上次 */ }
         if (!(this.qUsd[a] > 0)) { try { const v = await poolPriceUsd(this.provider, a, this.bnbUsd); if (v > 0) this.qUsd[a] = v; } catch { /* 下次再试 */ } } } };   // DexScreener 没给出价格：读链上池子兜底
     this.qpx = qpx; blk(); px(); setTimeout(qpx, 3000);
     this.timers = [setInterval(blk, 3000), setInterval(px, 30_000), setInterval(qpx, 60_000), setInterval(() => this.warm(), 8000), setInterval(() => this.flapHolders(), 90_000), setInterval(() => this.flapNftTick(), 6000)];
