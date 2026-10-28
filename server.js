@@ -448,6 +448,7 @@ async function imgFetchOne(u) {
     if (Number(r.headers.get('content-length') || 0) > 2e6) throw new Error('too big');
     const buf = Buffer.from(await r.arrayBuffer()); if (buf.length > 2e6 || !buf.length) throw new Error('size');
     const ct = sniffImg(buf); if (!ct) throw new Error('not raster image');
+    if (ct === 'image/avif' && /(^|\.)alphapulsehq\.top$/i.test(new URL(u).hostname)) throw new Error('format not allowed');   // 第三方转存图床只收 PNG / JPEG / WebP / GIF
     return { ct, buf };
   } finally { clearTimeout(tm); }
 }

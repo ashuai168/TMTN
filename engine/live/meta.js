@@ -17,10 +17,12 @@ export function ipfsUrl(v) {
 
 // 允许读元数据 / 代理图片的域名（含子域名，只走 https）——服务端只连这些，别的一律不请求、页面显示文字占位。新图床加在这里，或 .env 里 IMG_HOSTS=a.com,b.com
 // 2026-10-28 核对过实际在用的：Flap 元数据 / 图片 flap.mypinata.cloud，Four static.four.meme，Gang cdn.gang.fun（+ 字节云 IPFS），Agent ID space.id，shrine
-export const MEDIA_HOSTS = ['four.meme', 'space.id', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com'];
-// 明确屏蔽（就算 IMG_HOSTS 里加了也不连）：validation.alphapulsehq.top = 第三方转存的元数据 / 图片，链接带签名和追踪参数（6 个 Flap 盘在用，含仿冒七仔的 0x8c8b…7777）
+// validation.alphapulsehq.top：第三方转存的 Flap 元数据 / 图片（部分 Agent ID 盘在用）。只在服务端经过这里：元数据按 JSON 解析、限大小、只取字段；
+// 图片经 /api/img，按文件头只收 PNG / JPEG / WebP / GIF（SVG、HTML 一律不收）——所有图床都是这条规则
+export const MEDIA_HOSTS = ['four.meme', 'space.id', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com', 'validation.alphapulsehq.top'];
+// 明确屏蔽（就算 IMG_HOSTS 里加了也不连）
 // 185.130.45.236 / *.trycloudflare.com：2026-10-28 两个针对本程序的 XSS 盘（名字是带 onerror 的 <img>，元数据也放在这两处）
-export const BLOCKED_HOSTS = ['alphapulsehq.top', '185.130.45.236', 'trycloudflare.com'];
+export const BLOCKED_HOSTS = ['185.130.45.236', 'trycloudflare.com'];
 const hostIn = (h, list) => list.some((x) => h === x || h.endsWith('.' + x));
 const warned = new Set();
 export function mediaHostOk(u) {
@@ -62,7 +64,10 @@ export class MetaFetcher {
         const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
         if (res.status === 429) { this.pausedUntil.set(host, Date.now() + 60_000); break; }
         if (!res.ok) break;
-        const j = await res.json();
+        // 元数据只当 JSON 读，最多 64 KB（超了不要）；只取下面几个字段给页面，原文不往外传
+        if (Number(res.headers.get('content-length') || 0) > 65_536) break;
+        const raw = await res.text(); if (raw.length > 65_536) break;
+        const j = JSON.parse(raw); if (!j || typeof j !== 'object') break;
         const links = j.links || {};
         const img = ipfsUrl(j.image || j.img), v = { image: img && mediaHostOk(img) ? img : null, description: j.description || '', website: j.website || links.website || '',
           twitter: j.twitter || links.twitter || '', telegram: j.telegram || links.telegram || '', metaCreator: /^0x(?!0{40})[0-9a-fA-F]{40}$/.test(j.creator || '') ? j.creator.toLowerCase() : null };   // Flap 元数据里的 creator = 发币交易的 from（核对过）
