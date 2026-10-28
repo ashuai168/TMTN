@@ -502,6 +502,7 @@ td.addr { color: var(--muted); }
 
 /* 税率标签：≥5% 红色 */
 .tag.tax, .chip.tax { background: rgba(165, 113, 255, .16); color: #c4a5ff; }
+.tag.div.dev, .chip.div.dev { background: rgba(246, 70, 93, .18); color: #f6465d; font-weight: var(--fw-strong); cursor: help; }
 .tag.tax2c, .chip.tax2c { background: rgba(255, 140, 60, .14); color: #ff9a52; cursor: help; margin-left: 4px; }
 .tag.tax.hi, .chip.tax.hi { background: rgba(246, 70, 93, .18); color: #f6465d; font-weight: var(--fw-strong); }
 

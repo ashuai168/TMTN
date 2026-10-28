@@ -101,6 +101,7 @@
 :root[data-theme="calm"] .tag.div.off, :root[data-theme="calm"] .chip.div.off { background: transparent !important; color: var(--dim) !important; box-shadow: none; }
 /* 税 ≥ 5%：真正的风险提示，保留红 */
 :root[data-theme="calm"] .tag.r, :root[data-theme="calm"] .tag.tax.hi, :root[data-theme="calm"] .chip.tax.hi { background: var(--r-bg) !important; color: var(--r) !important; box-shadow: none; }
+:root[data-theme="calm"] .tag.div.dev, :root[data-theme="calm"] .chip.div.dev { background: var(--r-bg) !important; color: var(--r) !important; box-shadow: none; font-weight: var(--fw-strong); }
 :root[data-theme="calm"] .tag.tax2c, :root[data-theme="calm"] .chip.tax2c { background: transparent !important; color: #E08A4F !important; box-shadow: inset 0 0 0 1px rgba(224, 138, 79, .45); font-weight: var(--fw-body); }
 :root[data-theme="calm"] .tag.g { background: var(--g-bg) !important; color: var(--g) !important; box-shadow: none; }
 /* NFT 门槛：提醒色 */

@@ -12,7 +12,7 @@ import { FlapChain } from './flapChain.js';
 import { FlapNft } from './flapNft.js';
 import { GangPadChain } from './gangPadChain.js';
 import { GangV2 } from './gangV2Pads.js';
-import { V3_TRADE } from './gangV3.js';
+import { V3_TRADE, V3_PADS } from './gangV3.js';
 import { fairList } from './gangFair.js';
 import { DexFeed, dexBars, compactCandles } from './dexFeed.js';
 import { NameCache } from './names.js';
@@ -115,6 +115,7 @@ export class LiveMarket extends EventEmitter {
     this.four.start();
     this.fourRestore();
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
+    setInterval(() => this.taxToSweep(), 10_000).unref?.();   // 列表里已有的 Gang V3 币：后台补读税收接收地址（每个币只读一次）
     this.loadFairSales(); setInterval(() => this.loadFairSales(), 30_000).unref?.();   // 打新盘：gang.fun 普通代币接口不列，重启后链上订阅也不会补以前的，从打新列表接口补
     this.gang.start(); this.gangChain.start(); this.flapChain.start(); this.gangPads.start(); this.flapNft.start();
     this.feeds.start();
@@ -883,14 +884,24 @@ export class LiveMarket extends EventEmitter {
   // 读一次 Gang V3 税收接收地址（不等结果，不影响曲线刷新）；读失败 5 分钟后再试
   gangTaxTo(t, pad) {
     const m = (this._taxTo ||= (() => { try { return JSON.parse(readFileSync(TAX_TO_FILE, 'utf8')); } catch { return {}; } })());
-    if (m[t.address]) { t.taxTo = m[t.address]; return; }
+    if (t.address in m) { t.taxTo = m[t.address] || null; return; }
     if (!pad || t._taxToAt > Date.now() - 300_000) return;
     t._taxToAt = Date.now();
     this.provider.call({ to: pad, data: TAX_CFG.encodeFunctionData('taxConfigOf', [t.address]) }).then((r) => {
-      const a = String(TAX_CFG.decodeFunctionResult('taxConfigOf', r).recipient).toLowerCase(); if (a === ethers.ZeroAddress) return;
-      m[t.address] = t.taxTo = a; clearTimeout(this._taxToSave);
+      const a = String(TAX_CFG.decodeFunctionResult('taxConfigOf', r).recipient).toLowerCase();
+      m[t.address] = a === ethers.ZeroAddress ? '' : a; t.taxTo = m[t.address] || null; clearTimeout(this._taxToSave);   // 0 地址 = 不收税，也记下不再读
       this._taxToSave = setTimeout(() => { try { writeFileSync(TAX_TO_FILE, JSON.stringify(m)); } catch { /* 下次重启重读 */ } }, 5000);
     }).catch(() => {});
+  }
+  // 每 10 秒给最多 8 个还没读过的 Gang V3 币补读接收地址（重启后接口列表里的老币不会走 gangV2Curve）
+  taxToSweep() {
+    let n = 0;
+    for (const t of this.tokens.values()) {
+      if (n >= 8) break;
+      if (t.source !== 'gang' || t.gangTrack !== 'v3' || t.taxTo !== undefined || t._taxToAt > Date.now() - 300_000) continue;
+      const m = this._taxTo; if (m && t.address in m) { t.taxTo = m[t.address] || null; continue; }
+      this.gangTaxTo(t, this._gv2?.pads?.get(t.address) || V3_PADS[0]); n++;
+    }
   }
   // 税收接收地址就是发币人自己：Gang V3 = recipient 是创建者且这部分不是全给分红；Flap = 营销受益人是创建者且营销比例 > 0
   taxToCreator(t) {
