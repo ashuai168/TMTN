@@ -587,6 +587,17 @@ const PCT_FAST_BNB = Number(process.env.PCT_FAST_BNB ?? 0.1);
 const PCT_FAST_FLAP_BNB = Number(process.env.PCT_FAST_FLAP_BNB ?? 0.3), PCT_FAST_FLAP_LOW = Number(process.env.PCT_FAST_FLAP_LOW ?? 0.2);
 // 余额（后台缓存，不另查）不够 0.3 + gas 就用 0.2；也不超过交易设置里的单笔上限
 const flapFastBnb = (w) => { const bal = Number(trader.wallet?.(w)?.bnb), cap = Number(trader.status?.maxTradeBnb) || 0; let a = Number.isFinite(bal) && bal > 0 && bal < PCT_FAST_FLAP_BNB + 0.005 ? PCT_FAST_FLAP_LOW : PCT_FAST_FLAP_BNB; if (cap > 0 && a > cap) a = cap; return a; };
+// 市值超过 PCT_FAST_MCAP_USD（默认 $7k）时固定金额买不满：按 市值 × N% ÷ BNB 价 × 1.3 估算要花的 BNB（只看已缓存的市值，不另报价），和固定金额取大的那个，再压到单笔上限和余额（留 gas）。给多了不亏：Gang 按剩余额度只换需要的报价币，Flap 门槛盘多余 BNB 同笔退回，成本按链上实际花的算（市值超过 7k 不再按固定金额）
+const PCT_FAST_MCAP_USD = Number(process.env.PCT_FAST_MCAP_USD ?? 7000);
+const fastByMcap = (w, tk, pct, cap, fixed) => {
+  const m = Number(tk?.mcapUsd), u = Number(market.bnbUsd);
+  if (!(PCT_FAST_MCAP_USD > 0 && m > PCT_FAST_MCAP_USD && u > 0)) return fixed;
+  let a = Math.max(fixed, m * Math.min(Number(pct), cap) / 100 / u * 1.3);
+  const mx = Number(trader.status?.maxTradeBnb) || 0, bal = Number(trader.wallet?.(w)?.bnb);
+  if (mx > 0 && a > mx) a = mx;
+  if (Number.isFinite(bal) && bal > 0 && a > bal - 0.005) a = bal - 0.005;
+  return a > 0 ? +a.toFixed(4) : fixed;
+};
 // 主后端把 Gang 盘的基本信息一起转给其他钱包：对方还没收录这个币时直接用，不用先去链上查
 const gangHint = (t) => (t && t.source === 'gang' && ['v2', 'v3'].includes(t.gangTrack) ? { address: t.address, name: t.name, symbol: t.symbol, creator: t.creator, createdAt: Math.floor((t.createdAt || Date.now()) / 1000), graduated: t.stage === 'dex', quoteSymbol: t.quote, quoteAddress: t.quoteAddress, track: t.gangTrack, taxed: !!t.gangDiv?.taxed } : null);
 function useHint(token, h) {
@@ -604,8 +615,8 @@ async function placeOrder({ wallets = ['baw'], token, side, amount, slippage, vi
       if (side === 'buy' && Number(pctSupply) > 0 && LIVE && tk && trader.fairMinting?.(tk)) {   // 打新认购：N% = N% × 10000 份（夹到每地址上限），不另报价
         if (!tk.gangFair) await market.gangFairState?.(tk).catch(() => {});
         if (tk.gangFair && !tk.gangFair.launched) amt = fairPctBnb(tk.gangFair, pctSupply).bnb;
-      } else if (side === 'buy' && Number(pctSupply) >= 1 && PCT_FAST_BNB > 0 && LIVE && tk && trader.useGangV2?.(tk)) amt = PCT_FAST_BNB;
-      else if (side === 'buy' && Number(pctSupply) >= 2 && PCT_FAST_FLAP_BNB > 0 && LIVE && tk && trader.useFlapNft?.(tk)) amt = flapFastBnb(w);
+      } else if (side === 'buy' && Number(pctSupply) >= 1 && PCT_FAST_BNB > 0 && LIVE && tk && trader.useGangV2?.(tk)) amt = fastByMcap(w, tk, pctSupply, 1, PCT_FAST_BNB);
+      else if (side === 'buy' && Number(pctSupply) >= 2 && PCT_FAST_FLAP_BNB > 0 && LIVE && tk && trader.useFlapNft?.(tk)) amt = fastByMcap(w, tk, pctSupply, 2, flapFastBnb(w));
       else if (side === 'buy' && Number(pctSupply) > 0) {   // 每个钱包自己报价：买到总量的 X% 要多少 BNB
         const c = await costForPct({ wallet: w, token, pct: Number(pctSupply), slippage });
         if (!(c.bnb > 0)) { const o = { id: `pct-${Date.now()}`, ts: Date.now(), wallet: WALLET_LABEL, token, symbol: market.get(token)?.symbol || '', side, amount: 0, status: 'failed', reason: c.capReached ? c.error : `买 ${pctSupply}% 报价失败：${c.error || '拿不到报价'}` }; broadcast({ type: 'order', data: o }); return o; }
