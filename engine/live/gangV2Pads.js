@@ -209,6 +209,7 @@ export class GangV2 {
     // 不超过这个钱包剩余额度（每个钱包最多 1%）要花的报价币，多留 2% 抵价格变动：「买 1%」直接给 0.1 BNB 时不会多换报价币；额度已满就不发任何交易
     if (room0 === 0n) throw new Error('已达单钱包上限 1%（没有发出交易）');
     if (room0 != null && payQuote == null) { const sp = this.buyQuote(c, need, room0).spent * 102n / 100n; if (sp > 0n && sp < need) { amountBnb = Number(amountBnb) * Number(sp) / Number(need); need = sp; } }
+    let bnbPerQ = Number(amountBnb) / Number(need);   // 每单位报价币折多少 BNB（换了币就按实际换到的算），用来记成本
     if (have < need) {
       // 钱包里已有的报价币先用上，只把差额用 BNB 换；多换 3% 抵滑点，多的留在钱包
       const before = have; const t0 = Date.now(); fresh = false;
@@ -227,7 +228,7 @@ export class GangV2 {
       }
       let got = 0n; for (let i = 0; i < 34; i++) { got = (await this.balanceOf(q, wallet)) - before; if (got > 0n) break; await sleep(300); }
       if (got <= 0n) throw new Error('报价币没有到账，停止后续步骤');
-      need = have + got; step(`收到 ${ethers.formatUnits(got, dec)} ${qSym}`, Date.now() - t0);
+      if (payQuote == null) bnbPerQ = Number(shortBnb) / Number(got); need = have + got; step(`收到 ${ethers.formatUnits(got, dec)} ${qSym}`, Date.now() - t0);
     } else step(`钱包里已有足够${qSym}，直接使用 ${ethers.formatUnits(need, dec)}`, 0);
     if (fresh && alw0 >= need) step('授权额度够用，跳过授权', 0);
     else { const ap = await this.ensureAllowance({ wallet, token: q, spender: p, amount: need, label: `授权${qSym}`, step, kind: 'quote', symbol: qSym }); if (ap) hashes.push(ap); fresh = false; }
@@ -238,7 +239,7 @@ export class GangV2 {
     const data = pad.encodeFunctionData('buy', [token, need, minOut(r.tokens, slippage)]);
     try { await this.provider.call({ from: wallet, to: p, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
     hashes.push(await this.send({ wallet, to: p, inputData: data, label: c.v3 ? 'Gang V3 buy' : 'Gang V2 buy', step }));
-    return { venue: `Gang V2 · BNB→${qSym}→buy（非原子）`, expected: Number(ethers.formatEther(r.tokens)), txHash: hashes.at(-1), hashes };
+    return { venue: `Gang V2 · BNB→${qSym}→buy（非原子）`, expected: Number(ethers.formatEther(r.tokens)), txHash: hashes.at(-1), hashes, ...(payQuote == null ? { spent: Number(r.spent) * bnbPerQ } : {}) };   // 成本 = 曲线实际用掉的报价币（扣退款）折 BNB：「买 1%」给 0.1 BNB 实际只换 0.0645，多换的 2% / 退款留在钱包，不算成本
   }
 
   // 真实卖出：授权代币（本次数量）→ sell → 收到的报价币换回 BNB（WBNB 直接解包）

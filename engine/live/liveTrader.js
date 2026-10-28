@@ -181,6 +181,12 @@ export class LiveTrader extends EventEmitter {
         } else if (w.tokens) amt = w.tokens[t.address] || 0;
         if (amt == null) return;
         const k = `${w.id}:${t.address}`;
+        // baw 余额列表还没收录刚发的币（Gang 新盘常见）时会是 0：本地记着还有持仓的，先读链上 balanceOf 再决定清零，免得刚买的被清掉
+        const p0 = this.positions.get(k);
+        if (!(amt > 0) && p0 && (p0.amount > 0 || (p0.boughtBnb > 0 && !p0.chainZero))) {   // chainZero：链上确认过是 0 的（已清仓）不再重复读
+          try { const e = new ethers.Contract(t.address, ['function balanceOf(address) view returns (uint256)', 'function decimals() view returns (uint8)'], this.market.provider); const b = await e.balanceOf(w.address); amt = b > 0n ? Number(ethers.formatUnits(b, await e.decimals().catch(() => 18n))) : 0; } catch { return; }   // 读链失败就保持原样
+          p0.chainZero = !(amt > 0);
+        }
         if (amt > 0) { const p = this.pos(w.id, t.address); p.amount = amt; if (!p.openedAt) p.openedAt = Date.now(); }
         else if (this.positions.has(k)) this.positions.get(k).amount = 0;
       }));
@@ -861,7 +867,7 @@ export class LiveTrader extends EventEmitter {
         : await this.dexTrade({ t, w, side: 'buy', qty: amt, slippage, step });
       if (!p.openedAt) p.openedAt = Date.now();
       const spent = r.spent ?? amt;   // 打新认购：按份数取整 / 夹到上限，实际花的可能比金额少
-      p.boughtBnb += spent; p.costBnb += spent; p.amount += r.expected || 0;
+      p.boughtBnb += spent; p.costBnb += spent; p.amount += r.expected || 0; delete p.chainZero;
       Object.assign(order, { amountIn: spent, out: r.expected });
     } else {
       const pct = Math.min(100, order.amount);
