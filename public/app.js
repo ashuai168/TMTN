@@ -2320,7 +2320,7 @@ for (const ms of [4000, 8000, 22000]) window.addEventListener('order-done', () =
 const PLATS = ['flap', 'four', 'gang'];
 const platOf = (t) => (t.platform === 'four' || t.platform === 'gang' ? t.platform : 'flap');
 const TCOLS = { new: '新创建', soon: '即将打满', dex: '已开盘' };
-const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false } });
+const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false, hideTax2c: false } });
 const TR = (() => {
   let s = null; try { s = JSON.parse(localStorage.getItem('trench') || 'null'); } catch { /* ignore */ }
   const st = s && s.cols ? s : { cols: {}, hidden: [] };
@@ -2340,7 +2340,8 @@ const mcK = (v) => { if (v === '' || v == null) return null; const s = String(v)
 // 税率输入宽松解析：「10%」「１０」「 5 」都认；解析不了当作不限
 const taxNum = (v) => { if (v === '' || v == null) return null; const x = parseFloat(String(v).replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[^\d.]/g, '')); return isFinite(x) ? x : null; };
 // 税率条件是全局的：三列 × P1-P3 都用同一个，切预设也不会「突然失效」
-const setTaxAll = (maxTax, hideUnknownTax) => { for (const c of Object.keys(TCOLS)) for (const p of Object.values(TR.cols[c].presets)) Object.assign(p.f, { maxTax: maxTax ?? '', hideUnknownTax: !!hideUnknownTax }); };
+// hideTax2c（隐藏税归发币人）也算税率条件，三列一起生效；不传 = 不改
+const setTaxAll = (maxTax, hideUnknownTax, hideTax2c) => { for (const c of Object.keys(TCOLS)) for (const p of Object.values(TR.cols[c].presets)) Object.assign(p.f, { maxTax: maxTax ?? '', hideUnknownTax: !!hideUnknownTax }, hideTax2c == null ? {} : { hideTax2c: !!hideTax2c }); };
 const tcPaused = new Set();
 // 卡片下单状态（点击后立刻显示，几秒后清掉）：busy 下单中 / ok 已提交 / pend 待确认 / err 失败
 const tcState = new Map();
@@ -2393,13 +2394,14 @@ function tcHead(k) {
       <button class="tc-ic tc-funnel ${active ? 'act' : ''}" data-tf="${k}" title="${esc(tcFilterSummary(k))}"><svg viewBox="0 0 16 16" width="15" height="15" style="pointer-events:none"><path d="M2 3h12l-4.6 5.4v4.4l-2.8 1.4V8.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
     </span></div>`;
 }
-function tcActive(k) { const f = P(k).f; return !!(f.plats.length < 3 || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax); }
+function tcActive(k) { const f = P(k).f; return !!(f.plats.length < 3 || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax || f.hideTax2c); }
 // 漏斗按钮的提示文字：当前预设下生效的筛选条件
 function tcFilterSummary(k) {
   const f = P(k).f, x = [];
   if (f.plats.length < 3) x.push('平台 ' + f.plats.join('/'));
   if (f.maxTax !== '' && f.maxTax != null) x.push(`税率 ≤ ${f.maxTax}%`);
   if (f.hideUnknownTax) x.push('隐藏税率未知');
+  if (f.hideTax2c) x.push('隐藏税归发币人');
   if (f.minMc || f.maxMc) x.push(`市值 ${f.minMc || 0}K~${f.maxMc || '∞'}K`);
   if (f.minAge || f.maxAge) x.push(`创建 ${f.minAge || 0}~${f.maxAge || '∞'} 分钟`);
   if (f.minHolders) x.push(`持有人 ≥ ${f.minHolders}`);
@@ -2415,7 +2417,7 @@ function tcFilterPop(k) {
     <div class="tp-row"><span>市值（K$）</span><input data-tff="${k}:minMc" value="${f.minMc}" placeholder="最低，如 5"/><input data-tff="${k}:maxMc" value="${f.maxMc}" placeholder="最高，如 50"/></div>
     <div class="tp-row"><span>持有人 ≥</span><input data-tff="${k}:minHolders" value="${f.minHolders}"/><span>进度 ≥ %</span><input data-tff="${k}:minProg" value="${f.minProg}"/></div>
     <div class="tp-row"><span>报价币</span><input data-tff="${k}:quote" value="${esc(f.quote)}" placeholder="BNB, BNCB…"/><label><input type="checkbox" data-tfs="${k}" ${f.social ? 'checked' : ''}/>有社交链接</label></div>
-    <div class="tp-row"><span>最高税率 %</span><input data-tff="${k}:maxTax" value="${f.maxTax ?? ''}" placeholder="如 5"/><label><input type="checkbox" data-tfu="${k}" ${f.hideUnknownTax ? 'checked' : ''}/>税率未知也隐藏</label><button class="qb" data-tfall="${k}" title="把这一列的税率条件复制到三列">应用到全部列</button></div>
+    <div class="tp-row"><span>最高税率 %</span><input data-tff="${k}:maxTax" value="${f.maxTax ?? ''}" placeholder="如 5"/><label><input type="checkbox" data-tfu="${k}" ${f.hideUnknownTax ? 'checked' : ''}/>税率未知也隐藏</label><label><input type="checkbox" data-tfc="${k}" ${f.hideTax2c ? 'checked' : ''}/>隐藏税归发币人</label><button class="qb" data-tfall="${k}" title="把这一列的税率条件复制到三列">应用到全部列</button></div>
     <div class="tp-row"><button class="qb" data-tfreset="${k}">重置</button><span class="muted">P${TR.cols[k].preset} 预设，自动保存</span></div></div>`;
 }
 
@@ -2445,6 +2447,7 @@ function tcMatch(k, t) {
     if (!known.length) { if (f.hideUnknownTax) return false; }
     else if (mt != null && Math.max(...known) > mt + 1e-9) return false;
   }
+  if (f.hideTax2c && t.taxToCreator) return false;   // 税收接收地址就是发币人自己
   const kw = c.q.toLowerCase().split(/[,，]+/).map((x) => x.trim()).filter(Boolean);
   if (kw.length && !kw.some((w) => `${t.symbol} ${t.name} ${t.address}`.toLowerCase().includes(w))) return false;
   return true;
@@ -2615,7 +2618,7 @@ document.addEventListener('click', (e) => {
   else if (d.ts) { const [k, v] = d.ts.split(':'); TR.cols[k].sort = v; }
   else if (d.tsound) { TR.cols[d.tsound].sound = !TR.cols[d.tsound].sound; if (TR.cols[d.tsound].sound) colTone(990); }
   else if (d.tf) { tfModal(d.tf); return; }
-  else if (d.tfall) { const src = P(d.tfall).f; setTaxAll(src.maxTax, src.hideUnknownTax); note(`税率条件已应用到三列（P1-P3 都生效）${src.maxTax !== '' ? `：最高 ${src.maxTax}%` : ''}`, 'info'); }
+  else if (d.tfall) { const src = P(d.tfall).f; setTaxAll(src.maxTax, src.hideUnknownTax, src.hideTax2c); note(`税率条件已应用到三列（P1-P3 都生效）${src.maxTax !== '' ? `：最高 ${src.maxTax}%` : ''}`, 'info'); }
   else if (d.tfreset) { P(d.tfreset).f = defPreset().f; $('#tcf-' + d.tfreset).innerHTML = tcFilterPop(d.tfreset); }
   else if (d.tqb) {
     // 整个右侧框都是买入按钮：点下立刻显示「下单中」，结果按这次点击之后该币的最新买单判断
@@ -2642,9 +2645,10 @@ document.addEventListener('input', (e) => {
   else if (d.tfp) { const [k, p] = d.tfp.split(':'); const s = new Set(P(k).f.plats); e.target.checked ? s.add(p) : s.size > 1 ? s.delete(p) : (e.target.checked = true); P(k).f.plats = PLATS.filter((x) => s.has(x)); }
   else if (d.tfs) P(d.tfs).f.social = e.target.checked;
   else if (d.tfu) setTaxAll(P(d.tfu).f.maxTax, e.target.checked);
+  else if (d.tfc) setTaxAll(P(d.tfc).f.maxTax, P(d.tfc).f.hideUnknownTax, e.target.checked);
   else return;
   trSave(); lastPulse = 0; renderPulse(); lastList = 0; scheduleRender();
-  if (d.tff || d.tfp || d.tfs || d.tfu) { const k = (d.tff || d.tfp || d.tfs || d.tfu).split(':')[0]; $('#tcb-' + k) && ($(`#tch-${k} .tc-funnel`).classList.toggle('act', true)); }
+  if (d.tff || d.tfp || d.tfs || d.tfu || d.tfc) { const k = (d.tff || d.tfp || d.tfs || d.tfu || d.tfc).split(':')[0]; $('#tcb-' + k) && ($(`#tch-${k} .tc-funnel`).classList.toggle('act', true)); }
 });
 for (const k of Object.keys(TCOLS)) {
   const col = $('#tc-' + k); if (!col) continue;
@@ -2705,13 +2709,13 @@ function tfModal(k) {
         <div class="tfm-s"><label class="tfm-chk"><input type="checkbox" data-soc ${dr.social ? 'checked' : ''}/> 有社交链接</label></div>
         <div class="tfm-s tfm-2"><div><div class="tfm-t"><span>最高税率 %</span><span class="muted">买或卖超过就隐藏（等于不算超过）</span></div><input data-f="maxTax" value="${esc(dr.maxTax ?? '')}" placeholder="不限，如 5"/>
             <div class="tfm-chips tfm-taxq">${[['', '不限'], ['1', '≤1%'], ['3', '≤3%'], ['5', '≤5%'], ['9.9', '去掉 10%+']].map(([v, l]) => `<button class="tfm-c${String(taxNum(dr.maxTax) ?? '') === v ? ' on' : ''}" data-taxq="${v}">${l}</button>`).join('')}</div></div>
-          <div><div class="tfm-t"><span>&nbsp;</span></div><label class="tfm-chk"><input type="checkbox" data-unk ${dr.hideUnknownTax ? 'checked' : ''}/> 税率未知也隐藏</label></div></div>
+          <div><div class="tfm-t"><span>&nbsp;</span></div><label class="tfm-chk"><input type="checkbox" data-unk ${dr.hideUnknownTax ? 'checked' : ''}/> 税率未知也隐藏</label><label class="tfm-chk" title="税收接收地址就是发币人自己的币不显示"><input type="checkbox" data-t2c ${dr.hideTax2c ? 'checked' : ''}/> 隐藏税归发币人</label></div></div>
       </div>
       <div class="tfm-f"><button class="tfm-reset" data-reset>重置</button><button class="tfm-reset" data-alltax title="把这里的税率条件用到三列（当前预设）">税率应用到全部列</button><button class="tfm-ok" data-ok>应用</button></div></div>`;
   };
   const close = () => { m.remove(); document.removeEventListener('keydown', esc_); lastList = 0; scheduleRender(); };   // 左栏用同一套筛选，一起刷新
   const esc_ = (e) => { if (e.key === 'Escape') close(); };
-  m.addEventListener('input', (e) => { const x = e.target.dataset; if (x.f) dr[x.f] = e.target.value.trim(); if (x.soc != null) dr.social = e.target.checked; if (x.unk != null) dr.hideUnknownTax = e.target.checked; });
+  m.addEventListener('input', (e) => { const x = e.target.dataset; if (x.f) dr[x.f] = e.target.value.trim(); if (x.soc != null) dr.social = e.target.checked; if (x.unk != null) dr.hideUnknownTax = e.target.checked; if (x.t2c != null) dr.hideTax2c = e.target.checked; });
   m.addEventListener('click', (e) => {
     if (e.target === m) return close();
     const b = e.target.closest('button'); if (!b) return; const x = b.dataset;
@@ -2721,13 +2725,13 @@ function tfModal(k) {
     else if (x.q) { const st = qset(); st.has(x.q) ? st.delete(x.q) : st.add(x.q); dr.quote = [...st].join(','); }
     else if (x.taxq != null) dr.maxTax = x.taxq;
     else if (x.reset != null) Object.assign(dr, defPreset().f);
-    else if (x.alltax != null) { setTaxAll(dr.maxTax, dr.hideUnknownTax); P(k).f = dr; trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse(); note(`税率条件已应用到三列（P1-P3 都生效）${dr.maxTax ? `：最高 ${dr.maxTax}%` : ''}${dr.hideUnknownTax ? '，未知也隐藏' : ''}`, 'info'); return close(); }
+    else if (x.alltax != null) { setTaxAll(dr.maxTax, dr.hideUnknownTax, dr.hideTax2c); P(k).f = dr; trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse(); note(`税率条件已应用到三列（P1-P3 都生效）${dr.maxTax ? `：最高 ${dr.maxTax}%` : ''}${dr.hideUnknownTax ? '，未知也隐藏' : ''}`, 'info'); return close(); }
     else if (x.ok != null) {
       // 税率条件改了就同时用到三列（只在一列设的话另外两列照常显示，容易以为没生效）
       { const v = taxNum(dr.maxTax); dr.maxTax = v == null ? '' : String(v); }
-      const taxChanged = String(dr.maxTax ?? '') !== String(P(k).f.maxTax ?? '') || !!dr.hideUnknownTax !== !!P(k).f.hideUnknownTax;
+      const taxChanged = String(dr.maxTax ?? '') !== String(P(k).f.maxTax ?? '') || !!dr.hideUnknownTax !== !!P(k).f.hideUnknownTax || !!dr.hideTax2c !== !!P(k).f.hideTax2c;
       P(k).f = dr;
-      if (taxChanged) { setTaxAll(dr.maxTax, dr.hideUnknownTax); note(`税率条件已同时用到三列（P1-P3 都生效）${dr.maxTax ? `：最高 ${dr.maxTax}%` : '：不限'}${dr.hideUnknownTax ? '，未知也隐藏' : ''}`, 'info'); }
+      if (taxChanged) { setTaxAll(dr.maxTax, dr.hideUnknownTax, dr.hideTax2c); note(`税率条件已同时用到三列（P1-P3 都生效）${dr.maxTax ? `：最高 ${dr.maxTax}%` : '：不限'}${dr.hideUnknownTax ? '，未知也隐藏' : ''}${dr.hideTax2c ? '，隐藏税归发币人' : ''}`, 'info'); }
       trSave(); renderTrenchHeads(); lastPulse = 0; renderPulse(); return close();
     }
     else return;
