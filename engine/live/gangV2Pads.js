@@ -35,7 +35,7 @@ export class GangV2 {
   async call(to, i, fn, args, from) { return i.decodeFunctionResult(fn, await this.provider.call({ to, from, data: i.encodeFunctionData(fn, args) })); }
 
   // 这个币在哪个 pad 上（creator ≠ 0 的那个），带曲线状态
-  async curve(token) {
+  async curve(token, again = true) {
     const p = this.pads.get(token.toLowerCase());
     let rpcErr = null;   // 节点出错（限流 / 超时）和「这个 pad 上没有这个币」要分开，不然节点一抖就报「不是 gang 的币」
     const fail = (e) => { rpcErr ||= e; return null; };
@@ -48,6 +48,7 @@ export class GangV2 {
     if (await v3Pending().then((r) => r.some(Boolean))) for (const a of V3_PADS) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return { pad: a, c }; } }   // 刚核对完的新内盘
     // V3 内盘上的「打新」币（kindOf = 2）没有曲线：固定价认购，本工具不做
     for (const a of V3_PADS) { const k = await this.call(a, v3PadAbi, 'kindOf', [token]).then((x) => x[0]).catch(() => 0n); if (k === 2n) throw Object.assign(new Error('这是 Gang V3「打新」币（固定价认购，不是曲线），暂不支持在这里买卖，请到 gang.fun 操作'), { code: 'V3_FAIR' }); }
+    if (rpcErr && again) { await sleep(600); return this.curve(token, false); }   // 节点一阵子限流：等一下整轮再查一次，不直接报错
     if (rpcErr) throw new Error(`查询 gang.fun 内盘时节点出错，请稍后重试（${String(rpcErr.shortMessage || rpcErr.message || rpcErr).slice(0, 80)}）`);
     throw new Error('不是 gang.fun V2 / V3 合约上的代币');
   }

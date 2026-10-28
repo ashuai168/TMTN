@@ -1,7 +1,7 @@
 // 实盘行情适配器：把 Flap Agent Curve Reader + fsi、four.meme Agentic Wallet 专属内盘（链上事件）+ shrine 统一成和模拟盘一样的接口（list / get / detail / 事件）。
 import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
-import { RPC_URL, RPC_LIST, BNB_PRICE_URL, dataFile } from './config.js';
+import { RPC_URL, RPC_LIST, TRADE_RPC_URLS, TRADE_FALLBACK_RPC, BNB_PRICE_URL, dataFile } from './config.js';
 import { FailoverProvider, nodeName, PUBLIC_RPC } from './rpc.js';
 import { AgentCurve } from './agentCurve.js';
 import { FourMeme, AGENT_ID_TEMPLATE } from './fourMeme.js';
@@ -76,7 +76,7 @@ export class LiveMarket extends EventEmitter {
     super();
     // 两套节点：行情 / 持仓 / 监控这类不赶时间的读取走公共节点优先（省 NodeReal 额度）；下单、确认、卖前余额这条交易链路走 NodeReal 优先
     this.provider = new FailoverProvider([PUBLIC_RPC, 'https://bsc-dataseed.bnbchain.org', ...RPC_LIST], '行情读取');   // 两个公共节点都不行时才用 NodeReal
-    this.tradeProvider = new FailoverProvider(RPC_LIST, '交易');
+    this.tradeProvider = new FailoverProvider([...TRADE_RPC_URLS, ...RPC_LIST, ...TRADE_FALLBACK_RPC], '交易');   // 交易专用节点在前，公共节点兜底
     this.curve = new AgentCurve(this.provider);
     this.four = new FourMeme();
     this.gang = new GangFun();

@@ -54,6 +54,10 @@ setNodeRealSlots(NODEREAL_URLS);
 // 读链 / 查确认 / 余额：有 NodeReal 就用它当主节点（多个 key 轮流），公共节点做备用（见 rpc.js）
 export const RPC_URL = env('RPC_URL', NODEREAL_RPC || 'https://bsc-dataseed.bnbchain.org');
 export const RPC_LIST = [...NODEREAL_URLS, RPC_URL, 'https://bsc-dataseed.bnbchain.org', 'https://bsc-rpc.publicnode.com'].filter((u, i, a) => u && a.indexOf(u) === i);
+// 交易专用节点：.env / 环境变量 TRADE_RPC_URL（可填多个，逗号分隔）只给下单链路用，行情读取不会用它，后台读链再多也挤不到交易。
+// 再加几个公共节点兜底（和行情读取用的两个公共节点分开计限流），交易时某个节点 429 就换下一个
+export const TRADE_RPC_URLS = env('TRADE_RPC_URL', '').split(',').map((x) => x.trim()).filter((x) => /^https?:\/\//.test(x));
+export const TRADE_FALLBACK_RPC = ['https://bsc-dataseed1.bnbchain.org', 'https://bsc-dataseed2.bnbchain.org', 'https://bsc-dataseed1.defibit.io', 'https://bsc-dataseed1.ninicoin.io', 'https://rpc-bsc.48.club'];
 export const BAW_BIN = env('BAW_BIN', 'baw');
 export const BINANCE_CHAIN_ID = Number(env('BINANCE_CHAIN_ID', 56));
 export const BAW_SLIPPAGE_UNIT = env('BAW_SLIPPAGE_UNIT', 'percent'); // percent: 传 20 表示 20%；fraction: 传 0.2

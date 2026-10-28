@@ -85,7 +85,7 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
   constructor(urls, label = 'rpc') {
     const list = urls.filter((u, i, a) => u && a.indexOf(u) === i);
     super(FailoverProvider.req(list[0]), 56, { staticNetwork: true, batchMaxCount: 1 });
-    this.urls = list; this.label = label; this.rr = 0;
+    this.urls = list; this.label = label; this.rr = 0; this.trade = label === '交易';
     this.nodes = list.map((u) => ({ url: u, name: nodeName(u), nr: /nodereal/i.test(u), cool: 0, err: null, noLogs: /dataseed/i.test(u) ? Infinity : 0, p: new ethers.JsonRpcProvider(FailoverProvider.req(u), 56, { staticNetwork: true, batchMaxCount: 1 }) }));
     this.lastUsed = maskRpc(list[0]); this.primaryErr = null; this.coolUntil = 0;
   }
@@ -97,7 +97,7 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
       coolUntil: this.coolUntil, primaryErr: this.primaryErr, keys: this.nodes.filter((n) => n.nr).map((n) => ({ name: n.name, cooling: n.cool > now, err: n.cool > now ? n.err : null })) };
   }
   order(method) {
-    const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now && !capped(n.url)), warm = pool.filter((n) => n.cool <= now);
+    const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now && (this.trade || !capped(n.url))), warm = pool.filter((n) => n.cool <= now);
     const nr = ok.filter((n) => n.nr);
     if (nr.length > 1) { this.rr = (this.rr + 1) % nr.length; const rot = nr.slice(this.rr).concat(nr.slice(0, this.rr)); let k = 0; for (let i = 0; i < ok.length; i++) if (ok[i].nr) ok[i] = rot[k++]; }
     if (!ok.length && warm.length && this.label === '交易') return warm;   // 只有交易可以突破每分钟上限；行情读取宁可慢一点也不吃付费额度
@@ -110,7 +110,17 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
   getLogs(filter) { this.tagCaller('eth_getLogs'); return super.getLogs(filter); }
   async _send(payload) {
     const method = Array.isArray(payload) ? payload[0]?.method : payload?.method;
-    let last; const list = this.order(method);
+    try { return await this.sendList(payload, method, this.order(method)); }
+    catch (e) {
+      if (!this.trade) throw e;
+      // 交易：整轮都失败（多半是公共节点短时 429「exceeded maximum retry limit」，被后台行情读取挤满）→ 等一下，所有节点按冷却先后再试一轮
+      await new Promise((r) => setTimeout(r, 400));
+      const now = Date.now(), all = (method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes).slice().sort((a, b) => a.cool - b.cool);
+      return this.sendList(payload, method, all.length ? all : this.nodes);
+    }
+  }
+  async sendList(payload, method, list) {
+    let last;
     for (let i = 0; i < list.length; i++) {
       const n = list[i]; bumpUsage(this.label, n.url, payload); capBump(n.url);
       try {
@@ -125,7 +135,7 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
       } catch (e) {
         const body = /monthly quota/i.test(String(e.info?.responseBody || '')) ? '月额度已用完（monthly quota）' : '';   // 429 时 ethers 只给「exceeded maximum retry limit」，原因在响应体里
         const m = (body || String(e.shortMessage || e.message || e)).slice(0, 160); last = e;
-        n.cool = Date.now() + (body ? 3600_000 : /429|limit|quota|exceed|retry/i.test(m) ? 300_000 : 30_000); n.err = m;
+        n.cool = Date.now() + (body ? 3600_000 : /429|limit|quota|exceed|retry/i.test(m) ? (this.trade && !n.nr ? 20_000 : 300_000) : 30_000); n.err = m;   // 交易端：公共节点 429 只冷却 20 秒（多是一阵子，冷却 5 分钟会让交易只剩一两个节点可用）
         if (n.nr) { this.primaryErr = m; this.coolUntil = n.cool; }
       }
     }
