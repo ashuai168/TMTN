@@ -206,7 +206,7 @@ export class GangV2 {
   // 真实买入：先拿报价币（已有足够的就直接用）→ 授权 → 报价 + 模拟 → buy
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
   async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
-    // 预检只等一轮（jak 2026-10-28：预检要去掉）：这个币的 pad / 报价币查过一次就记住，曲线状态、小数位、报价币余额、授权额度、剩余额度、汇率同时读；
+    // 预检只等一轮：这个币的 pad / 报价币查过一次就记住，曲线状态、小数位、报价币余额、授权额度、剩余额度、汇率同时读；
     // 汇率用 5 分钟内的旧值（同时后台刷新），不再当场等 baw 报价。汇率只用来估算要换多少报价币，买入数量按实际到账 + 链上报价 + 滑点保护
     const reads = (pd, qt) => Promise.all([isWbnb(qt) ? 18 : this.decimals(qt), this.balanceOf(qt, wallet), this.call(qt, erc20, 'allowance', [wallet, pd]).then((x) => x[0]).catch(() => 0n), this.call(pd, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null), isWbnb(qt) ? 1 : this.quoteRate(qt, { stale: 300_000 })]);
     const kp = this.pads.get(token.toLowerCase()), kq = this.quoteOf?.get(token.toLowerCase());
