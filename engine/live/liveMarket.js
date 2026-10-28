@@ -39,6 +39,9 @@ const DEC_ABI = ['function decimals() view returns (uint8)'];
 // Gang V3 税收接收地址：GangLaunchpad.taxConfigOf(token).recipient，创建时定死、之后不能改，所以每个币只读一次并存盘（重启也不重读）
 const TAX_CFG = new ethers.Interface(['function taxConfigOf(address token) view returns (uint16 buyTaxBps, uint16 sellTaxBps, uint16 dividendBps, address recipient)']);
 const TAX_TO_FILE = dataFile('gang-tax-recipients.json');
+// Flap 税币不变的部分（税率、分配比例、受益人、分红币）存盘：每个币只完整读一次，重启也不重读
+const FLAP_TAX_FILE = dataFile('flap-tax-fixed.json');
+const FLAP_FIXED_KEYS = ['buyBps', 'sellBps', 'processor', 'mktBps', 'deflBps', 'lpBps', 'divBps', 'beneficiary', 'divToken', 'divContract', 'divSym', 'divMin'];
 // DexScreener 没收录的 PancakeSwap Infinity CL 池（计价币的主池在这里）：直接读 CLPoolManager.getSlot0(poolId)。stable = 池子另一边的稳定币是 currency0 还是 currency1（两边都按 18 位小数）
 // xOPAI：USDT/xOPAI 费率 0.067%，DexScreener 只有一个 $0.07 的 V2 池，按它算价格偏高约 13%（2026-10-28 核对）
 const CL_POOL_MANAGER = '0xa0FfB9c1CE1Fe56963B0321B32E7A0302114058b';
@@ -296,10 +299,16 @@ export class LiveMarket extends EventEmitter {
     if (st.status === 4 && t.stage === 'curve') { t.stage = 'dex'; t.progress = 100; this.emit('migrate', this.summary(t)); }
     else if (st.status === 1 && !t.migrated) t.stage = 'curve';
   }
-  // 税率 / 受益人 / 分红：读链上（flapNft.taxInfo），5 分钟刷新一次（累计分红、营销金额会变）
+  // 税率 / 受益人 / 分红：不变的部分只读一次并存盘（flap-tax-fixed.json）；之后 5 分钟只刷新三个累计金额（累计分红、营销金额会变）
   async flapNftTax(t, force = false) {
     if (!force && t.flapTax && Date.now() - t.flapTax.at < 300_000) return;
-    const v = await this.flapNft.taxInfo(t.address); t.flapTax = v;
+    const m = (this._flapFixed ||= (() => { try { return JSON.parse(readFileSync(FLAP_TAX_FILE, 'utf8')); } catch { return {}; } })());
+    const v = await this.flapNft.taxInfo(t.address, m[t.address] || null); t.flapTax = v;
+    if (!m[t.address] && v.processor) {   // 读全了才存（divSym 读失败是 '?'，下次重启再读）
+      m[t.address] = Object.fromEntries(FLAP_FIXED_KEYS.filter((k) => v[k] !== undefined).map((k) => [k, v[k]]));
+      if (v.divSym === '?') delete m[t.address];
+      clearTimeout(this._flapFixedSave); this._flapFixedSave = setTimeout(() => { try { writeFileSync(FLAP_TAX_FILE, JSON.stringify(m)); } catch { /* 下次重启重读 */ } }, 5000);
+    }
     t.buyTax = v.buyBps / 100; t.sellTax = v.sellBps / 100;
     const q = v.divSym === 'BNB' ? this.bnbUsd : 0;
     t.gangDiv = { flap: true, taxed: v.divBps > 0, taxBps: Math.round(Math.max(v.buyBps, v.sellBps) * v.divBps / 10000), vault: v.divContract || null,

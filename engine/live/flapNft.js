@@ -244,11 +244,17 @@ export class FlapNft extends EventEmitter {
   // 税币信息（门槛盘都是 FlapTaxTokenV3，地址 …7777）：买 / 卖税率在代币合约上；受益人、分红币、税收分配在 taxProcessor 上。
   // feeConfigV2() 前 4 个字 = 营销 / 销毁 / 回流 LP / 分红（万分比，合计 10000）。顺序按已迁移 Flap 币的实际流向核对过：
   // 营销 10000 的币钱只进 totalQuoteSentToMarketing，分红 10000 的币只进 totalQuoteSentToDividend，回流的币有 totalQuoteAddedToLiquidity
-  async taxInfo(token) {
+  // fixed = 之前读过的不变部分（税率、分配比例、受益人、分红币……创建后不能改）：只重读三个累计金额
+  async taxInfo(token, fixed = null) {
     const sel = (s) => ethers.id(s).slice(0, 10);
     const raw = (to, f) => this.provider.call({ to, data: sel(f) });
     const u = async (to, f) => BigInt(await raw(to, f));
     const a = async (to, f) => ethers.getAddress('0x' + (await raw(to, f)).slice(26)).toLowerCase();
+    if (fixed) {
+      const proc = fixed.processor; if (!proc || proc === ZERO) return { ...fixed, at: Date.now() };
+      const [sentMkt, sentDiv, lpQuote] = await Promise.all([u(proc, 'totalQuoteSentToMarketing()').catch(() => 0n), u(proc, 'totalQuoteSentToDividend()').catch(() => 0n), u(proc, 'totalQuoteAddedToLiquidity()').catch(() => 0n)]);
+      return { ...fixed, sentMkt: f18(sentMkt), sentDiv: f18(sentDiv), lpQuote: f18(lpQuote), at: Date.now() };
+    }
     const [buy, sell, proc] = await Promise.all([u(token, 'buyTaxRate()'), u(token, 'sellTaxRate()'), a(token, 'taxProcessor()').catch(() => ZERO)]);
     const v = { buyBps: Number(buy), sellBps: Number(sell), processor: proc, at: Date.now() };
     if (proc === ZERO) return v;
