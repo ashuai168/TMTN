@@ -36,6 +36,9 @@ const isAgentish = (l) => l.agentExclusive === true || l.agent === true || l.isA
 const STABLE = new Set(['USDT', 'USDC', 'USD1', 'U', 'BUSD', 'FDUSD']);
 const POOL_ABI = ['function token0() view returns (address)', 'function token1() view returns (address)', 'function slot0() view returns (uint160,int24,uint16,uint16,uint16,uint32,bool)', 'function getReserves() view returns (uint112,uint112,uint32)'];
 const DEC_ABI = ['function decimals() view returns (uint8)'];
+// Gang V3 税收接收地址：GangLaunchpad.taxConfigOf(token).recipient，创建时定死、之后不能改，所以每个币只读一次并存盘（重启也不重读）
+const TAX_CFG = new ethers.Interface(['function taxConfigOf(address token) view returns (uint16 buyTaxBps, uint16 sellTaxBps, uint16 dividendBps, address recipient)']);
+const TAX_TO_FILE = dataFile('gang-tax-recipients.json');
 // DexScreener 没收录的 PancakeSwap Infinity CL 池（计价币的主池在这里）：直接读 CLPoolManager.getSlot0(poolId)。stable = 池子另一边的稳定币是 currency0 还是 currency1（两边都按 18 位小数）
 // xOPAI：USDT/xOPAI 费率 0.067%，DexScreener 只有一个 $0.07 的 V2 池，按它算价格偏高约 13%（2026-10-28 核对）
 const CL_POOL_MANAGER = '0xa0FfB9c1CE1Fe56963B0321B32E7A0302114058b';
@@ -827,7 +830,7 @@ export class LiveMarket extends EventEmitter {
       remaining: t.remaining, holders: t.holders, buys: t.buys, sells: t.sells, volume: t.volume, volumeH24: !!t.volumeH24, dexVol24: t.dexVol24 ?? null, dexBuys24: t.dexBuys24 ?? null, dexSells24: t.dexSells24 ?? null, dexCountMin: t.dexCountMin || 0, buyTax: t.buyTax, sellTax: t.sellTax,
       buyFeePct: t.source === 'four-agent' && t.feeBps == null ? null : this.buyFeePct(t), sellFeePct: this.sellFeePct(t), antiSniperPct: t.antiSniperPct || 0, antiSniper: !!t.antiSniper, lastTradeAt: t.lastTradeAt || 0, realToken: t.realToken !== false,
       chg: this.change(t),
-      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, gangDiv: t.gangDiv || null, gangV3: t.gangV3 || null, gangFair: t.gangFair || null, flapTax: t.flapTax ? { ...t.flapTax, beneficiaryName: t.flapTax.beneficiary ? this.names.peek(t.flapTax.beneficiary) : null } : null, nftGate: t.source === 'flap-nft' && t.stage === 'curve' && t.nftGate && !t.nftGate.removed ? t.nftGate : null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
+      image: t.image || null, creatorName: t.creatorName || null, gangTrack: t.gangTrack || null, gangDiv: t.gangDiv || null, gangV3: t.gangV3 || null, taxTo: t.taxTo || undefined, taxToCreator: this.taxToCreator(t) || undefined, gangFair: t.gangFair || null, flapTax: t.flapTax ? { ...t.flapTax, beneficiaryName: t.flapTax.beneficiary ? this.names.peek(t.flapTax.beneficiary) : null } : null, nftGate: t.source === 'flap-nft' && t.stage === 'curve' && t.nftGate && !t.nftGate.removed ? t.nftGate : null, description: t.description || '', website: t.website || '', twitter: t.twitter || '', telegram: t.telegram || '',
     };
   }
 
@@ -861,10 +864,31 @@ export class LiveMarket extends EventEmitter {
     }
   }
 
+  // 读一次 Gang V3 税收接收地址（不等结果，不影响曲线刷新）；读失败 5 分钟后再试
+  gangTaxTo(t, pad) {
+    const m = (this._taxTo ||= (() => { try { return JSON.parse(readFileSync(TAX_TO_FILE, 'utf8')); } catch { return {}; } })());
+    if (m[t.address]) { t.taxTo = m[t.address]; return; }
+    if (!pad || t._taxToAt > Date.now() - 300_000) return;
+    t._taxToAt = Date.now();
+    this.provider.call({ to: pad, data: TAX_CFG.encodeFunctionData('taxConfigOf', [t.address]) }).then((r) => {
+      const a = String(TAX_CFG.decodeFunctionResult('taxConfigOf', r).recipient).toLowerCase(); if (a === ethers.ZeroAddress) return;
+      m[t.address] = t.taxTo = a; clearTimeout(this._taxToSave);
+      this._taxToSave = setTimeout(() => { try { writeFileSync(TAX_TO_FILE, JSON.stringify(m)); } catch { /* 下次重启重读 */ } }, 5000);
+    }).catch(() => {});
+  }
+  // 税收接收地址就是发币人自己：Gang V3 = recipient 是创建者且这部分不是全给分红；Flap = 营销受益人是创建者且营销比例 > 0
+  taxToCreator(t) {
+    const c = String(t.creator || '').toLowerCase(); if (!c) return false;
+    const v = t.gangV3; if (v && t.taxTo) return t.taxTo === c && (v.buyTaxBps > 0 || v.sellTaxBps > 0) && v.dividendBps < 10000;
+    const f = t.flapTax; if (f?.beneficiary) return f.beneficiary === c && f.mktBps > 0 && (f.buyBps > 0 || f.sellBps > 0);
+    return false;
+  }
+
   async gangV2Curve(t) {
     if (t._v2At && Date.now() - t._v2At < 20_000) return;
     this._gv2 ||= new GangV2(this.provider, null);
-    const { c } = await this._gv2.curve(t.address);
+    const { pad, c } = await this._gv2.curve(t.address);
+    if (c.v3 && c.taxed) this.gangTaxTo(t, pad);
     const VT = 1066666666666666666666666667n, vq = BigInt(c.virtualQuote), grad = BigInt(c.gradAmt), sold = BigInt(c.sold);
     const soldAtGrad = VT - (vq * VT + vq + grad - 1n) / (vq + grad);
     // 报价币不一定是 18 位（XAUt 是 6 位）：开盘价、已筹、目标都按报价币自己的小数位换算
