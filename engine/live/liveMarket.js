@@ -419,7 +419,14 @@ export class LiveMarket extends EventEmitter {
     try {
       const j = await fetch('https://gang.fun/api/v3/tokens?limit=100', { signal: AbortSignal.timeout(10_000) }).then((r) => r.json());
       for (const x of j?.items || []) {
-        if (!x?.address || this.get(x.address) || (x.graduated && !(x.graduatedAt > day))) continue;
+        // 已经由链上 Created 事件收录的 V3 盘：事件里已筹 / 进度是 0，gang.fun 的 V2 列表又不收 V3，以前就一直显示 0/15。这里按接口刷新已筹 / 目标 / 进度，没有图标的补上
+        const ex = x?.address && this.get(x.address);
+        if (ex && ex.source === 'gang' && ex.gangTrack === 'v3' && !x.graduated && !ex._chainCurve) {
+          const dec = Number(x.quoteDecimals) || 18, raised = Number(ethers.formatUnits(BigInt(x.realQuote || 0), dec)), grad = Number(ethers.formatUnits(BigInt(x.gradAmt || 0), dec));
+          if (raised > 0 || Number(x.progressPct) > 0) Object.assign(ex, { raised, progress: Number(x.progressPct) || (grad > 0 ? Math.min(100, (raised / grad) * 100) : ex.progress), ...(grad > 0 && { target: grad }) });
+          if (x.hasLogo && x.logoUrl && !/^https?:/i.test(ex.image || '')) ex.image = x.logoUrl;
+        }
+        if (!x?.address || ex || (x.graduated && !(x.graduatedAt > day))) continue;
         const qa = String(x.quoteAddress || '').toLowerCase(), dec = Number(x.quoteDecimals) || 18;
         this.upsertGang({ address: x.address.toLowerCase(), name: x.name, symbol: x.symbol, creator: String(x.creator || '').toLowerCase(), creatorHandle: x.creatorHandle, logo: x.hasLogo ? x.logoUrl : null,
           createdAt: x.createdAt || Math.floor(Date.now() / 1000), graduated: !!x.graduated, graduatedAt: x.graduatedAt || null, pair: x.pair || null, quoteAddress: qa,

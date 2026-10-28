@@ -81,7 +81,7 @@ export class GangChain extends EventEmitter {
     this.status.found++; this.status.lastAt = seenAt; this.status.lastBlock = Math.max(this.status.lastBlock, log.blockNumber);
     const it = {
       address: token, name, symbol, creator: addr(log.topics[2]).toLowerCase(), createdAt, graduated: false, raisedQuote: 0, progressPct: 0,
-      quoteSymbol, quoteAddress: v2 ? quoteAddress : null, logo: logo ? new URL(logo, 'https://gang.fun').href : null, track: fair ? 'v3fair' : v3 ? 'v3' : v2 ? 'v2' : 'v1', pad: v3 ? log.address.toLowerCase() : null,
+      quoteSymbol, quoteAddress: v2 ? quoteAddress : null, logo: logo ? (/^ipfs:\/\//i.test(logo) ? 'https://cdn.gang.fun/ipfs/' + logo.replace(/^ipfs:\/\/(ipfs\/)?/i, '') : new URL(logo, 'https://gang.fun').href) : null,   // V3 Created 事件里是 ipfs://CID：换成 gang.fun 自己的网关（Flap 的网关不给别家的 CID，返回 403） track: fair ? 'v3fair' : v3 ? 'v3' : v2 ? 'v2' : 'v1', pad: v3 ? log.address.toLowerCase() : null,
       fromChain: true, block: log.blockNumber, tx: log.transactionHash, seenAt, timeP,
     };
     this.emit('token', it);
