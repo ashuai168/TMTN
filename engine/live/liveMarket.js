@@ -924,8 +924,9 @@ export class LiveMarket extends EventEmitter {
     t.antiSniper = b.antiSniper; t.feeBps = Number(b.currentBuyFeeBps ?? b.curveFeeBps ?? 0);
     return t.feeBps / 100;
   }
-  buyFeePct(t) { return t.feeBps != null ? t.feeBps / 100 : t.buyTax || 0; }
-  sellFeePct(t) { return t.sellFeeBps != null ? t.sellFeeBps / 100 : t.source === 'four-agent' ? null : t.sellTax || 0; }
+  // Gang V3 发射后：外盘按合约 curves() 的 buyTaxBps / sellTaxBps 收税（内盘那 1% 是平台费，发射后不适用）
+  buyFeePct(t) { return t.gangV3 && t.stage === 'dex' ? t.gangV3.buyTaxBps / 100 : t.feeBps != null ? t.feeBps / 100 : t.buyTax || 0; }
+  sellFeePct(t) { return t.gangV3 && t.stage === 'dex' ? t.gangV3.sellTaxBps / 100 : t.sellFeeBps != null ? t.sellFeeBps / 100 : t.source === 'four-agent' ? null : t.sellTax || 0; }
   costFor() { return Infinity; }
 
   summary(t) {
