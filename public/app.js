@@ -680,10 +680,19 @@ function renderStatus() {
 // 已清仓的币：没价格（price 0）时后端给的余额 / 盈亏是 null，页面显示「—」。数量是 0 余额就是 0，盈亏 = 已卖出 − 成本（已实现）
 function fixClosed(d) {
   if (!d) return d;
-  const fix = (r) => { if (r.amount > 0 || r.valueBnb != null) return 0; const old = r.pnlUsd || 0;
+  const fix = (r) => { if (r.amount > 0 || r.unsynced || (r.valueBnb != null && r.pnlUsd != null)) return 0; const old = r.pnlUsd || 0;
     r.valueBnb = 0; r.valueUsd = 0; r.pnlBnb = (r.soldBnb || 0) - (r.costBnb || 0); r.pnlUsd = (r.soldUsd || 0) - (r.costUsd || 0);
     r.pnlPct = r.costUsd > 0 ? (r.pnlUsd / r.costUsd) * 100 : null; return r.pnlUsd - old; };
   const add = (T, dv) => { if (T && dv) T.pnlUsd = (T.pnlUsd || 0) + dv; };
+  // 数量是 0、却只有买入没有卖出：多半是钱包余额（baw）还没收录这个新币，不是清仓了。这一行的成本不计入合并行和合计（否则成本算两个钱包、数量只算一个），盈亏不显示
+  const KS = ['costUsd', 'costBnb', 'pnlUsd', 'pnlBnb'], sub = (T, r) => { if (T) for (const f of KS) if (r[f] != null) T[f] = (T[f] || 0) - r[f]; };
+  for (const w of d.wallets?.length ? d.wallets : [{ rows: d.rows || [] }]) for (const r of w.rows || []) {   // 单钱包时直接处理 d.rows
+    if (r.amount > 0 || r.soldBnb > 0 || (r.trades || []).some((x) => x.side === 'sell') || !(r.costBnb > 0) || r.unsynced) continue;   // 有卖出记录（哪怕记成 0 BNB，如卖成 WBNB）就是真清仓
+    const m = (d.rows || []).find((x) => String(x.token).toLowerCase() === String(r.token).toLowerCase());
+    if (m && m !== r) { sub(m, r); m.pnlPct = m.costUsd > 0 && m.pnlUsd != null ? (m.pnlUsd / m.costUsd) * 100 : null; m.warn = m.warn || `${w.label || '有个钱包'}的余额还没同步，成本暂不计入`; }
+    sub(w.totals, r); sub(d.totals, r);
+    Object.assign(r, { unsynced: true, pnlUsd: null, pnlBnb: null, pnlPct: null, warn: '只有买入没有卖出、余额却是 0：可能是钱包余额还没同步这个币，也可能卖出 / 转出没记到钱包历史里，盈亏暂不显示' });
+  }
   let dt = 0; for (const w of d.wallets || []) { let dw = 0; for (const r of w.rows || []) dw += fix(r); add(w.totals, dw); dt += dw; }
   for (const r of d.rows || []) { const dv = fix(r); if (!d.wallets?.length) dt += dv; }   // 合并行的成本 / 已卖出是各钱包相加的，直接重算；合计按各钱包的差额补
   add(d.totals, dt); return d;
