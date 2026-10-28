@@ -45,9 +45,9 @@ export class GangV2 {
       if (isV3Pad(a)) { const c = await this.call(a, v3PadAbi, 'curves', [token]).catch(fail); return c && c.creator !== ethers.ZeroAddress ? normCurve(c) : null; }   // V3：c.v3 = 买卖税 / 分红比例
       const c = await this.call(a, pad, 'curves', [token]).catch(fail); return c && c.creator !== ethers.ZeroAddress ? c : null;
     };
-    if (p) { const c = await tryPad(p); if (c) return { pad: p, c }; }
-    for (const a of [...V2_PADS, ...V3_PADS]) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return { pad: a, c }; } }
-    if (await v3Pending().then((r) => r.some(Boolean))) for (const a of V3_PADS) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return { pad: a, c }; } }   // 刚核对完的新内盘
+    if (p) { const c = await tryPad(p); if (c) return this.remember(token, p, c); }
+    for (const a of [...V2_PADS, ...V3_PADS]) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return this.remember(token, a, c); } }
+    if (await v3Pending().then((r) => r.some(Boolean))) for (const a of V3_PADS) { const c = await tryPad(a); if (c) { this.pads.set(token.toLowerCase(), a); return this.remember(token, a, c); } }   // 刚核对完的新内盘
     // V3 内盘上的「打新」币（kindOf = 2）没有曲线：固定价认购，本工具不做
     for (const a of V3_PADS) { const k = await this.call(a, v3PadAbi, 'kindOf', [token]).then((x) => x[0]).catch(() => 0n); if (k === 2n) throw Object.assign(new Error('这是 Gang V3「打新」币（固定价认购，不是曲线），暂不支持在这里买卖，请到 gang.fun 操作'), { code: 'V3_FAIR' }); }
     if (rpcErr && again) { await sleep(600); return this.curve(token, false); }   // 节点一阵子限流：等一下整轮再查一次，不直接报错
@@ -56,6 +56,8 @@ export class GangV2 {
   }
 
   quoteToken(c) { return isWbnb(c.quote) ? WBNB : c.quote; }
+  // 记下这个币的报价币（创建后不变），下次买入时余额 / 授权和曲线状态可以同一轮并行读
+  remember(token, pad, c) { (this.quoteOf ||= new Map()).set(token.toLowerCase(), this.quoteToken(c)); return { pad, c }; }
   // 已毕业（迁移到 PancakeSwap）的盘内盘不能再买卖：直接报 MIGRATED，交给上层改走外盘（liveTrader.checkMigrated）
   notGraduated(c) { if (c.graduated) throw Object.assign(new Error('这个盘已发射到 PancakeSwap，内盘不能再买卖'), { code: 'MIGRATED', pair: c.pair }); return c; }
 
@@ -204,13 +206,19 @@ export class GangV2 {
   // 真实买入：先拿报价币（已有足够的就直接用）→ 授权 → 报价 + 模拟 → buy
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
   async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
-    const { pad: p, c } = await this.curve(token); this.notGraduated(c); if (c.v3) assertV3Trade();   // V3 默认只报价
+    // 预检只等一轮（jak 2026-10-28：预检要去掉）：这个币的 pad / 报价币查过一次就记住，曲线状态、小数位、报价币余额、授权额度、剩余额度、汇率同时读；
+    // 汇率用 5 分钟内的旧值（同时后台刷新），不再当场等 baw 报价。汇率只用来估算要换多少报价币，买入数量按实际到账 + 链上报价 + 滑点保护
+    const reads = (pd, qt) => Promise.all([isWbnb(qt) ? 18 : this.decimals(qt), this.balanceOf(qt, wallet), this.call(qt, erc20, 'allowance', [wallet, pd]).then((x) => x[0]).catch(() => 0n), this.call(pd, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null), isWbnb(qt) ? 1 : this.quoteRate(qt, { stale: 300_000 })]);
+    const kp = this.pads.get(token.toLowerCase()), kq = this.quoteOf?.get(token.toLowerCase());
+    let p, c, rd;
+    if (kp && kq) { let cv; [cv, rd] = await Promise.all([this.curve(token), reads(kp, kq)]); ({ pad: p, c } = cv); if (p !== kp || this.quoteToken(c).toLowerCase() !== kq.toLowerCase()) rd = await reads(p, this.quoteToken(c)); }
+    else { ({ pad: p, c } = await this.curve(token)); rd = await reads(p, this.quoteToken(c)); }
+    this.notGraduated(c); if (c.v3) assertV3Trade();   // V3 默认只报价
     const q = this.quoteToken(c); const hashes = [];
-    // 并行读（狙击要快）：小数位、报价币余额、授权额度、剩余额度一次读完；钱包里报价币够用时后面不再重读曲线
-    const [dec, have0, alw0, room0] = await Promise.all([isWbnb(q) ? 18 : this.decimals(q), this.balanceOf(q, wallet), this.call(q, erc20, 'allowance', [wallet, p]).then((x) => x[0]).catch(() => 0n), this.call(p, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null)]);
+    const [dec, have0, alw0, room0, rate] = rd;
     const qSym = isWbnb(q) ? 'WBNB' : '报价币'; let fresh = true;
-    // 只用来判断钱包里现有报价币够不够（够就直接用这么多）；不够时下面按实际到账数量买。用 30 秒内的汇率，省掉 1～2 次 baw 报价
-    let need = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * await this.quoteRate(q, { stale: 30_000 })).toFixed(Math.min(12, dec)), dec);
+    // 只用来判断钱包里现有报价币够不够（够就直接用这么多）；不够时下面按实际到账数量买
+    let need = isWbnb(q) ? ethers.parseEther(String(amountBnb)) : ethers.parseUnits((amountBnb * rate).toFixed(Math.min(12, dec)), dec);
     const have = have0;
     if (payQuote != null) { const want = ethers.parseUnits(Number(payQuote).toFixed(Math.min(12, dec)), dec); need = want < have ? want : have; if (need <= 0n) throw new Error('钱包里没有这个盘的报价币'); }
     // 不超过这个钱包剩余额度（每个钱包最多 1%）要花的报价币，多留 2% 抵价格变动：「买 1%」直接给 0.1 BNB 时不会多换报价币；额度已满就不发任何交易
