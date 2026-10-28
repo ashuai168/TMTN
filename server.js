@@ -458,7 +458,7 @@ async function imgFetch(u) {
 }
 app.get('/api/img', async (req, res) => {
   const u = String(req.query.u || '');
-  if (u.length > 2000 || !imgHostOk(u)) return res.status(403).set('Cache-Control', 'public, max-age=600').end();
+  if (u.length > 2000 || !imgHostOk(u)) return res.status(403).set('Cache-Control', 'no-store').end();   // 不缓存：白名单改了（比如重新放行某个图床）以后页面马上能拿到
   const key = crypto.createHash('sha1').update(u).digest('hex'); const meta = path.join(IMG_DIR, key + '.json');
   // nosniff + 沙箱 CSP：就算文件内容有问题，浏览器也不会把它当网页 / 脚本执行
   const send = (m) => { res.set({ 'Content-Type': m.ct, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Img-Cache': m.hit ? 'HIT' : 'MISS', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Content-Disposition': `inline; filename="${m.file}"` }); res.sendFile(path.join(IMG_DIR, m.file)); };
