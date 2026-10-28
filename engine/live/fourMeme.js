@@ -3,7 +3,7 @@
 // 先回补最近 BACKFILL 个区块；之后用 WebSocket 订阅新事件（NodeReal → publicnode 备用），每 60 秒用 getLogs 补查一次（订阅不可用时每 3 秒）。
 import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
-import { maskRpc, FailoverProvider, WsLogs, PUBLIC_WSS } from './rpc.js';
+import { maskRpc, FailoverProvider, WsLogs, PUBLIC_WSS, logsUrls } from './rpc.js';
 import { env, NODEREAL_URLS, NODEREAL_WSS } from './config.js';
 import { cache } from './cache.js';
 
@@ -12,8 +12,9 @@ export const AGENT_ID_TEMPLATE = 1778027615735n;
 const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
 // 扫 Four 事件（getLogs）：有 NodeReal 就用它，一次最多查约 5 万块；没有就用 publicnode，一次 5000 块。主节点出错时这一段自动拆成 5000 块用 publicnode 重查
 const NODEREAL = NODEREAL_URLS[0] || '';
-const LOG_RPC = env('FOUR_LOG_RPC', NODEREAL || 'https://bsc-rpc.publicnode.com');
-const STEP = Number(env('FOUR_LOG_STEP', NODEREAL && LOG_RPC === NODEREAL ? 49000 : 5000));
+// 有日志 / 归档节点（.env 的 LOGS_RPC_URL / RPC_URL，如 Chainstack）就先用它，一次 1 万块
+const LOG_RPC = env('FOUR_LOG_RPC', logsUrls()[0] || NODEREAL || 'https://bsc-rpc.publicnode.com');
+const STEP = Number(env('FOUR_LOG_STEP', LOG_RPC === logsUrls()[0] ? 10000 : NODEREAL && LOG_RPC === NODEREAL ? 49000 : 5000));
 const FALLBACK_LOG_RPC = 'https://bsc-rpc.publicnode.com';
 // 启动时回补的区块数：以前是 2 万块（BSC 出块快，只有两三个小时），更早发射、又没进 data/fourTokens.json 的盘（如 4AGENT）就再也不出现，「已迁移」里也看不到。
 // 改成 15 万块（约一天），回补完的盘都会存进 fourTokens.json，之后重启从那里恢复

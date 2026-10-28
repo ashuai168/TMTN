@@ -56,7 +56,11 @@ export const RPC_URL = env('RPC_URL', NODEREAL_RPC || 'https://bsc-dataseed.bnbc
 export const RPC_LIST = [...NODEREAL_URLS, RPC_URL, 'https://bsc-dataseed.bnbchain.org', 'https://bsc-rpc.publicnode.com'].filter((u, i, a) => u && a.indexOf(u) === i);
 // 交易专用节点：.env / 环境变量 TRADE_RPC_URL（可填多个，逗号分隔）只给下单链路用，行情读取不会用它，后台读链再多也挤不到交易。
 // 再加几个公共节点兜底（和行情读取用的两个公共节点分开计限流），交易时某个节点 429 就换下一个
-export const TRADE_RPC_URLS = env('TRADE_RPC_URL', '').split(',').map((x) => x.trim()).filter((x) => /^https?:\/\//.test(x));
+// TRADE_RPC_URL 不填时：RPC_URL 是自己的付费节点（不是公共节点 / NodeReal）就拿它当交易主节点
+const OWN_RPC = /^https?:\/\//.test(env('RPC_URL', '')) && !/publicnode|dataseed|bnbchain|nodereal|48\.club/i.test(env('RPC_URL', '')) ? env('RPC_URL', '') : '';
+export const TRADE_RPC_URLS = env('TRADE_RPC_URL', OWN_RPC).split(',').map((x) => x.trim()).filter((x) => /^https?:\/\//.test(x));
+// 日志 / 归档节点是归档节点（Chainstack Growth 及以上的 archive 节点）时在 .env 写 RPC_ARCHIVE=1：Gang V3 / stocks pad 盘的链上历史不再限制只补最近 30 万块（约 1.5 天），一次查 1 万块
+export const RPC_ARCHIVE = env('RPC_ARCHIVE', '0') === '1';
 export const TRADE_FALLBACK_RPC = ['https://bsc-dataseed1.bnbchain.org', 'https://bsc-dataseed2.bnbchain.org', 'https://bsc-dataseed1.defibit.io', 'https://bsc-dataseed1.ninicoin.io', 'https://rpc-bsc.48.club'];
 export const BAW_BIN = env('BAW_BIN', 'baw');
 export const BINANCE_CHAIN_ID = Number(env('BINANCE_CHAIN_ID', 56));

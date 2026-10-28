@@ -71,12 +71,20 @@ export class WsLogs {
   drop(ws) { if (!ws) return; if (this.ws === ws) this.ws = null; try { ws.destroy(); } catch { /* ignore */ } }
 }
 
-// 付费的自定义节点（.env 的 RPC_URL，如 Chainstack）每分钟最多用 RPC_URL_MAX_PER_MIN 次（默认 250，约每月 1000 万次），所有用途合计；
-// 超了这一分钟行情读取就不再用它（交易不受限），免得公共节点限流时 eth_call 全涌过去把月额度吃光
-const capUrl = () => process.env.RPC_URL || '', capMax = () => Number(process.env.RPC_URL_MAX_PER_MIN || 250);
-let capMin = 0, capUsed = 0;
-const capped = (u) => { if (!u || u !== capUrl() || /nodereal/i.test(u)) return false; const m = Math.floor(Date.now() / 60_000); if (m !== capMin) { capMin = m; capUsed = 0; } return capUsed >= capMax(); };
-const capBump = (u) => { if (u && u === capUrl()) capUsed++; };
+// 日志 / 归档节点：.env 的 LOGS_RPC_URL（可填多个，逗号分隔），不填就用 RPC_URL（公共节点和 NodeReal 不算）。
+// 所有 eth_getLogs（行情补查、Gang / Flap / Four 历史回补、追踪回补）优先发给它；一次最多 LOGS_SPAN 块（Chainstack 付费档上限 1 万块），更大的区间在 getLogs() 里自动拆段
+export const logsUrls = () => (process.env.LOGS_RPC_URL || process.env.RPC_URL || '').split(',').map((x) => x.trim()).filter((u) => /^https?:\/\//.test(u) && !/publicnode|dataseed|bnbchain|nodereal|48\.club/i.test(u));
+const logsSpan = () => Math.max(100, Number(process.env.LOGS_SPAN || 10_000));
+// 付费节点（RPC_URL / LOGS_RPC_URL，如 Chainstack）每分钟的用量上限，按用途分开算（交易不计、不受限）：
+// - 行情 eth_call 等溢出（公共节点限流时才会用到）：RPC_URL_MAX_PER_MIN，默认 150
+// - eth_getLogs：LOGS_MAX_PER_MIN，默认 150
+// 两个都跑满也只有 300 次/分 ≈ 1300 万次/月（Chainstack Growth 2000 万）；超了这一分钟就回到公共节点
+const capUrl = () => process.env.RPC_URL || '', capMax = () => Number(process.env.RPC_URL_MAX_PER_MIN || 150), logsMax = () => Number(process.env.LOGS_MAX_PER_MIN || 150);
+let capMin = 0, capUsed = 0, logsUsed = 0;
+const paid = (u) => !!u && !/nodereal/i.test(u) && (u === capUrl() || logsUrls().includes(u));
+const capTick = () => { const m = Math.floor(Date.now() / 60_000); if (m !== capMin) { capMin = m; capUsed = 0; logsUsed = 0; } };
+const capped = (u, method) => { if (!paid(u)) return false; capTick(); return method === 'eth_getLogs' ? logsUsed >= logsMax() : capUsed >= capMax(); };
+const capBump = (u, method, trade) => { if (trade || !paid(u)) return; capTick(); if (method === 'eth_getLogs') logsUsed++; else capUsed++; };
 
 export class FailoverProvider extends ethers.JsonRpcProvider {
   // urls 按优先顺序；其中多个 NodeReal key 轮流用（round-robin）。某个节点被限流（429 等）就冷却 5 分钟，NodeReal 月额度用完冷却 1 小时，
@@ -97,17 +105,26 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
       coolUntil: this.coolUntil, primaryErr: this.primaryErr, keys: this.nodes.filter((n) => n.nr).map((n) => ({ name: n.name, cooling: n.cool > now, err: n.cool > now ? n.err : null })) };
   }
   order(method) {
-    const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now && (this.trade || !capped(n.url))), warm = pool.filter((n) => n.cool <= now);
+    const now = Date.now(), pool = method === 'eth_getLogs' ? this.nodes.filter((n) => n.noLogs <= now) : this.nodes, ok = pool.filter((n) => n.cool <= now && (this.trade || !capped(n.url, method))), warm = pool.filter((n) => n.cool <= now);
     const nr = ok.filter((n) => n.nr);
     if (nr.length > 1) { this.rr = (this.rr + 1) % nr.length; const rot = nr.slice(this.rr).concat(nr.slice(0, this.rr)); let k = 0; for (let i = 0; i < ok.length; i++) if (ok[i].nr) ok[i] = rot[k++]; }
+    if (method === 'eth_getLogs') { const L = logsUrls(); if (L.length) ok.sort((a, b) => L.includes(b.url) - L.includes(a.url)); }   // getLogs 先发日志 / 归档节点（稳定排序，其余顺序不变）
     if (!ok.length && warm.length && this.label === '交易') return warm;   // 只有交易可以突破每分钟上限；行情读取宁可慢一点也不吃付费额度
-    if (!ok.length) { const rest = pool.filter((n) => !capped(n.url)); if (rest.length) return rest.sort((a, b) => a.cool - b.cool).slice(0, 2); }
+    if (!ok.length) { const rest = pool.filter((n) => !capped(n.url, method)); if (rest.length) return rest.sort((a, b) => a.cool - b.cool).slice(0, 2); }
     return ok.length ? ok : [...(pool.length ? pool : this.nodes)].sort((a, b) => a.cool - b.cool).slice(0, 2);
   }
   // 调用位置要在入口处抓（到 _send 时已经过了 ethers 的请求队列，调用栈里没有业务代码了）
   tagCaller(method) { if (++callerTick % 5 === 0) { const k = `${this.label}|${method}|${callerOf()}`; RPC_CALLERS.set(k, (RPC_CALLERS.get(k) || 0) + 5); } }
   call(tx) { this.tagCaller('eth_call'); return super.call(tx); }
-  getLogs(filter) { this.tagCaller('eth_getLogs'); return super.getLogs(filter); }
+  async getLogs(filter) {
+    this.tagCaller('eth_getLogs');
+    // 有日志节点时，超过 LOGS_SPAN 块的区间拆成几段依次查（Chainstack 一次最多 1 万块，超了报 Block range limit exceeded）
+    const a = filter?.fromBlock, b = filter?.toBlock, span = logsSpan();
+    if (typeof a === 'number' && typeof b === 'number' && b - a + 1 > span && logsUrls().length) {
+      const out = []; for (let f = a; f <= b; f += span) out.push(...await super.getLogs({ ...filter, fromBlock: f, toBlock: Math.min(b, f + span - 1) })); return out;
+    }
+    return super.getLogs(filter);
+  }
   async _send(payload) {
     const method = Array.isArray(payload) ? payload[0]?.method : payload?.method;
     try { return await this.sendList(payload, method, this.order(method)); }
@@ -122,13 +139,14 @@ export class FailoverProvider extends ethers.JsonRpcProvider {
   async sendList(payload, method, list) {
     let last;
     for (let i = 0; i < list.length; i++) {
-      const n = list[i]; bumpUsage(this.label, n.url, payload); capBump(n.url);
+      const n = list[i]; bumpUsage(this.label, n.url, payload); capBump(n.url, method, this.trade);
       try {
         const r = await n.p._send(payload);
         const errs = (Array.isArray(r) ? r : [r]).filter((x) => x?.error).map((x) => String(x.error.message || ''));
         // 限流 / 额度：冷却这个节点换下一个；节点不支持（如 bsc-dataseed 的 getLogs「limit exceeded」）：换下一个；合约 revert 之类的正常错误直接返回
         const rl = errs.find((m) => /429|rate|too many|quota|exceed|limit/i.test(m));
         if (errs.some((m) => /not available on your current plan|archive/i.test(m)) && i < list.length - 1) { last = new Error(errs[0]); continue; }   // Chainstack 非归档档：只能查最近约 128 块的日志，更早的换下一个节点（不冷却）
+        if (method === 'eth_getLogs' && errs.some((m) => /block range|range limit|too many blocks|range is too large/i.test(m)) && i < list.length - 1) { last = new Error(errs[0]); continue; }   // 区间超过这个节点的上限：换下一个，不冷却（不影响它的 eth_call）
         if (rl && method === 'eth_getLogs' && !n.nr && /^limit exceeded$/i.test(rl.trim())) { n.noLogs = Date.now() + 600_000; last = new Error(rl); continue; }
         if (rl && i < list.length - 1) { n.cool = Date.now() + (/monthly quota/i.test(rl) ? 3600_000 : n.nr ? 300_000 : 30_000); n.err = rl.slice(0, 120); if (n.nr) { this.primaryErr = n.err; this.coolUntil = n.cool; } last = new Error(rl); continue; }
         this.lastUsed = maskRpc(n.url); this.lastUrl = n.url; return r;

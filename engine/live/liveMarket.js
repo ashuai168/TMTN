@@ -1,7 +1,7 @@
 // 实盘行情适配器：把 Flap Agent Curve Reader + fsi、four.meme Agentic Wallet 专属内盘（链上事件）+ shrine 统一成和模拟盘一样的接口（list / get / detail / 事件）。
 import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
-import { RPC_URL, RPC_LIST, TRADE_RPC_URLS, TRADE_FALLBACK_RPC, BNB_PRICE_URL, dataFile } from './config.js';
+import { RPC_URL, RPC_LIST, TRADE_RPC_URLS, TRADE_FALLBACK_RPC, BNB_PRICE_URL, RPC_ARCHIVE, dataFile } from './config.js';
 import { FailoverProvider, nodeName, PUBLIC_RPC } from './rpc.js';
 import { AgentCurve } from './agentCurve.js';
 import { FourMeme, AGENT_ID_TEMPLATE } from './fourMeme.js';
@@ -598,13 +598,13 @@ export class LiveMarket extends EventEmitter {
         const [a, b] = await Promise.all([this.provider.getBlock(head), this.provider.getBlock(head - 10_000)]);
         let c = t._histFrom || t.createdAt || (a.timestamp - 86_400) * 1000; if (c > 1e14) c /= 1000;   // _histFrom：接口已给到的最后一笔（gangSeedHist），链上只补之后的   // 接口给毫秒时 createdAt 会被多乘一次 1000
         const bt = (a.timestamp - b.timestamp) / 10_000 || 0.45, age = Math.max(0, a.timestamp - Math.floor(c / 1000));
-        h.block = Math.max(1, head - 300_000, head - Math.ceil(age / bt) - 600) - 1;   // 公共节点只给最近约 30 万块（约 1.5 天）的日志，再早报 archive 错误、每 45 秒卡在同一块重试；更早的成交靠接口（gangSeedHist）
+        h.block = Math.max(1, head - (RPC_ARCHIVE ? 3_000_000 : 300_000), head - Math.ceil(age / bt) - 600) - 1;   // RPC_ARCHIVE：归档节点，最多往前 300 万块（约半个月）；否则公共节点只给最近约 30 万块（约 1.5 天）的日志，再早报 archive 错误、每 45 秒卡在同一块重试；更早的成交靠接口（gangSeedHist）
       }
-      // 每 2000 块记一次进度：中途被限流 / 出错，下次从断点接着查，不从头重来；出错 60 秒后再试
+      // 每 2000 块（归档节点 1 万块）记一次进度：中途被限流 / 出错，下次从断点接着查，不从头重来；出错 60 秒后再试
       const seen = new Set(h.rows.map((x) => `${x.tx}:${x.side}:${x.tokens}`)); let n = 0;
       try {
         while (h.block < head) {
-          const to = Math.min(head, h.block + 2000);
+          const to = Math.min(head, h.block + (RPC_ARCHIVE ? 10_000 : 2000));
           for (const x of await this.gangPads.history(t.address, pad, h.block + 1, to)) { const id = `${x.tx}:${x.side}:${x.tokens}`; if (!seen.has(id)) { seen.add(id); h.rows.push(x); n++; } }
           h.block = to;
         }

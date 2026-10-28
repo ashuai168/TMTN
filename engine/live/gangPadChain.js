@@ -4,7 +4,7 @@
 // 量不大（全站约每天几百笔）。订阅用 NodeReal（多 key）→ publicnode wss，每 60 秒 getLogs 补查。只读。
 import { EventEmitter } from 'node:events';
 import { ethers } from 'ethers';
-import { NODEREAL_WSS } from './config.js';
+import { NODEREAL_WSS, RPC_ARCHIVE } from './config.js';
 import { WsLogs, PUBLIC_WSS } from './rpc.js';
 import { V3_PADS, v3Events } from './gangV3.js';
 
@@ -52,7 +52,7 @@ export class GangPadChain extends EventEmitter {
   // 以前重启后 K 线只从重启那一刻开始，之前的成交（包括自己的买卖标）全挤在第一根上。只读
   async history(token, pad, fromBlock, toBlock) {
     const logs = [], topic = ethers.zeroPadValue(token.toLowerCase(), 32);
-    for (let from = fromBlock; from <= toBlock;) { const to = Math.min(toBlock, from + 1999); logs.push(...await this.provider.getLogs({ address: pad, topics: [[T_BUY, T_SELL], topic], fromBlock: from, toBlock: to })); from = to + 1; }
+    for (let from = fromBlock; from <= toBlock;) { const to = Math.min(toBlock, from + (RPC_ARCHIVE ? 9999 : 1999)); logs.push(...await this.provider.getLogs({ address: pad, topics: [[T_BUY, T_SELL], topic], fromBlock: from, toBlock: to })); from = to + 1; }
     const bt = this.blockTs ||= new Map(), need = [...new Set(logs.map((l) => l.blockNumber))].filter((b) => !bt.has(b));
     for (let i = 0; i < need.length; i += 8) await Promise.all(need.slice(i, i + 8).map((b) => this.provider.getBlock(b).then((x) => { if (x) bt.set(b, x.timestamp * 1000); })));
     if (bt.size > 50_000) this.blockTs = new Map([...bt].slice(-20_000));
