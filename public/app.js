@@ -159,7 +159,7 @@ const nftPanel = (t) => {
       <div class="nftg-l"><span class="mono">${short(g.nft, 6, 4)}</span> <span class="copy" data-copy="${esc(g.nft)}">⧉</span> <a href="https://bscscan.com/token/${esc(g.nft)}" target="_blank" rel="noopener">BscScan</a> <a href="https://opensea.io/assets/bsc/${esc(g.nft)}" target="_blank" rel="noopener">OpenSea</a> <a href="https://element.market/assets/bsc/${esc(g.nft)}" target="_blank" rel="noopener">Element</a> <span class="muted">· 每个地址最多 ${g.capPct || 2}%</span></div>
       <div class="nftg-w">${who}${ws.length && !ok.length ? ' <b class="r">· 没有钱包能买</b>' : ''}</div></div></div>`;
 };
-// dev 吃税（税收接收地址就是发币人自己）：分红标签变红并加「!」（jak 2026-10-28）
+// dev 吃税（税收接收地址就是发币人自己）：分红标签变红并加「!」
 const divChip = (t, cls = 'tag') => (t.taxToCreator ? `<i class="${cls} div dev" title="${esc('⚠ ' + creatorTaxTip(t) + (t.gangDiv ? '\n\n' + divTip(t) : ''))}">${t.gangDiv?.taxed === false ? '不分红' : '分红'} !</i>`
   : t.gangDiv?.taxed == null ? '' : `<i class="${cls} div ${t.gangDiv.taxed ? 'on' : 'off'}" title="${esc(divTip(t))}">${t.gangDiv.taxed ? '分红' : '不分红'}</i>`);
 // 买入再卖出的预计损耗（不含价格变动）：买入费 + 卖出费（按买入后剩下的部分）+ 约 0.00017 BNB gas
