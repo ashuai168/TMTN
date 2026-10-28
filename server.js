@@ -419,7 +419,7 @@ app.get('/api/token/:a', async (req, res) => {
 const IMG_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 'img');
 fs.mkdirSync(IMG_DIR, { recursive: true });
 const imgInflight = new Map(), imgFail = new Map(), imgFailN = new Map();
-const IPFS_GW = ['https://flap.mypinata.cloud/ipfs/', 'https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
+const IPFS_GW = ['https://flap.mypinata.cloud/ipfs/', 'https://ipfs.filebase.io/ipfs/', 'https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
 // 只代理白名单里的图床（engine/live/meta.js 的 MEDIA_HOSTS，和元数据共用一份；.env IMG_HOSTS 可追加），只走 https；别的地址一律拒绝（防止被当成访问内网 / 任意网站的跳板）
 const imgHostOk = (u) => mediaHostOk(u);
 // 只收位图：按文件头判断真实格式（不信对方的 Content-Type），SVG（可以带脚本）一律不收

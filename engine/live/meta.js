@@ -19,7 +19,7 @@ export function ipfsUrl(v) {
 // 2026-10-28 核对过实际在用的：Flap 元数据 / 图片 flap.mypinata.cloud，Four static.four.meme，Gang cdn.gang.fun（+ 字节云 IPFS），Agent ID space.id，shrine
 // validation.alphapulsehq.top：第三方转存的 Flap 元数据 / 图片（部分 Agent ID 盘在用）。只在服务端经过这里：元数据按 JSON 解析、限大小、只取字段；
 // 图片经 /api/img，按文件头只收 PNG / JPEG / WebP / GIF（SVG、HTML 一律不收）——所有图床都是这条规则
-export const MEDIA_HOSTS = ['four.meme', 'space.id', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com', 'validation.alphapulsehq.top'];
+export const MEDIA_HOSTS = ['four.meme', 'space.id', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com', 'validation.alphapulsehq.top', 'ipfs.filebase.io', 'gateway.pinata.cloud'];
 // 明确屏蔽（就算 IMG_HOSTS 里加了也不连）
 // 185.130.45.236 / *.trycloudflare.com：2026-10-28 两个针对本程序的 XSS 盘（名字是带 onerror 的 <img>，元数据也放在这两处）
 export const BLOCKED_HOSTS = ['185.130.45.236', 'trycloudflare.com'];
@@ -33,6 +33,8 @@ export function mediaHostOk(u) {
   return hostOk && x.protocol === 'https:' && !x.username && !x.password && (!x.port || x.port === '443');
 }
 
+// 元数据的备用 IPFS 网关（按顺序试）：filebase 快（约 1 秒），pinata 公共网关慢（约 6 秒）但收录多
+const IPFS_FALLBACK = ['https://ipfs.filebase.io/ipfs/', 'https://gateway.pinata.cloud/ipfs/'];
 export class MetaFetcher {
   // 429 只暂停那一个域名（pausedUntil 按 host 记）：以前任何一个网关 429 就把所有元数据请求停 60 秒，任务还占着并发位等，
   // 重启后几十个读不到的旧盘反复重试，新盘的图标排几分钟（七仔 0x5bae…7777 2026-10-28）。被暂停的域名直接算这次失败，由调用方按退避再来
@@ -56,14 +58,22 @@ export class MetaFetcher {
     }
   }
 
+  // IPFS 地址先用原网关，拿不到（403 没 pin / 404 / 429 / 超时）再换备用网关。Flap 的 pinata 网关只给 Flap 自己 pin 过的 CID：
+  // 有些盘的元数据传在别处（AGENT铭文 0x91fc…7777 2026-10-28：flap.mypinata.cloud 403，filebase 200），以前就一直没图标、没创建者
   async run({ url, cb }) {
+    const cid = /\/ipfs\/([^?#]+)/.exec(url)?.[1];
+    const urls = [url, ...(cid ? IPFS_FALLBACK.map((g) => g + cid).filter((x) => x !== url) : [])];
+    for (const u of urls) if (await this.runOne(u, url, cb)) return;
+    this.cache.delete(url);   // 失败的下次再试
+  }
+  async runOne(url, key, cb) {
     let host = ''; try { host = new URL(url).host; } catch { /* 下面 fetch 会失败 */ }
     for (let k = 0; k < 3; k++) {
       if ((this.pausedUntil.get(host) || 0) > Date.now()) break;
       try {
         const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
         if (res.status === 429) { this.pausedUntil.set(host, Date.now() + 60_000); break; }
-        if (!res.ok) break;
+        if (!res.ok) return false;
         // 元数据只当 JSON 读，最多 64 KB（超了不要）；只取下面几个字段给页面，原文不往外传
         if (Number(res.headers.get('content-length') || 0) > 65_536) break;
         const raw = await res.text(); if (raw.length > 65_536) break;
@@ -71,10 +81,10 @@ export class MetaFetcher {
         const links = j.links || {};
         const img = ipfsUrl(j.image || j.img), v = { image: img && mediaHostOk(img) ? img : null, description: j.description || '', website: j.website || links.website || '',
           twitter: j.twitter || links.twitter || '', telegram: j.telegram || links.telegram || '', metaCreator: /^0x(?!0{40})[0-9a-fA-F]{40}$/.test(j.creator || '') ? j.creator.toLowerCase() : null };   // Flap 元数据里的 creator = 发币交易的 from（核对过）
-        this.cache.set(url, v); cb(v);
-        return;
-      } catch { await sleep(1500 * (k + 1)); }
+        this.cache.set(key, v); cb(v);
+        return true;
+      } catch { if (k < 2) await sleep(1000 * (k + 1)); }
     }
-    this.cache.delete(url);   // 失败的下次再试
+    return false;
   }
 }
