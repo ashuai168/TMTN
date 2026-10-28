@@ -463,13 +463,23 @@ app.get('/api/img', async (req, res) => {
   // nosniff + 沙箱 CSP：就算文件内容有问题，浏览器也不会把它当网页 / 脚本执行
   const send = (m) => { res.set({ 'Content-Type': m.ct, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Img-Cache': m.hit ? 'HIT' : 'MISS', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Content-Disposition': `inline; filename="${m.file}"` }); res.sendFile(path.join(IMG_DIR, m.file)); };
   try { const m = JSON.parse(fs.readFileSync(meta, 'utf8')); if (EXT[m.ct] && /^[0-9a-f]{40}\.[a-z]+$/.test(m.file) && fs.existsSync(path.join(IMG_DIR, m.file))) return send({ ...m, hit: true }); } catch { /* 未缓存 */ }   // 旧缓存里的 SVG 等非位图不再返回
-  if ((imgFail.get(key) || 0) > Date.now()) return res.status(404).set('Cache-Control', 'public, max-age=600').end();
+  if ((imgFail.get(key) || 0) > Date.now()) return res.status(404).set('Cache-Control', 'no-store').end();
   try {
+    send(await imgWarm(u, key));
+  } catch { res.status(404).set('Cache-Control', 'no-store').end(); }   // 失败不让浏览器缓存（以前 404 带 max-age=600，浏览器 10 分钟内都不再要这张图）
+});
+// 下载并缓存一张图（同一张同时只下一次）。元数据一读到图片地址就先在服务端下好（market 'image' 事件），页面第一次要时直接命中缓存；
+// 失败记 60 秒（以前 10 分钟：刚发币时网关慢 / 429 一次，图标就十分钟不出来）
+function imgWarm(u, key = crypto.createHash('sha1').update(u).digest('hex')) {
+  const meta = path.join(IMG_DIR, key + '.json');
+  try { const m = JSON.parse(fs.readFileSync(meta, 'utf8')); if (EXT[m.ct] && /^[0-9a-f]{40}\.[a-z]+$/.test(m.file) && fs.existsSync(path.join(IMG_DIR, m.file))) return Promise.resolve({ ...m, hit: true }); } catch { /* 未缓存 */ }
+  if ((imgFail.get(key) || 0) > Date.now()) return Promise.reject(new Error('recently failed'));
+  {
     let p = imgInflight.get(key);
     if (!p) { p = imgFetch(u).then(({ ct, buf }) => { const file = key + '.' + (EXT[ct] || 'img'); fs.writeFileSync(path.join(IMG_DIR, file), buf); const m = { ct, file, url: u }; fs.writeFileSync(meta, JSON.stringify(m)); return m; }).finally(() => imgInflight.delete(key)); imgInflight.set(key, p); }
-    send(await p);
-  } catch { imgFail.set(key, Date.now() + 600_000); if (imgFail.size > 5000) for (const [k, until] of imgFail) if (until < Date.now()) imgFail.delete(k);   /* 失败记录以前只增不减 */ res.status(404).set('Cache-Control', 'public, max-age=600').end(); }
-});
+    return p.catch((e) => { imgFail.set(key, Date.now() + 60_000); if (imgFail.size > 5000) for (const [k, until] of imgFail) if (until < Date.now()) imgFail.delete(k);   /* 失败记录以前只增不减 */ throw e; });
+  }
+}
 app.get('/api/names', (req, res) => {
   const n = market.names; if (!n) return res.json({ ver: 0, names: {} });
   if (Number(req.query.ver) === n.ver) return res.json({ ver: n.ver });
@@ -702,6 +712,7 @@ wss.on('connection', (ws) => {
 market.on('launch', (s) => broadcast({ type: 'launch', data: s }));
 // 实盘行情：选中的代币每 3 秒刷新一次详情
 if (LIVE) setInterval(() => new Set([...wss.clients].map((c) => c.sub).filter(Boolean)).forEach((a) => market.refresh(a)), 3000);
+market.on('image', (u) => { if (u.length <= 2000 && imgHostOk(u)) imgWarm(u).catch(() => {}); });
 market.on('detail', (a) => { for (const c of wss.clients) if (c.readyState === 1 && c.sub === a) c.send(JSON.stringify({ type: 'detail', full: true, data: market.detail(a) })); });
 // 订单结束（成交或失败）后马上重读链上余额，3 / 5 / 20 秒后再读一次，等区块和 baw 索引跟上
 const resync = async () => { trader.syncAt = 0; if (holdings) holdings.histAt = 0; await trader.refreshBalance?.().catch(() => {}); await trader.syncHoldings?.().catch(() => {}); };

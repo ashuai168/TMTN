@@ -1,7 +1,7 @@
 // 代币元数据（图标 / 简介 / 社交链接）：Flap 读 Reader 的 meta（IPFS CID），Four 读 TokenCreated 里的 tokenMetaUri（static.four.meme）。
 // 低并发、带缓存；遇到 429 整体暂停一会儿，不刷对方接口。
 const IPFS = 'https://flap.mypinata.cloud/ipfs/';
-const CONCURRENCY = 3;
+const CONCURRENCY = 8;   // 重启后两百多个盘一起读元数据：3 个并发要排一两分钟，新盘的图标跟着慢
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // 把 CID / ipfs:// / 相对路径统一成可直接加载的 https 地址

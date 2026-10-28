@@ -90,7 +90,7 @@ function probeImg(src) {
   imgState.set(src, 'loading');
   const i = new Image(); i.referrerPolicy = 'no-referrer';
   i.onload = () => { imgState.set(src, i.naturalWidth ? 'ok' : 'bad'); lastList = 0; scheduleRender(); imgRerenderTrk(); };
-  i.onerror = () => imgState.set(src, 'bad');
+  i.onerror = () => { imgState.set(src, 'bad'); setTimeout(() => imgState.delete(src), 20_000); };   // 失败的 20 秒后再试（以前一次失败就一直是文字占位，要刷新页面）
   i.src = proxied(src);
 }
 const logoImg = (t) => {

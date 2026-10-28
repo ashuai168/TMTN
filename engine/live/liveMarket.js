@@ -354,7 +354,7 @@ export class LiveMarket extends EventEmitter {
     if (t.metaUrl === url && (t.metaOk || Date.now() - (t.metaAt || 0) < Math.min(600_000, 15_000 * 2 ** (t.metaTries || 0)))) return;
     if (t.metaUrl !== url) Object.assign(t, { metaUrl: url, metaOk: false, metaTries: 0 }); else t.metaTries = (t.metaTries || 0) + 1;
     t.metaAt = Date.now();
-    this.meta.get(url, ({ metaCreator, ...m }) => { Object.assign(t, m); t.metaOk = true; if (!t.creator && metaCreator) t.creator = metaCreator; this.emit('detail', t.address); }, { front: !t.metaTries });   // 创建者：链上没给的（Flap Portal 盘）用元数据里的
+    this.meta.get(url, ({ metaCreator, ...m }) => { Object.assign(t, m); t.metaOk = true; if (!t.creator && metaCreator) t.creator = metaCreator; this.emit('detail', t.address); if (m.image) this.emit('image', m.image); }, { front: !t.metaTries });   // 创建者：链上没给的（Flap Portal 盘）用元数据里的
   }
 
   // 搜索粘贴地址：已在列表直接返回；否则查 Four 链上，查到就加进列表；都不是内盘时按普通外盘代币收录（lookupDex）
