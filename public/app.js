@@ -231,7 +231,7 @@ function onMsg({ type, data, full }) {
       if (listWants(data) && !isBlocked(data)) { if (S.config?.notify && document.hidden && Notification?.permission === 'granted') new Notification(`新内盘 ${data.symbol}`); }
       break;
     case 'trackReload': { if (TRK.loaded || TP.open) loadTrack().then(renderTrkPanel); break; }
-    case 'track': { if (!TRK.feed.some((x) => x.id === data.id)) { TRK.feed.unshift(data); if (TRK.feed.length > 500) TRK.feed.length = 500; if (TRK.sound && trkPass(data)) beep(data.side === 'buy' ? 1000 : 520, 0.06); if (S.view === 'track') renderTrack(); renderTrkPanel(); } break; }
+    case 'track': { if (!TRK.feed.some((x) => x.id === data.id)) { TRK.feed.unshift(data); if (TRK.feed.length > 500) TRK.feed.length = 500; if (trkPass(data)) trkTone(data); if (S.view === 'track') renderTrack(); renderTrkPanel(); } break; }
     case 'trackTargets': { TRK.targets = data.targets || []; TRK.groups = data.groups || TRK.groups; if (S.view === 'track') renderTrack(); renderTrkPanel(); scheduleRender(); renderBottom(); break; }
     case 'copyTasks': { TRK.tasks = data.tasks || []; TRK.paused = !!data.paused; renderTrkKill(); if (S.view === 'track') renderTrack(); break; }
     case 'snipeState': { SNP.v = data; renderSnpPill(); if (S.view === 'snipe') renderSnipe(); break; }
@@ -2901,8 +2901,8 @@ document.addEventListener('click', (e) => { const b = e.target.closest('[data-tr
 async function loadTrack() {
   try { const [a, b] = await Promise.all([api('/api/track'), api('/api/copy')]); Object.assign(TRK, { targets: a.targets || [], groups: a.groups || ['默认'], feed: a.feed || [], tasks: b.tasks || [], paused: !!b.paused, log: b.log || [], loaded: true }); }
   catch (e) { TRK.err = e.message; }
-  try { TRK.sound = localStorage.trkSound === '1'; } catch { /* ignore */ }
-  renderTrkKill(); renderTrack();
+  try { TRK.sound = localStorage.trkSound !== '0'; } catch { /* ignore */ }
+  renderTrkSound(); renderTrkKill(); renderTrack();
 }
 function renderTrkKill() {
   const b = $('#trkKill'); if (b) { b.classList.toggle('on', TRK.paused); b.textContent = TRK.paused ? '已全部暂停（点击恢复）' : '全部暂停'; }
@@ -3108,7 +3108,7 @@ $('#track').addEventListener('click', async (e) => {
 $('#track').addEventListener('change', (e) => {
   if (e.target.id === 'trkFGroup') { TRK.fGroup = e.target.value; renderTrack(); }
   if (e.target.id === 'trkFMin') setTrkMin(e.target.value);
-  if (e.target.id === 'trkSound') { TRK.sound = e.target.checked; try { localStorage.trkSound = TRK.sound ? '1' : '0'; } catch { /* ignore */ } }
+  if (e.target.id === 'trkSound') setTrkSound(e.target.checked);
 });
 $('#trkLookBtn')?.addEventListener('click', () => { const q = $('#trkAddr').value.trim(); if (!q) return note('先在左边填 0x 地址或 .ai / .bnb 域名', 'info'); walletLookup(q); });
 $('#trkAddr')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#trkAddBtn').click(); });
@@ -3163,9 +3163,37 @@ function renderTrkPanel() {
   $('#trkpList').innerHTML = !TRK.targets.length ? '<div class="trkp-empty">还没有追踪的地址。<br>可以在交易者盈亏抽屉里点「追踪」，或者到追踪页添加 .ai / .bnb 域名、0x 地址。<br><button data-tpgo>去添加</button></div>'
     : !rows.length && TRK.feed.length ? `<div class="trkp-empty">没有 ≥ $${TRK.fMin} 的成交（最小金额过滤）</div>`
     : !rows.length ? '<div class="trkp-empty">追踪的地址在 Flap / Four / Gang V2 内盘上买卖时，会实时出现在这里。</div>'
-    : rows.map((e) => `<div class="trkp-e" data-a="${e.token}" title="点击进入 ${esc(e.symbol)} 详情"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who ${trkRemark(e.target) ? 'y' : 'wn'}" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}" title="${e.bnb ? bnb(e.bnb, 4) + ' BNB' : ''}${e.quote !== 'BNB' ? ' · ' + K(e.quoteAmt) + ' ' + esc(e.quote) : ''}">${trkUsd(e) ? trkUsdS(trkUsd(e)) : `${K(e.quoteAmt)}<small class="dim"> ${esc(e.quote)}</small>`}</span></div>
+    : rows.map((e) => `<div class="trkp-e" data-a="${e.token}" title="点击进入 ${esc(e.symbol)} 详情"><div class="trkp-r1"><b class="trkp-act ${ACT_CLS[e.action] || ''}">${e.action}</b><span class="trkp-nm" data-trkname><span class="trkp-who ${trkRemark(e.target) ? 'y' : 'wn'}" data-tpwho="${e.target}:${e.token}" title="${esc(trkSub(e.target) || '')} ${e.target}（点击看它在这个币上的盈亏）">${esc(trkName(e.target))}</span><button class="trk-pen" data-trkedit="${e.target}" title="编辑备注名">✎</button><button class="trk-pen trkp-mute ${TRK.mute.has(e.target) ? 'on' : ''}" data-trkmute="${e.target}" title="${TRK.mute.has(e.target) ? '这个钱包已静音，点击恢复提示音' : '这个钱包不响提示音'}">${TRK.mute.has(e.target) ? '🔕' : '🔔'}</button></span><span class="spacer"></span><span class="trkp-amt ${e.side === 'buy' ? 'g' : 'r'}" title="${e.bnb ? bnb(e.bnb, 4) + ' BNB' : ''}${e.quote !== 'BNB' ? ' · ' + K(e.quoteAmt) + ' ' + esc(e.quote) : ''}">${trkUsd(e) ? trkUsdS(trkUsd(e)) : `${K(e.quoteAmt)}<small class="dim"> ${esc(e.quote)}</small>`}</span></div>
       <div class="trkp-r2"><span class="trkp-tok" data-a="${e.token}">${logoHtml({ address: e.token, symbol: e.symbol, image: e.image, platform: e.platform }, 'xs')}<b>${esc(e.symbol)}</b></span><span class="dim">MC ${usd(e.mcapUsd)}</span><span class="spacer"></span><span class="dim" title="${fullTime(e.ts)}">${trkAgo(e.ts)}</span></div></div>`).join('');
 }
+// 提示音：追踪的地址一有新成交就响，买入「上扬两声」、卖出「下沉两声」。不受顶栏总声音开关管（这里单独开关），单个钱包可静音（行上的 🔔）
+// 防刷屏：两声之间至少 0.6 秒，10 秒内最多 6 声；连发时只响第一声
+try { TRK.sound = localStorage.trkSound !== '0'; } catch { /* ignore */ }   // 默认开
+try { TRK.mute = new Set(JSON.parse(localStorage.trkMute || '[]')); } catch { TRK.mute = new Set(); }
+const trkSnd = { last: 0, hits: [] };
+function trkTone(e) {
+  if (!TRK.sound || TRK.mute.has(e.target) || (e.ts && Date.now() - e.ts > 60_000)) return;   // 晚到超过 1 分钟的不响
+  const now = Date.now(); trkSnd.hits = trkSnd.hits.filter((t) => now - t < 10_000);
+  if (now - trkSnd.last < 600 || trkSnd.hits.length >= 6) return; trkSnd.last = now; trkSnd.hits.push(now);
+  trkPlay(e.side === 'buy');
+}
+function trkPlay(buy) {
+  try {
+    actx ||= new AudioContext(); if (actx.state === 'suspended') actx.resume();
+    const t0 = actx.currentTime;
+    (buy ? [[880, 0], [1320, 0.09]] : [[660, 0], [440, 0.11]]).forEach(([f, dt]) => { const o = actx.createOscillator(), g = actx.createGain(); o.type = buy ? 'sine' : 'square'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0 + dt); g.gain.exponentialRampToValueAtTime(buy ? 0.1 : 0.04, t0 + dt + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.14);
+      o.connect(g).connect(actx.destination); o.start(t0 + dt); o.stop(t0 + dt + 0.16); });
+  } catch { /* 浏览器未授权音频 */ }
+}
+function setTrkSound(on) { TRK.sound = on; try { localStorage.trkSound = on ? '1' : '0'; } catch { /* ignore */ } if (on) trkPlay(true); renderTrkSound(); }
+function renderTrkSound() {
+  const b = $('#trkpSound'); if (b) { b.textContent = TRK.sound ? '🔔' : '🔕'; b.classList.toggle('on', TRK.sound); b.title = `提示音：${TRK.sound ? '开' : '关'}（追踪的地址买入 / 卖出时响，买卖音不同；单个钱包可在行上点 🔔 静音）`; }
+  const c = $('#trkSound'); if (c) c.checked = TRK.sound;
+}
+function trkToggleMute(addr) { if (TRK.mute.has(addr)) TRK.mute.delete(addr); else TRK.mute.add(addr); try { localStorage.trkMute = JSON.stringify([...TRK.mute]); } catch { /* ignore */ } note(TRK.mute.has(addr) ? `已静音 ${trkName(addr)}` : `已取消静音 ${trkName(addr)}`); renderTrkPanel(); }
+$('#trkpSound')?.addEventListener('click', () => setTrkSound(!TRK.sound));
+renderTrkSound();
 function setTrkPanel(on) { TP.open = on; try { localStorage.trkPanel = on ? '1' : '0'; } catch { /* ignore */ } tpSaveServer(); if (on && !TRK.loaded) loadTrack().then(renderTrkPanel); renderTrkPanel(); }
 $('#bbTrack')?.addEventListener('click', () => setTrkPanel(!TP.open));
 $('#trkpClose')?.addEventListener('click', () => setTrkPanel(false));
@@ -3173,6 +3201,7 @@ $('#trkpMin')?.addEventListener('input', (e) => setTrkMin(e.target.value));
 for (const id of ['trkFMin', 'trkpMin']) { const el = $('#' + id); if (el) el.value = TRK.fMin || ''; }
 $('#trkpGo')?.addEventListener('click', () => { TRK.tab = 'feed'; setView('track'); });
 $('#trkPanel')?.addEventListener('click', (e) => {
+  const mu = e.target.closest('[data-trkmute]'); if (mu) { e.preventDefault(); e.stopPropagation(); return trkToggleMute(mu.dataset.trkmute); }
   if (e.target.closest('input, [data-trkedit]')) return;   // 编辑备注时点输入框不跳转
   if (e.target.closest('[data-tpgo]')) { TRK.tab = 'feed'; return setView('track'); }
   const w = e.target.closest('[data-tpwho]'); if (w) { const [who, tok] = w.dataset.tpwho.split(':'); if (S.tokens.has(tok)) { if (S.view !== 'trade') setView('trade'); select(tok); setTimeout(() => openTrader(who), 400); } else window.open(`https://gmgn.ai/bsc/address/${who}`, '_blank', 'noopener'); return; }
