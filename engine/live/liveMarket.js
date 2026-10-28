@@ -115,7 +115,7 @@ export class LiveMarket extends EventEmitter {
     this.four.start();
     this.fourRestore();
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
-    setInterval(() => this.taxToSweep(), 10_000).unref?.();   // 列表里已有的 Gang V3 币：后台补读税收接收地址（每个币只读一次）
+    setInterval(() => this.taxToSweep(), 3000).unref?.();   // 列表里已有的 Gang V3 币：后台补读税收接收地址（每个币只读一次）
     this.loadFairSales(); setInterval(() => this.loadFairSales(), 30_000).unref?.();   // 打新盘：gang.fun 普通代币接口不列，重启后链上订阅也不会补以前的，从打新列表接口补
     this.gang.start(); this.gangChain.start(); this.flapChain.start(); this.gangPads.start(); this.flapNft.start();
     this.feeds.start();
@@ -884,29 +884,34 @@ export class LiveMarket extends EventEmitter {
   // 读一次 Gang V3 税收接收地址（不等结果，不影响曲线刷新）；读失败 5 分钟后再试
   gangTaxTo(t, pad) {
     const m = (this._taxTo ||= (() => { try { return JSON.parse(readFileSync(TAX_TO_FILE, 'utf8')); } catch { return {}; } })());
-    if (t.address in m) { t.taxTo = m[t.address] || null; return; }
-    if (!pad || t._taxToAt > Date.now() - 300_000) return;
+    if (this.applyTaxCfg(t, m[t.address])) return;
+    if (!pad || t._taxToAt > Date.now() - 60_000) return;
     t._taxToAt = Date.now();
     this.provider.call({ to: pad, data: TAX_CFG.encodeFunctionData('taxConfigOf', [t.address]) }).then((r) => {
-      const a = String(TAX_CFG.decodeFunctionResult('taxConfigOf', r).recipient).toLowerCase();
-      m[t.address] = a === ethers.ZeroAddress ? '' : a; t.taxTo = m[t.address] || null; clearTimeout(this._taxToSave);   // 0 地址 = 不收税，也记下不再读
-      this._taxToSave = setTimeout(() => { try { writeFileSync(TAX_TO_FILE, JSON.stringify(m)); } catch { /* 下次重启重读 */ } }, 5000);
+      const x = TAX_CFG.decodeFunctionResult('taxConfigOf', r), a = String(x.recipient).toLowerCase();
+      m[t.address] = `${a === ethers.ZeroAddress ? '' : a},${x.buyTaxBps},${x.sellTaxBps},${x.dividendBps}`; this.applyTaxCfg(t, m[t.address]);   // 0 地址 = 不收税，也记下不再读
+      clearTimeout(this._taxToSave); this._taxToSave = setTimeout(() => { try { writeFileSync(TAX_TO_FILE, JSON.stringify(m)); } catch { /* 下次重启重读 */ } }, 5000);
     }).catch(() => {});
   }
-  // 每 10 秒给最多 8 个还没读过的 Gang V3 币补读接收地址（重启后接口列表里的老币不会走 gangV2Curve）
+  // 存盘格式 "接收地址,买税,卖税,分红"（万分比）；旧格式（只有地址）没有税率，当作没读过重读
+  applyTaxCfg(t, v) {
+    if (typeof v !== 'string' || !v.includes(',')) return false;
+    const [to, b, s, d] = v.split(','); t.taxTo = to || null; t.taxCfg = { b: +b, s: +s, d: +d }; return true;
+  }
+  // 每 3 秒给最多 6 个还没读过的 Gang V3 币读接收地址，新币优先（新创建列要及时出红色「分红 !」）
   taxToSweep() {
-    let n = 0;
+    const m = this._taxTo; const todo = [];
     for (const t of this.tokens.values()) {
-      if (n >= 8) break;
-      if (t.source !== 'gang' || t.gangTrack !== 'v3' || t.taxTo !== undefined || t._taxToAt > Date.now() - 300_000) continue;
-      const m = this._taxTo; if (m && t.address in m) { t.taxTo = m[t.address] || null; continue; }
-      this.gangTaxTo(t, this._gv2?.pads?.get(t.address) || V3_PADS[0]); n++;
+      if (t.source !== 'gang' || t.gangTrack !== 'v3' || t.taxTo !== undefined || t._taxToAt > Date.now() - 60_000) continue;
+      if (m && this.applyTaxCfg(t, m[t.address])) continue;
+      todo.push(t);
     }
+    for (const t of todo.sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0)).slice(0, 6)) this.gangTaxTo(t, this._gv2?.pads?.get(t.address) || V3_PADS[0]);
   }
   // 税收接收地址就是发币人自己：Gang V3 = recipient 是创建者且这部分不是全给分红；Flap = 营销受益人是创建者且营销比例 > 0
   taxToCreator(t) {
     const c = String(t.creator || '').toLowerCase(); if (!c) return false;
-    const v = t.gangV3; if (v && t.taxTo) return t.taxTo === c && (v.buyTaxBps > 0 || v.sellTaxBps > 0) && v.dividendBps < 10000;
+    const v = t.taxCfg; if (v && t.taxTo) return t.taxTo === c && (v.b > 0 || v.s > 0) && v.d < 10000;
     const f = t.flapTax; if (f?.beneficiary) return f.beneficiary === c && f.mktBps > 0 && (f.buyBps > 0 || f.sellBps > 0);
     return false;
   }
@@ -915,7 +920,7 @@ export class LiveMarket extends EventEmitter {
     if (t._v2At && Date.now() - t._v2At < 20_000) return;
     this._gv2 ||= new GangV2(this.provider, null);
     const { pad, c } = await this._gv2.curve(t.address);
-    if (c.v3 && c.taxed) this.gangTaxTo(t, pad);
+    if (c.v3) this.gangTaxTo(t, pad);
     const VT = 1066666666666666666666666667n, vq = BigInt(c.virtualQuote), grad = BigInt(c.gradAmt), sold = BigInt(c.sold);
     const soldAtGrad = VT - (vq * VT + vq + grad - 1n) / (vq + grad);
     // 报价币不一定是 18 位（XAUt 是 6 位）：开盘价、已筹、目标都按报价币自己的小数位换算
