@@ -206,9 +206,10 @@ async function mergeHoldings(own) {
   const totals = {}; for (const part of parts) for (const [k, v] of Object.entries(part.snap.totals || {})) if (typeof v === 'number') totals[k] = (totals[k] || 0) + v;
   return { ...own, rows, totals, bnb: parts.reduce((a, x) => a + (x.snap.bnb || 0), 0), wallets: parts.map((x) => ({ slot: x.slot, label: x.label, rows: x.snap.rows, totals: x.snap.totals, bnb: x.snap.bnb })) };
 }
+let holdSent = '';   // 持仓没变就不再推（每次约 250KB）
 async function refreshHoldSnap() {
   if (!holdings) return; if (holdBusy) { holdAgain = true; return; } holdBusy = true;
-  try { holdSnap = await holdings.view(); holdView = await mergeHoldings(holdSnap); broadcast({ type: 'holdings', data: holdView }); } catch { /* 下次再算 */ }
+  try { holdSnap = await holdings.view(); holdView = await mergeHoldings(holdSnap); const s = JSON.stringify(holdView); if (s !== holdSent) { holdSent = s; broadcast({ type: 'holdings', data: holdView }); } } catch { /* 下次再算 */ }
   holdBusy = false; if (holdAgain) { holdAgain = false; setTimeout(refreshHoldSnap, 200); }
 }
 if (holdings) { setTimeout(refreshHoldSnap, 3000); setInterval(refreshHoldSnap, 5000); }
@@ -683,6 +684,7 @@ process.on('uncaughtException', (e) => console.error('uncaughtException:', e?.st
 
 wss.on('connection', (ws) => {
   ws.sub = null;
+  try { ws.send(JSON.stringify({ type: 'tokens', data: market.list() })); } catch { /* 下一次全量兜底 */ }
   ws.on('message', (raw) => {
     try {
       const m = JSON.parse(raw);
@@ -710,8 +712,18 @@ agent.on('log', (l) => broadcast({ type: 'log', data: l }));
 agent.on('record', (r) => broadcast({ type: 'record', data: r }));
 agent.on('config', (c) => broadcast({ type: 'config', data: c }));
 
+// 行情列表只推有变化的币：原来每 500ms 推全量（1000 个币约 1.5MB，每个标签页约 3MB/s），浏览器会卡到「页面无响应」
+// 新连接先收一次全量（type 'tokens'），之后 tick 只带 tokDelta（变了 / 新增的币）和 tokGone（已移除的地址）；每 30 秒带一次全量兜底
+const tokSent = new Map(); let tokFullAt = Date.now();
+function tokFrame() {
+  const list = market.list(), seen = new Set(), tokDelta = [], tokGone = [];
+  for (const t of list) { seen.add(t.address); let s; try { s = JSON.stringify(t); } catch { continue; } if (tokSent.get(t.address) !== s) { tokSent.set(t.address, s); tokDelta.push(t); } }
+  for (const a of tokSent.keys()) if (!seen.has(a)) { tokSent.delete(a); tokGone.push(a); }
+  if (Date.now() - tokFullAt > 30_000) { tokFullAt = Date.now(); return { tokens: list }; }
+  return { tokDelta, tokGone };
+}
 setInterval(() => {
-  broadcast({ type: 'tick', data: { ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, gangMcap: market.gangMcap || 0, net, wallets: trader.walletsView(), usage: agent.usageView(), tokens: market.list(), positions: trader.positionsView(), claimable: LIVE ? trader.claimable : [] } });
+  broadcast({ type: 'tick', data: { ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, gangMcap: market.gangMcap || 0, net, wallets: trader.walletsView(), usage: agent.usageView(), ...tokFrame(), positions: trader.positionsView(), claimable: LIVE ? trader.claimable : [] } });
   for (const c of wss.clients) {
     if (c.readyState !== 1 || !c.sub) continue;
     const d = market.detail(c.sub);

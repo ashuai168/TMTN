@@ -197,10 +197,12 @@ function onMsg({ type, data, full }) {
   switch (type) {
     case 'tick':
       Object.assign(S, { mode: data.mode, baw: data.baw, block: data.block, bnbUsd: data.bnbUsd, gangMcap: data.gangMcap, net: data.net, wallets: data.wallets, usage: data.usage, positions: data.positions, claimable: data.claimable || [] });
-      S.tokens = new Map(data.tokens.map((t) => [t.address, t]));
+      if (data.tokens) S.tokens = new Map(data.tokens.map((t) => [t.address, t]));   // 每 30 秒一次全量
+      else { for (const t of data.tokDelta || []) S.tokens.set(t.address, t); for (const a of data.tokGone || []) S.tokens.delete(a); }   // 平时只推变了的币
       if (!S.selected) pickDefault();
       scheduleRender();
       break;
+    case 'tokens': S.tokens = new Map(data.map((t) => [t.address, t])); scheduleRender(); break;   // 连上 WebSocket 时的全量
     case 'detail':
       if (data.address !== S.selected) break;
       if (full || !S.detail) { S.detail = data; autoInterval(); }
@@ -997,7 +999,7 @@ function renderBottom() {
       break;
     }
   }
-  const keep = b.scrollTop; b.innerHTML = html; b.scrollTop = keep;
+  if (b._html !== html) { const keep = b.scrollTop; b.innerHTML = html; b.scrollTop = keep; b._html = html; }   // 内容没变就不重建（每次 tick 都会调到这里）
   $('#bottomCnt').textContent = cnt;
 }
 
