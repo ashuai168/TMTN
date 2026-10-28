@@ -895,15 +895,6 @@ body.fav-on .favbar { display: flex; }
 .gm-addr { color: inherit; text-decoration: none; cursor: pointer; }
 .gm-addr:hover { text-decoration: underline; text-decoration-color: rgba(255,255,255,.45); text-underline-offset: 2px; }
 
-/* 全市场成交流：列宽收紧，金额以美元为主 */
-.flowt { width: 100%; table-layout: fixed; }
-.flowt th:nth-child(1) { width: 78px; }   /* 时间 */
-.flowt th:nth-child(3) { width: 56px; }   /* 方向 */
-.flowt th:nth-child(4) { width: 130px; }   /* 金额 */
-.flowt th:nth-child(5) { width: 90px; }    /* 市值 */
-.flowt td { overflow: hidden; text-overflow: ellipsis; }   /* 代币、地址两列平分剩下的宽度 */
-.flowt th, .flowt td { padding-left: 8px; padding-right: 8px; white-space: nowrap; }
-.flowt td .hsub { font-size: 10px; }
 
 /* 打赏作者 */
 .donate-qr { display: grid; place-items: center; margin: 6px auto 10px; padding: 12px; width: fit-content; background: #fff; border-radius: 14px; }

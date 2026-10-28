@@ -154,7 +154,7 @@ app.get('/api/latency/orders', async (req, res) => {
   rows.sort((a, b) => b.ts - a.ts); wallets.sort((a, b) => a.slot - b.slot);
   res.json({ days, now: Date.now(), stages: latency.STAGES, wallets, rows });
 });
-app.get('/api/state', (req, res) => res.json({ ...state(), orderSlots: true, holdings: holdView || holdSnap, orders: trader.orders.slice(0, 100), logs: agent.logs.slice(0, 150), records: agent.records, flow: market.named ? market.named(market.flow.slice(0, 80)) : market.flow.slice(0, 80) }));
+app.get('/api/state', (req, res) => res.json({ ...state(), orderSlots: true, holdings: holdView || holdSnap, orders: trader.orders.slice(0, 100), logs: agent.logs.slice(0, 150), records: agent.records }));
 // 持仓快照：后台每 5 秒算一次（下单 / 领取 / 转账结束后立刻再算），通过 WebSocket 推给页面、也放进 /api/state，
 // 页面打开详情时直接用快照，不再每次现算（现算要读钱包历史和链上报价，慢）
 let holdSnap = null, holdView = null, holdBusy = false, holdAgain = false;   // holdSnap：本钱包；holdView：多钱包时合并后的（给页面）
@@ -693,7 +693,6 @@ wss.on('connection', (ws) => {
   });
 });
 
-market.on('trade', (t) => broadcast({ type: 'trade', data: t }));
 market.on('launch', (s) => broadcast({ type: 'launch', data: s }));
 // 实盘行情：选中的代币每 3 秒刷新一次详情
 if (LIVE) setInterval(() => new Set([...wss.clients].map((c) => c.sub).filter(Boolean)).forEach((a) => market.refresh(a)), 3000);

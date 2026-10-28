@@ -11,7 +11,7 @@ const TRK = { tab: 'feed', cptab: 'active', targets: [], groups: ['默认'], fee
 const S = {
   tokens: new Map(), selected: null, detail: null, platform: 'four', listTab: 'curve', chips: new Set(),
   side: 'buy', amtMode: 'bnb', slippage: 35, selWallets: new Set(['big']), activeWallet: 'big',
-  interval: 1, metric: 'mcap', bottomTab: 'trades', orders: [], logs: [], records: [], flow: [],
+  interval: 1, metric: 'mcap', bottomTab: 'pos', orders: [], logs: [], records: [],
   wallets: [], positions: [], config: null, settings: {}, usage: {}, net: {}, block: 0, bnbUsd: 744, snipeCurve: [],
   hover: null, newTokens: new Set(), settingsPlat: 'four', mode: 'sim', baw: null,
   blk: { tokens: {}, devs: {} },
@@ -205,7 +205,7 @@ function onMsg({ type, data, full }) {
         if (c.length > 4000) c.splice(0, c.length - 4000);
         S.detail = { ...data, candles: c };
       }
-      drawChart(); renderHead(); if (S.bottomTab === 'trades') renderBottom();
+      drawChart(); renderHead();
       break;
     case 'launch':
       { const known = S.tokens.has(data.address); S.tokens.set(data.address, data); S.newTokens.add(data.address); setTimeout(() => S.newTokens.delete(data.address), 2000);
@@ -213,10 +213,6 @@ function onMsg({ type, data, full }) {
         // 顶栏🔊的新币提示：在战壕页由各列自己的声音负责；其他页面只对当前平台页签的新币响
         if (!known && data.stage !== 'dex' && Date.now() - (data.createdAt || 0) < 120_000 && S.view !== 'pulse' && listWants(data) && !isBlocked(data)) newTokenChime(); }
       if (listWants(data) && !isBlocked(data)) { if (S.config?.notify && document.hidden && Notification?.permission === 'granted') new Notification(`新内盘 ${data.symbol}`); }
-      break;
-    case 'trade':
-      S.flow.unshift(data); if (S.flow.length > 150) S.flow.length = 150;
-      if (S.bottomTab === 'flow') scheduleBottom();
       break;
     case 'trackReload': { if (TRK.loaded || TP.open) loadTrack().then(renderTrkPanel); break; }
     case 'track': { if (!TRK.feed.some((x) => x.id === data.id)) { TRK.feed.unshift(data); if (TRK.feed.length > 500) TRK.feed.length = 500; if (TRK.sound && trkPass(data)) beep(data.side === 'buy' ? 1000 : 520, 0.06); if (S.view === 'track') renderTrack(); renderTrkPanel(); } break; }
@@ -296,7 +292,7 @@ function loadPrefs() {
   if (['four', 'flap', 'gang'].includes(p.platform)) S.platform = p.platform;
   if (['curve', 'soon', 'dex', 'mine'].includes(p.listTab)) S.listTab = p.listTab;
   if (Array.isArray(p.chips)) S.chips = new Set(p.chips);
-  if (p.bottomTab) S.bottomTab = p.bottomTab; if (+p.interval) S.interval = +p.interval; if (p.metric) S.metric = p.metric;
+  if (p.bottomTab && !['trades', 'flow'].includes(p.bottomTab)) S.bottomTab = p.bottomTab; if (+p.interval) S.interval = +p.interval; if (p.metric) S.metric = p.metric;
   if (['bnb', 'pct'].includes(p.amtMode)) S.amtMode = p.amtMode;
   return p;
 }
@@ -913,27 +909,6 @@ function renderBottom() {
   const mineSet = new Set(S.wallets.map((w) => 'user:' + w.id));
   let html = '', cnt = '';
   switch (S.bottomTab) {
-    case 'trades': {
-      // 最新的来自实时推送（服务器只留最近 60 笔），更早的往下翻时按页从 /api/trades 拉；按 tx+方向 去重
-      const OT = olderTrades(); const seen = new Set();
-      const rows = [...(S.detail?.trades || []), ...OT.items].filter((r) => { const k = `${r.tx}:${r.side}:${r.tokens}`; if (seen.has(k)) return false; seen.add(k); return true; });
-      cnt = rows.length + ' 笔' + (OT.end ? '（全部）' : '');
-      // 价格：美元（悬停看报价币单价）；金额：报价币 + 美元；地址：自己的钱包绿色
-      const q = t?.quote || 'BNB', qu = t?.quoteUsd || (q === 'BNB' ? S.bnbUsd : 0);
-      html = `<table class="ttable"><tr><th>时间</th><th class="l">方向</th><th>数量</th><th>价格</th><th>金额</th><th>成交后市值</th><th class="l">地址</th><th class="l">交易</th></tr>
-        ${rows.map((r) => `<tr class="${isMe(r.trader) ? 'mine' : ''} trow" data-trader="${esc(r.trader || '')}" title="点击查看这个地址在这个币上的盈亏"><td class="dim">${hms(r.ts)}</td><td class="l"><span class="${r.side === 'buy' ? 'g' : 'r'}">${r.side === 'buy' ? '买入' : '卖出'}</span></td>
-        <td>${K(r.tokens)}</td><td title="${r.price ? sub(r.price) + ' ' + esc(q) : ''}">${r.price && qu ? '$' + sub(r.price * qu) : '—'}</td>
-        <td><b>${usdAmt(r.usd ?? (qu ? r.bnb * qu : null))}</b><div class="hsub">${qAmt(r.bnb, q)}</div></td><td>${usd(tradeMc(r, t))}</td>
-        <td class="l addr">${mineSet.has(r.trader) ? `<b class="me">${wallet(r.trader.slice(5)).label}</b><i class="me-tag">我</i>` : LIVE() && r.trader ? `<span class="tr-who">${gmgnWho(r.trader, nameOf(r))}</span>` : traderHtml(r)}</td><td class="l">${txLink(r.tx)}</td></tr>`).join('')}</table>`;
-      html += LIVE() ? `<div class="tfoot" id="tradesFoot">${OT.end ? (OT.complete ? '— 已到开盘第一笔 —' : '— 已到能查到的最早一笔（成交太多，只保留了最近的部分）—') : OT.loading ? '正在加载更早的成交…' : OT.err ? `加载失败：${esc(OT.err)}（往下滚动重试）` : '往下滚动（或点这里）加载更早的成交'}</div>` : '';
-      break;
-    }
-    case 'flow': {
-      cnt = S.flow.length + ' 笔';
-      html = `<table class="flowt"><tr><th>时间</th><th class="l">代币</th><th class="l">方向</th><th>金额</th><th>市值</th><th class="l">地址</th></tr>
-        ${S.flow.slice(0, 120).map((r) => { const q = S.tokens.get(r.address)?.quote || 'BNB'; return `<tr data-a="${r.address}" class="${isMe(r.trader) ? 'mine' : ''}" style="cursor:pointer" title="点击打开这个币"><td class="dim">${hms(r.ts)}</td><td class="l"><span class="side">${logoHtml(r, 'xs')}${esc(r.symbol)}</span></td><td class="l ${r.side === 'buy' ? 'g' : 'r'}">${r.side === 'buy' ? '买入' : '卖出'}</td><td><b>${usdAmt(r.usd)}</b><div class="hsub">${qAmt(r.bnb, q)}</div></td><td>${usd(r.mcapUsd)}</td><td class="l addr">${traderHtml(r)}</td></tr>`; }).join('')}</table>`;
-      break;
-    }
     case 'pos': {
       // 详情页的「我的持仓」只看当前这个币（和持仓页同一份数据：均价、市值、盈亏都折成 BNB / 美元）
       const sel = S.selected?.toLowerCase(), hr = HOLD.data?.rows?.find((x) => x.token.toLowerCase() === sel);
@@ -1984,19 +1959,17 @@ document.addEventListener('click', async (e) => {
   }
 });
 
-/* ---------- 实时成交往下翻页 ---------- */
+/* ---------- 成交往下翻页（K 线右边的「活动」用） ---------- */
 const OLDER = {};   // token → { items, end, complete, loading, err }
 function olderTrades() { const k = S.selected || ''; return (OLDER[k] ||= { items: [], end: false, complete: true, loading: false, err: null }); }
 async function loadOlderTrades() {
   const k = S.selected, o = olderTrades(); if (!k || !LIVE() || o.loading || o.end) return;
   const all = [...(S.detail?.trades || []), ...o.items]; const before = all.length ? Math.min(...all.map((x) => x.ts)) : 0;
-  o.loading = true; o.err = null; renderBottom();
+  o.loading = true; o.err = null; renderAct();
   try { const r = await api(`/api/trades/${k}?before=${before}&limit=150`); o.items.push(...r.items); o.end = r.end; o.complete = r.complete; }
   catch (e) { o.err = e.message; }
-  o.loading = false; if (S.selected === k && S.bottomTab === 'trades') renderBottom(); if (S.selected === k) renderAct();
+  o.loading = false; if (S.selected === k) renderAct();
 }
-$('#bottomBody').addEventListener('click', (e) => { if (e.target.closest('#tradesFoot')) loadOlderTrades(); });
-$('#bottomBody').addEventListener('scroll', (e) => { const b = e.currentTarget; if (S.bottomTab === 'trades' && b.scrollHeight - b.scrollTop - b.clientHeight < 120) loadOlderTrades(); }, { passive: true });
 
 
 /* ---------- 详情页底部「持有人」（HOLDERS_FEATURE）：按持仓排名，总买入 / 总卖出 / 利润 / 买入市值；点一行打开交易者抽屉看每一笔买卖 ---------- */
@@ -2064,7 +2037,7 @@ $('#actBody').addEventListener('click', (e) => {
 });
 setInterval(() => { if (S.view === 'trade') renderAct(); }, 1000);
 
-/* ---------- 交易者抽屉：点实时成交里的一行 / 地址，右侧滑出这个地址在当前币上的盈亏（GMGN 那种） ---------- */
+/* ---------- 交易者抽屉：点「活动」/「持有人」里的一行 / 地址，右侧滑出这个地址在当前币上的盈亏（GMGN 那种） ---------- */
 function openTrader(addr) {
   const t = S.tokens.get(S.selected); if (!t || !/^0x[0-9a-fA-F]{40}$/.test(addr || '')) return;
   $('.tr-drawer-back')?.remove();
@@ -2115,7 +2088,7 @@ document.addEventListener('click', (e) => {
   const st = await api('/api/state');
   if (st.holdings) setHoldSnap(st.holdings);
   S.orderSlots = !!st.orderSlots;   // 后端支持「只在指定钱包下单」
-  Object.assign(S, { mode: st.mode, baw: st.baw, block: st.block, bnbUsd: st.bnbUsd, gangMcap: st.gangMcap, net: st.net, wallets: st.wallets, settings: st.settings, config: st.config, usage: st.usage, positions: st.positions, orders: st.orders, logs: st.logs, records: st.records, flow: st.flow, snipeCurve: st.snipeCurve });
+  Object.assign(S, { mode: st.mode, baw: st.baw, block: st.block, bnbUsd: st.bnbUsd, gangMcap: st.gangMcap, net: st.net, wallets: st.wallets, settings: st.settings, config: st.config, usage: st.usage, positions: st.positions, orders: st.orders, logs: st.logs, records: st.records, snipeCurve: st.snipeCurve });
   S.tokens = new Map(st.tokens.map((t) => [t.address, t]));
   S.selWallets = new Set(S.wallets.map((w) => w.id)); S.activeWallet = S.wallets[0]?.id || S.activeWallet;
   if (LIVE()) S.platform = 'flap';
@@ -2128,7 +2101,7 @@ document.addEventListener('click', (e) => {
   if (LIVE()) api('/api/wallets').then((v) => { S.walletsInfo = v; renderAuth(); scheduleRender(); }).catch(() => {});   // 多钱包状态（之后每 10 秒通过 WS 推送）
   api('/api/blocklist').then(async (b) => { S.blk = b; afterBlock(); await migrateHidden(); }).catch(() => {});
   if (LIVE()) api('/api/track').then((x) => { if (!TRK.targets.length && x?.targets) { TRK.targets = x.targets; scheduleRender(); renderBottom(); } }).catch(() => {});   // 先拿追踪列表，备注过的钱包在成交列表里显示黄色
-  setInterval(() => { if (S.bottomTab === 'logs' || S.bottomTab === 'flow') return; renderBottom(); }, 2000);
+  setInterval(() => { if (S.bottomTab === 'logs') return; renderBottom(); }, 2000);
 })();
 
 /* ---------- K 线 / 成交区 上下拖动 ---------- */
