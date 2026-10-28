@@ -184,7 +184,9 @@ export class LiveTrader extends EventEmitter {
         const k = `${w.id}:${t.address}`;
         // baw 余额列表还没收录刚发的币（Gang 新盘常见）时会是 0：本地记着还有持仓的，先读链上 balanceOf 再决定清零，免得刚买的被清掉
         const p0 = this.positions.get(k);
-        if (!(amt > 0) && p0 && (p0.amount > 0 || (p0.boughtBnb > 0 && !p0.chainZero))) {   // chainZero：链上确认过是 0 的（已清仓）不再重复读
+        // baw 余额滞后的另一种：刚卖完，baw 还报卖出前的数量（2026-10-28 咯咯帮：卖完 100% 后又被写回 3.11M）。和本地记录差 1% 以上就也以链上为准
+        const stale = amt > 0 && p0 && Math.abs(amt - (p0.amount || 0)) > Math.max(amt, p0.amount || 0) * 0.01;
+        if (stale || (!(amt > 0) && p0 && (p0.amount > 0 || (p0.boughtBnb > 0 && !p0.chainZero)))) {   // chainZero：链上确认过是 0 的（已清仓）不再重复读
           try { const e = new ethers.Contract(t.address, ['function balanceOf(address) view returns (uint256)', 'function decimals() view returns (uint8)'], this.market.provider); const b = await e.balanceOf(w.address); amt = b > 0n ? Number(ethers.formatUnits(b, await e.decimals().catch(() => 18n))) : 0; } catch { return; }   // 读链失败就保持原样
           p0.chainZero = !(amt > 0);
         }
@@ -594,7 +596,10 @@ export class LiveTrader extends EventEmitter {
         return order;
       }
       // 卖出时这个钱包没有这个币：灰色「无余额」提示，不算失败（多钱包一起卖时常见：另一个钱包没买到）
-      if (side === 'sell' && /没有可卖出的余额|（实际 0 个）/.test(e.message)) Object.assign(order, { status: 'failed', skipped: true, noBalance: true, reason: '无余额：这个钱包没有持有这个币，已跳过（没有发出交易）', latencyMs: Date.now() - order.ts });
+      if (side === 'sell' && /没有可卖出的余额|（实际 0 个）/.test(e.message)) {
+        Object.assign(order, { status: 'failed', skipped: true, noBalance: true, reason: '无余额：这个钱包链上没有这个币（可能之前已经卖完），已跳过（没有发出交易）', latencyMs: Date.now() - order.ts });
+        const p0 = t && this.positions.get(`${(this.wallets.find((x) => x.id === walletId) || this.wallets[0])?.id}:${t.address}`); if (p0 && p0.amount > 0) { p0.amount = 0; p0.chainZero = true; }   // 卖出路径刚读过链上余额是 0：持仓行马上清掉，不等 baw 余额更新
+      }
       else Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts });
       this.emit('order', order);
       return order;
