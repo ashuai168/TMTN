@@ -422,6 +422,9 @@ export class LiveMarket extends EventEmitter {
         // 已经由链上 Created 事件收录的 V3 盘：事件里已筹 / 进度是 0，gang.fun 的 V2 列表又不收 V3，以前就一直显示 0/15。这里按接口刷新已筹 / 目标 / 进度，没有图标的补上
         const ex = x?.address && this.get(x.address);
         if (ex && ex.source === 'gang' && ex.gangTrack === 'v1') { ex.gangTrack = 'v3'; this.gangV2Curve(ex).catch(() => {}); }   // 在 V3 列表里却被标成老盘的（链上收录时 track 丢了）：改回 V3，战壕和买卖才走对
+        if (ex && ex.source === 'gang' && /^v3/.test(ex.gangTrack || '') && x.graduated && ex.stage === 'curve') {   // V3 盘发射时链上没有事件推给我们：按接口状态移到「已发射」，以前要重启才过去
+          Object.assign(ex, { stage: 'dex', progress: 100, pair: x.pair || ex.pair || null }); ex.migratedAt ||= x.graduatedAt ? x.graduatedAt * 1000 : Date.now(); this.emit('migrate', this.summary(ex));
+        }
         if (ex && ex.source === 'gang' && ex.gangTrack === 'v3' && !x.graduated && !ex._chainCurve) {
           const dec = Number(x.quoteDecimals) || 18, raised = Number(ethers.formatUnits(BigInt(x.realQuote || 0), dec)), grad = Number(ethers.formatUnits(BigInt(x.gradAmt || 0), dec));
           if (raised > 0 || Number(x.progressPct) > 0) Object.assign(ex, { raised, progress: Number(x.progressPct) || (grad > 0 ? Math.min(100, (raised / grad) * 100) : ex.progress), ...(grad > 0 && { target: grad }) });
@@ -1024,6 +1027,7 @@ export class LiveMarket extends EventEmitter {
     }
     t._v2Rem = c.graduated ? 0 : Math.max(0, Number(ethers.formatEther(soldAtGrad > sold ? soldAtGrad - sold : 0n)));
     t.remaining = t._v2Rem; t._v2At = Date.now(); t._chgAt = 0;
+    if (c.graduated && t.stage === 'curve') { Object.assign(t, { stage: 'dex', progress: 100 }); t.migratedAt ||= Date.now(); this.emit('migrate', this.summary(t)); }   // 合约里已发射：移到「已发射」
   }
 
   // 某个币从开盘到现在的全部成交（新→旧），给「实时成交」往下翻页和交易者抽屉用。来源：Gang = gang.fun 全部成交；
