@@ -14,7 +14,8 @@ import { env, dataFile } from './config.js';
 
 export const T_V3_CREATED = '0x416fe98c8f1ea2977674a1a4ee6252eb72597a8392fc2d7d0599a2bf5d8fdb63';     // Created(token, creator, name, symbol, logoURI, quote, refPair, gradAmt)
 export const T_FAIR_CREATED = '0xd46f0c9c36ad8c7839cf830c7cb08aa3a24392965d09cf84e5c8d3bf098d6a4f';   // 打新 Created（13 字段）
-export const V3_TRADE = env('GANG_V3_TRADE', '0') === '1';
+export const V3_TRADE = env('GANG_V3_TRADE', '1') === '1';   // 主网真实交易已核对过（2026-10-27），默认开启；GANG_V3_TRADE=0 关闭
+export const OFFICIAL_V3_PAD = '0x15cfd2dc8278fb87a1783ef42111618e20874365';   // gang.fun 官方主网 GangLaunchpad（/api/v3/config 的 pad，owner = gang 多签）
 // gang 的部署钱包和平台多签（仓库 config/GangDeployRefs.sol、MainnetAddresses.sol）
 const OFFICIAL = new Set(['0x4eedcdf5fab775e10c0d09951b6f59ab81ba19d3', '0x2866369f7acefc9760bde7779362fae5cd68b41e']);
 export const v3PadAbi = new ethers.Interface([
@@ -27,7 +28,7 @@ export const v3PadAbi = new ethers.Interface([
 const FILE = dataFile('gang-v3-pads.json');
 const load = () => { try { return JSON.parse(readFileSync(FILE, 'utf8')).pads || []; } catch { return []; } };
 // 当前认可的 V3 内盘（小写）。数组本身会被别的模块直接引用（订阅过滤器），只往里 push，不换对象
-export const V3_PADS = [...new Set([...String(env('GANG_V3_PAD', '')).split(',').map((s) => s.trim().toLowerCase()).filter((a) => /^0x[0-9a-f]{40}$/.test(a)), ...load()])];
+export const V3_PADS = [...new Set([OFFICIAL_V3_PAD, ...String(env('GANG_V3_PAD', '')).split(',').map((s) => s.trim().toLowerCase()).filter((a) => /^0x[0-9a-f]{40}$/.test(a)), ...load()])];
 export const isV3Pad = (a) => !!a && V3_PADS.includes(String(a).toLowerCase());
 export const v3Events = new EventEmitter();   // 'pad' (address)：发现新的 V3 内盘
 

@@ -10,6 +10,19 @@ try {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
   }
 } catch { /* 没有 .env 就算了 */ }
+// Windows 上用记事本 / PowerShell 复制 .env 时，UTF-8 中文可能被当成 GBK 又存一遍（「币安」变「甯佸畨」）。
+// 能按 GBK 编回字节、而且这些字节正好是合法 UTF-8 的，就还原；正常中文几乎不可能满足这个条件
+let gbkMap = null;
+export function fixMojibake(s) {
+  if (typeof s !== 'string' || !/[\u4e00-\u9fff]/.test(s)) return s;
+  try {
+    if (!gbkMap) { gbkMap = new Map(); const dec = new TextDecoder('gbk'); for (let a = 0x81; a <= 0xfe; a++) for (let b = 0x40; b <= 0xfe; b++) { const ch = dec.decode(new Uint8Array([a, b])); if (ch.length === 1 && ch !== '\ufffd' && !gbkMap.has(ch)) gbkMap.set(ch, [a, b]); } }
+    const bytes = [];
+    for (const ch of s) { const c = ch.codePointAt(0); if (c < 0x80) bytes.push(c); else { const g = gbkMap.get(ch); if (!g) return s; bytes.push(...g); } }
+    const out = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes));
+    return out !== s && /[\u4e00-\u9fff]/.test(out) ? out : s;
+  } catch { return s; }
+}
 export const env = (k, d) => (process.env[k] === undefined || process.env[k] === '' ? d : process.env[k]);   // 空值当没填
 
 export const MODE = env('MODE', 'sim').toLowerCase();               // sim | live
@@ -25,7 +38,7 @@ export const DATA_DIR = env('DATA_DIR', '') ? pathResolve(String(env('DATA_DIR',
 export const dataFile = (name) => pathToFileURL(pathJoin(DATA_DIR, name));
 // 多钱包：本后端是第几个钱包（WALLET_SLOT），以及要一起下单的其他钱包后端（WALLET_PEERS，JSON 数组：[{ slot, label, url, bawDir }]）
 export const WALLET_SLOT = Number(env('WALLET_SLOT', '1'));
-export const WALLET_PEERS = (() => { try { return JSON.parse(env('WALLET_PEERS', '[]')) || []; } catch { return []; } })();
+export const WALLET_PEERS = (() => { try { return (JSON.parse(env('WALLET_PEERS', '[]')) || []).map((p) => (p && p.label ? { ...p, label: fixMojibake(p.label) } : p)); } catch { return []; } })();
 export const BAW_DIR = env('BINANCE_BAW_DIR', '');
 // 本后端只允许用这个钱包地址（可选）。baw 登录成别的账号时拒绝使用，防止拿错账号下单
 export const EXPECT_WALLET = env('WALLET_ADDRESS', '').toLowerCase();   // baw 的登录信息目录（空 = 默认 ~/.baw）
@@ -44,7 +57,7 @@ export const RPC_LIST = [...NODEREAL_URLS, RPC_URL, 'https://bsc-dataseed.bnbcha
 export const BAW_BIN = env('BAW_BIN', 'baw');
 export const BINANCE_CHAIN_ID = Number(env('BINANCE_CHAIN_ID', 56));
 export const BAW_SLIPPAGE_UNIT = env('BAW_SLIPPAGE_UNIT', 'percent'); // percent: 传 20 表示 20%；fraction: 传 0.2
-export const WALLET_LABEL = env('WALLET_LABEL', '币安 Agentic 钱包');
+export const WALLET_LABEL = fixMojibake(env('WALLET_LABEL', '币安 Agentic 钱包'));
 
 export const BNB_NATIVE = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
 export const ZERO = '0x0000000000000000000000000000000000000000';
