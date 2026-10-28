@@ -43,6 +43,9 @@ const TAX_TO_FILE = dataFile('gang-tax-recipients.json');
 // xOPAI：USDT/xOPAI 费率 0.067%，DexScreener 只有一个 $0.07 的 V2 池，按它算价格偏高约 13%（2026-10-28 核对）
 const CL_POOL_MANAGER = '0xa0FfB9c1CE1Fe56963B0321B32E7A0302114058b';
 const INFINITY_POOLS = { '0x7ddef360f3c2db4cc41c3967984fefa2598cc9a6': { id: '0x50e12feaf029b39e3ead3a56942a212e550b2e4face238e936bd4a6b8d76ff80', stable: 0 } };
+// 普通（无门槛）Flap Portal 盘的计价币：每分钟查价时顺便从 DexScreener 找出以它计价的 Flap 盘（dexId flapsh），按「Flap · 普通盘」收录进列表，不用手动搜索地址
+// MRVLB（Marvell 币股 0x16cd…2c76，主池 PancakeSwap V3 MRVLB/USDT 约 $84k）：2026-10-28 一批「漫威」梗币以它计价，Portal 没开原生 BNB 自动换（nativeSwap=0）→ 买卖走币安聚合
+const FLAP_PLAIN_QUOTES = new Set(['0x16cd4fe7e8880ecc3ba222795229e20489fc2c76']);
 async function infinityPriceUsd(provider, addr) {
   const p = INFINITY_POOLS[String(addr).toLowerCase()]; if (!p) return 0;
   const m = new ethers.Contract(CL_POOL_MANAGER, ['function getSlot0(bytes32) view returns (uint160,int24,uint24,uint24)'], provider);
@@ -118,8 +121,9 @@ export class LiveMarket extends EventEmitter {
     const blk = async () => { const t0 = Date.now(); try { this.block = await this.provider.getBlockNumber(); this.rpcMs = Date.now() - t0; this.rpcError = null; } catch (e) { this.rpcError = e.shortMessage || e.message; } };
     const px = async () => { try { const j = await (await fetch(BNB_PRICE_URL)).json(); if (+j.price) this.bnbUsd = +j.price; } catch { /* 保留上次 */ } };
     const qpx = async () => { const qs = new Set([GANG_TOKEN]); for (const t of this.tokens.values()) if (t.quoteAddress && t.quote && !['BNB','WBNB','USDT','USDC','USD1'].includes(String(t.quote).toUpperCase())) qs.add(String(t.quoteAddress).toLowerCase());
+      for (const a of FLAP_PLAIN_QUOTES) qs.add(a);
       for (const a of qs) { if (INFINITY_POOLS[a]) { try { const v = await infinityPriceUsd(this.provider, a); if (v > 0) { this.qUsd[a] = v; continue; } } catch { /* 读不到就照旧走 DexScreener */ } }
-        try { const j = await (await fetch('https://api.dexscreener.com/latest/dex/tokens/' + a, { signal: AbortSignal.timeout(6000) })).json(); const ps = (j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === a && +x.priceUsd).sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0)); if (ps[0]) { this.qUsd[a] = +ps[0].priceUsd; if (a === GANG_TOKEN) this.gangMcap = +ps[0].marketCap || +ps[0].fdv || +ps[0].priceUsd * 1e9; } } catch { /* 保留上次 */ }
+        try { const j = await (await fetch('https://api.dexscreener.com/latest/dex/tokens/' + a, { signal: AbortSignal.timeout(6000) })).json(); const ps = (j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === a && +x.priceUsd).sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0)); if (FLAP_PLAIN_QUOTES.has(a)) this.flapPlainScan(a, j.pairs).catch(() => {}); if (ps[0]) { this.qUsd[a] = +ps[0].priceUsd; if (a === GANG_TOKEN) this.gangMcap = +ps[0].marketCap || +ps[0].fdv || +ps[0].priceUsd * 1e9; } } catch { /* 保留上次 */ }
         if (!(this.qUsd[a] > 0)) { try { const v = await poolPriceUsd(this.provider, a, this.bnbUsd); if (v > 0) this.qUsd[a] = v; } catch { /* 下次再试 */ } } } };   // DexScreener 没给出价格：读链上池子兜底
     this.qpx = qpx; blk(); px(); setTimeout(qpx, 3000);
     this.timers = [setInterval(blk, 3000), setInterval(px, 30_000), setInterval(qpx, 60_000), setInterval(() => this.warm(), 8000), setInterval(() => this.flapHolders(), 90_000), setInterval(() => this.flapNftTick(), 6000)];
@@ -231,6 +235,18 @@ export class LiveMarket extends EventEmitter {
     }
   }
 
+  // 以 FLAP_PLAIN_QUOTES 计价的普通 Flap 盘：DexScreener 的 flapsh 交易对另一边就是梗币（…7777）；新的逐个问 Portal（flapNft.check plain），是内盘 / 已迁移的就收录
+  async flapPlainScan(a, pairs) {
+    if (this.plainBusy) return; this.plainBusy = true;
+    try {
+      for (const x of pairs || []) {
+        if (x.chainId !== 'bsc' || x.dexId !== 'flapsh') continue;
+        const m = (x.baseToken?.address?.toLowerCase() === a ? x.quoteToken : x.baseToken)?.address?.toLowerCase();
+        if (!m || !ethers.isAddress(m) || this.tokens.has(m) || this.flapNft.reg?.tokens?.[m]) continue;
+        await this.flapNft.check(m, { plain: true, at: +x.pairCreatedAt || undefined }).catch(() => null);
+      }
+    } finally { this.plainBusy = false; }
+  }
   // Flap Portal 门槛盘：名字 / 代号 / 图标（metaURI 是 IPFS CID）+ 门槛 NFT 信息 + 内盘状态
   async upsertFlapNft(g, { restore } = {}) {
     const k = g.token, existed = this.tokens.has(k);

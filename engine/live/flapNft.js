@@ -269,7 +269,7 @@ export class FlapNft extends EventEmitter {
 
   // 不在登记表里的地址（钱包 2 后端没订阅到、手动搜索的）：直接问 Portal，是门槛盘就补登记。
   // plain = 手动粘贴地址：没有门槛的普通 Portal 盘（如以 NOKB 计价的 NOKIA 0x1871…7777）也收录，按「门槛已取消」同一套买卖（Portal 自己做 BNB⇄报价币）
-  async check(token, { plain = false } = {}) {
+  async check(token, { plain = false, at: atHint } = {}) {
     const k = String(token).toLowerCase(); if (this.reg.tokens[k]) return this.reg.tokens[k];
     let nft; try { nft = await this.gateOf(k); } catch { return null; }
     if (!nft || nft === ZERO) {
@@ -277,7 +277,8 @@ export class FlapNft extends EventEmitter {
       let st; try { st = await this.state(k); } catch { return null; }
       if (st.status !== 1 && st.status !== 4) return null;   // 不是 Portal 的币（读出来全 0）
       // 普通盘没有 FlapNFTGated 事件可以定创建区块：按 DexScreener 的创建时间估一个（往前多留 300 块），免得 history() 从 45 万块前开始补；查不到就只补最近约 5000 块
-      const at = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + k, { signal: AbortSignal.timeout(5000) }).then((r) => r.json())
+      // atHint：调用方已知的创建时间（自动发现时用 DexScreener flapsh 交易对的 pairCreatedAt，那里梗币是报价那一边，下面按 baseToken 查不到）
+      const at = atHint > 0 ? atHint : await fetch('https://api.dexscreener.com/latest/dex/tokens/' + k, { signal: AbortSignal.timeout(5000) }).then((r) => r.json())
         .then((j) => Math.min(...(j.pairs || []).filter((x) => x.chainId === 'bsc' && x.baseToken?.address?.toLowerCase() === k && x.pairCreatedAt > 0).map((x) => x.pairCreatedAt))).catch(() => Infinity);
       let block = null;
       try {
