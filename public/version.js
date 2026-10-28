@@ -72,6 +72,7 @@ function paint() {
   if (!V) return;
   const upd = V.hasUpdate;
   btn.innerHTML = `TMTN ${short(V.running)}${upd ? '<i class="vm-new">NEW</i>' : ''}`;
+  document.querySelectorAll('.brand-v').forEach((el) => { el.textContent = short(V.running); });   // 顶栏和右下角都显示正在运行的版本（同一个来源），不用 index.html 里写死的
   btn.classList.toggle('on', open);
   btn.title = upd ? `有新版本 ${V.latest}，点开查看` : '版本管理：检查更新、回退历史版本';
   if (!open) return;
