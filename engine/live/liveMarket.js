@@ -281,7 +281,7 @@ export class LiveMarket extends EventEmitter {
     if (name || symbol) this.emit('detail', t.address);
     // 读到的名字 / 代号 / 图标地址存进门槛盘登记表（data/flapNftGated.json），重启后直接用，不再依赖这一次读取成功
     const g = this.flapNft.reg?.tokens?.[t.address];
-    this.loadMeta(t, ipfsUrl(meta) || g?.meta?.uri);
+    this.loadMeta(t, ipfsUrl(meta) || ipfsUrl(g?.meta?.uri));
     if (g && (name || symbol || meta)) { const m = { ...g.meta, ...(name && { name }), ...(symbol && { symbol }), ...(meta && { uri: ipfsUrl(meta) }) }; if (JSON.stringify(m) !== JSON.stringify(g.meta || {})) { g.meta = m; this.flapNft.save(); } }
   }
   // 计价币代号 / 小数位：读链上，读到就按地址缓存（所有盘共用）；读失败（节点限流）不缓存，下次再读。以前只在计价币地址第一次出现时读一次，失败就一直显示「?」（Marvel Dog / MRVLB 2026-10-28）
@@ -354,7 +354,7 @@ export class LiveMarket extends EventEmitter {
     if (t.metaUrl === url && (t.metaOk || Date.now() - (t.metaAt || 0) < Math.min(600_000, 15_000 * 2 ** (t.metaTries || 0)))) return;
     if (t.metaUrl !== url) Object.assign(t, { metaUrl: url, metaOk: false, metaTries: 0 }); else t.metaTries = (t.metaTries || 0) + 1;
     t.metaAt = Date.now();
-    this.meta.get(url, ({ metaCreator, ...m }) => { Object.assign(t, m); t.metaOk = true; if (!t.creator && metaCreator) t.creator = metaCreator; this.emit('detail', t.address); });   // 创建者：链上没给的（Flap Portal 盘）用元数据里的
+    this.meta.get(url, ({ metaCreator, ...m }) => { Object.assign(t, m); t.metaOk = true; if (!t.creator && metaCreator) t.creator = metaCreator; this.emit('detail', t.address); }, { front: !t.metaTries });   // 创建者：链上没给的（Flap Portal 盘）用元数据里的
   }
 
   // 搜索粘贴地址：已在列表直接返回；否则查 Four 链上，查到就加进列表；都不是内盘时按普通外盘代币收录（lookupDex）

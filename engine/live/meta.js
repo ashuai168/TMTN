@@ -8,6 +8,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export function ipfsUrl(v) {
   const s = String(v || '').trim();
   if (!s) return null;
+  if (/^https?:\/\/(ipfs\.io|gateway\.pinata\.cloud|cloudflare-ipfs\.com|dweb\.link)\/ipfs\//i.test(s)) return IPFS + s.replace(/^https?:\/\/[^/]+\/ipfs\//i, '');   // 公共网关（ipfs.io 几乎总是 429）换成 Flap 自己的网关
   if (/^https?:\/\//i.test(s)) return s;
   if (s.startsWith('ipfs://')) return IPFS + s.slice(7).replace(/^ipfs\//, '');
   if (s.startsWith('/')) return 'https://static.four.meme' + s;
@@ -15,16 +16,18 @@ export function ipfsUrl(v) {
 }
 
 export class MetaFetcher {
-  constructor() { this.cache = new Map(); this.queue = []; this.active = 0; this.pausedUntil = 0; }
+  // 429 只暂停那一个域名（pausedUntil 按 host 记）：以前任何一个网关 429 就把所有元数据请求停 60 秒，任务还占着并发位等，
+  // 重启后几十个读不到的旧盘反复重试，新盘的图标排几分钟（七仔 0x5bae…7777 2026-10-28）。被暂停的域名直接算这次失败，由调用方按退避再来
+  constructor() { this.cache = new Map(); this.queue = []; this.active = 0; this.pausedUntil = new Map(); }
 
-  // url → 回调 { image, description, website, twitter, telegram }；同一个 url 只请求一次
-  get(url, cb) {
+  // url → 回调 { image, description, website, twitter, telegram }；同一个 url 只请求一次。front = 插到队首（新盘第一次请求，不排在旧盘重试后面）
+  get(url, cb, { front = false } = {}) {
     if (!url) return;
     const hit = this.cache.get(url);
     if (hit && hit !== 'pending') return cb(hit);
     if (hit === 'pending') return;
     this.cache.set(url, 'pending');
-    this.queue.push({ url, cb });
+    this.queue[front ? 'unshift' : 'push']({ url, cb });
     this.pump();
   }
 
@@ -36,11 +39,12 @@ export class MetaFetcher {
   }
 
   async run({ url, cb }) {
+    let host = ''; try { host = new URL(url).host; } catch { /* 下面 fetch 会失败 */ }
     for (let k = 0; k < 3; k++) {
-      const wait = this.pausedUntil - Date.now(); if (wait > 0) await sleep(wait);
+      if ((this.pausedUntil.get(host) || 0) > Date.now()) break;
       try {
         const res = await fetch(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
-        if (res.status === 429) { this.pausedUntil = Date.now() + 60_000; continue; }
+        if (res.status === 429) { this.pausedUntil.set(host, Date.now() + 60_000); break; }
         if (!res.ok) break;
         const j = await res.json();
         const links = j.links || {};
