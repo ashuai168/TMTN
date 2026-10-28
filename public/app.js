@@ -303,6 +303,7 @@ function loadPrefs() {
   if (['curve', 'soon', 'dex', 'mine'].includes(p.listTab)) S.listTab = p.listTab;
   if (Array.isArray(p.chips)) S.chips = new Set(p.chips);
   if (p.bottomTab && !['trades', 'flow'].includes(p.bottomTab)) S.bottomTab = p.bottomTab; if (+p.interval) S.interval = +p.interval; if (p.metric) S.metric = p.metric;
+  try { const iv = +localStorage.getItem('klineIv'); if (IVS.includes(iv)) { S.interval = iv; S.ivPinned = true; } } catch { /* ignore */ }   // 手动点过的周期：刷新/换币都沿用，不再自动挑
   if (['bnb', 'pct'].includes(p.amtMode)) S.amtMode = p.amtMode;
   return p;
 }
@@ -341,7 +342,7 @@ setInterval(() => { const ca = parseRoute().ca; if (S.view !== 'pulse' && ca && 
 // 自动选周期：选中一个币后的前 15 秒（历史 K 线到齐前后），挑能画出 ≥60 根蜡烛的最大周期；稀疏的币就用 15s / 1m，不会全是细线。用户手动点过周期就不再自动改
 const IVS = [1, 5, 15, 60, 300, 900, 3600];
 function autoInterval() {
-  if (!S.detail?.candles?.length || S.ivManual === S.selected || Date.now() > (S.ivAutoUntil || 0)) return;
+  if (S.ivPinned || !S.detail?.candles?.length || S.ivManual === S.selected || Date.now() > (S.ivAutoUntil || 0)) return;
   const cs = S.detail.candles; const count = (iv) => new Set(cs.map((c) => Math.floor(c.t / iv))).size;
   const iv = [...IVS].reverse().find((x) => count(x) >= 60) || IVS[0];
   if (iv !== S.interval) { S.interval = iv; $$('#intervals button').forEach((x) => x.classList.toggle('active', +x.dataset.i === iv)); resetView(); }
@@ -1480,8 +1481,8 @@ $('#slip').addEventListener('click', async (e) => {
 $('#amtMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.amtMode = b.dataset.a; $$('#amtMode button').forEach((x) => x.classList.toggle('active', x === b)); S.pctBnb = 0; $('#amount').value = S.amtMode === 'pct' ? '2' : ''; renderRight(); refreshQuote(); });
 $('#listTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.listTab = b.dataset.t; $$('#listTabs button').forEach((x) => x.classList.toggle('active', x === b)); syncUrl(); lastList = 0; scheduleRender(); });
 $('#chips').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; if (b.id === 'listFunnel') { const k = LIST_COL[S.listTab]; if (k) tfModal(k); return; } const c = b.dataset.c; S.chips.has(c) ? S.chips.delete(c) : S.chips.add(c); b.classList.toggle('active'); lastList = 0; scheduleRender(); });
-$('#intervals').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.interval = +b.dataset.i; S.ivManual = S.selected; $$('#intervals button').forEach((x) => x.classList.toggle('active', x === b)); resetView(); drawChart(); });
-$('#metric').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.metric = b.dataset.m; $$('#metric button').forEach((x) => x.classList.toggle('active', x === b)); drawChart(); });
+$('#intervals').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.interval = +b.dataset.i; S.ivManual = S.selected; S.ivPinned = true; try { localStorage.setItem('klineIv', String(S.interval)); } catch { /* ignore */ } savePrefs(); $$('#intervals button').forEach((x) => x.classList.toggle('active', x === b)); resetView(); drawChart(); });
+$('#metric').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.metric = b.dataset.m; $$('#metric button').forEach((x) => x.classList.toggle('active', x === b)); savePrefs(); drawChart(); });
 $('#bottomTabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; S.bottomTab = b.dataset.b; $$('#bottomTabs button').forEach((x) => x.classList.toggle('active', x === b)); renderBottom(); });
 $('#openSettings').addEventListener('click', openSettings);
 function openSettings() { S.settingsPlat = S.platform; renderSettings(); $('#settingsModal').classList.remove('hidden'); }
