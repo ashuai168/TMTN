@@ -380,7 +380,7 @@ td.addr { color: var(--muted); }
 .pcard .qb.qb1 { height: 34px; padding: 0 16px; font: var(--fw-strong) 14px var(--mono); border-radius: 8px; border-width: 1.5px; }
 
 /* 头像：正方形无圆角 */
-.logo, .logo.lg, .logo.xs, .logo img, .logo-peek .pk-img { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) .logo, :root:not([data-theme="calm"]) .logo.lg, :root:not([data-theme="calm"]) .logo.xs, :root:not([data-theme="calm"]) .logo img, :root:not([data-theme="calm"]) .logo-peek .pk-img { border-radius: 0 !important; }
 
 /* 买 1% 按钮：实心填充 */
 .pcard .qb.qb1 { background: #0ecb81 !important; color: #06150e !important; border-color: #0ecb81 !important; }
@@ -462,7 +462,7 @@ td.addr { color: var(--muted); }
 /* 侧栏头像放大到约卡片高度（方形） */
 #tokenList.legacy .tcard { grid-template-columns: 84px minmax(0, 1fr); align-items: center; }
 #tokenList.legacy .tcard > .logo, #tokenList.legacy .tcard > .logo-w, #tokenList.legacy .tcard > :first-child.logo { width: 84px !important; height: 84px !important; font-size: 28px; border-radius: 0 !important; overflow: visible; }
-#tokenList.legacy .tcard > .logo img { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) #tokenList.legacy .tcard > .logo img { border-radius: 0 !important; }
 
 /* 战壕卡片右侧整块是买入按钮 */
 .tc-r.buyable { cursor: pointer; transition: background .12s, border-color .12s, transform .06s; user-select: none; }
@@ -676,7 +676,7 @@ body.fav-on .favbar { display: flex; }
 .panel.left .tcard .blk { font-size: 16px; } .panel.left .tcard .blk:hover { background: rgba(246, 70, 93, .1); }
 
 /* 战壕全部直角（只限战壕页面） */
-#pulse *, #pulse *::before, #pulse *::after { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) #pulse *, :root:not([data-theme="calm"]) #pulse *::before, :root:not([data-theme="calm"]) #pulse *::after { border-radius: 0 !important; }
 .tc-fav, .tc-hide, .panel.left .tcard .blk { padding: 0; line-height: 0; } .tc-fav svg, .tc-hide svg, .blk svg { display: block; pointer-events: none; }
 .tc-fav { color: #6b7280; } .tc-fav.on { color: #f0b90b; }
 .fav-star { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; line-height: 0; vertical-align: middle; margin-right: 4px; } .fav-star svg { display: block; pointer-events: none; }
@@ -687,8 +687,8 @@ body.fav-on .favbar { display: flex; }
 #tokenList.tl-trench > .tcard { height: 112px; min-height: 112px; flex: none; box-sizing: border-box; overflow: hidden; }
 #tokenList.tl-trench > .tcard.sel { outline: 1px solid rgba(240, 185, 11, .7); outline-offset: -1px; }
 #tokenList.tl-trench > .tcard .tc-dev::before { content: 'Dev '; color: #6b7280; }
-.panel.left *, .panel.left *::before, .panel.left *::after { border-radius: 0 !important; }
-#tokenList *, #tokenList *::before, #tokenList *::after, #pulse .logo, .panel.left .seg *, .panel.left .seg { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) .panel.left *, :root:not([data-theme="calm"]) .panel.left *::before, :root:not([data-theme="calm"]) .panel.left *::after { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) #tokenList *, :root:not([data-theme="calm"]) #tokenList *::before, :root:not([data-theme="calm"]) #tokenList *::after, :root:not([data-theme="calm"]) #pulse .logo, :root:not([data-theme="calm"]) .panel.left .seg *, :root:not([data-theme="calm"]) .panel.left .seg { border-radius: 0 !important; }
 @container (max-width: 380px) { #tokenList.tl-trench > .tcard { grid-template-columns: 56px minmax(0, 1fr) 30%; gap: 6px; } #tokenList.tl-trench .tc-l .logo { width: 56px !important; height: 56px !important; } }
 @container (max-width: 300px) { #tokenList.tl-trench > .tcard { grid-template-columns: 48px minmax(0, 1fr); } #tokenList.tl-trench .tc-r { display: none; } }
 
@@ -717,7 +717,7 @@ body.fav-on .favbar { display: flex; }
 /* 一键买卖浮窗 */
 .qbp { position: fixed; right: 700px; top: 150px; z-index: 8000; width: 300px; background: #0f1218; border: 1px solid #2a3240; box-shadow: 0 16px 40px rgba(0, 0, 0, .55); font-size: 12px; user-select: none; }
 .qbp.hidden { display: none; }
-.qbp * { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) .qbp * { border-radius: 0 !important; }
 .qbp-h { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-bottom: 1px solid #222a35; cursor: move; background: #121722; }
 .qbp-x { width: 24px; height: 22px; border: 1px solid #2a3240; color: var(--muted); } .qbp-x:hover { color: var(--text); }
 .qbp-sec { padding: 8px; border-bottom: 1px solid #1c232d; }
@@ -787,7 +787,7 @@ body.fav-on .favbar { display: flex; }
 .chartrow { flex: 1; min-height: 140px; display: flex; gap: 8px; min-width: 0; }
 .chartrow > .chartbox { flex: 1 1 auto; min-width: 0; }
 .actbox { flex: 0 0 360px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; font-size: 12px; }
-.actbox, .actbox * { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) .actbox, :root:not([data-theme="calm"]) .actbox * { border-radius: 0 !important; }
 .act-h { display: flex; align-items: center; gap: 8px; padding: 8px 10px 6px; }
 .act-th, .act-r { display: grid; grid-template-columns: 1fr 0.9fr 1.3fr 52px; gap: 6px; padding: 0 10px; align-items: center; }
 .act-th { height: 24px; color: var(--muted); font-size: 11px; border-bottom: 1px solid var(--line); }
@@ -1188,7 +1188,7 @@ body.trkp-on #snipe { margin-left: calc(var(--trkpW, 340px) + 8px); }
 .hold-gang.hidden { display: none; }
 .hold-gang .lctrl { margin-left: auto; }
 .hold-gang .tlist { flex: 1; min-height: 0; overflow-y: auto; gap: 4px; padding: 4px 6px; background: #0b0b0f; overflow-anchor: none; }
-#holdGang *, #holdGang *::before, #holdGang *::after { border-radius: 0 !important; }
+:root:not([data-theme="calm"]) #holdGang *, :root:not([data-theme="calm"]) #holdGang *::before, :root:not([data-theme="calm"]) #holdGang *::after { border-radius: 0 !important; }
 .hg-open { position: fixed; left: 10px; bottom: 34px; z-index: 30; padding: 6px 10px; font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--line2); cursor: pointer; }
 body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .hg-open.hidden { display: none; }
