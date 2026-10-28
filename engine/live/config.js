@@ -92,5 +92,6 @@ export const FSI_BASE = 'https://fsi.taxed.fun/fsi/v1';
 export const BNB_PRICE_URL = 'https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT';
 
 // Four 代币迁移（发射）后自动把整仓转到指定钱包
-// 买入后自动「预授权」（无限额 approve）。默认关闭：无限额授权会被币安风控标成高风险，需要在 App 里确认并锁住钱包；卖出时会按本次数量授权
-export const PREAPPROVE = env('PREAPPROVE', '0') === '1';
+// 买入成交后在后台按固定额度（卖出 = 余额 × 1.01，报价币 ≈ 2 倍单笔上限，不是无限额）预先授权，第一次卖出不用再等授权。
+// 还要页面上「预先授权」开着才会做（默认开）。设成 0 = 只在卖出 / 买入需要时才授权
+export const PREAPPROVE_AFTER_BUY = env('PREAPPROVE_AFTER_BUY', '1') === '1';

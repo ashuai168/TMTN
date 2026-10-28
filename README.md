@@ -111,7 +111,7 @@ scripts/add-wallet.sh --peers --write-env         # 写进 .env 的 WALLET_PEERS
 | `PORT` | `8787` | 端口 |
 | `LIVE_TRADE` | `0` | `1` = 实盘真实下单（只接受手动点击的订单）；`0` = 只报价 / 预演 |
 | `MAX_TRADE_BNB` | `0.5` | 单笔买入上限（BNB）的初始值，页面里改过后以 `data/live-settings.json` 为准；`0` = 不限 |
-| `PREAPPROVE` | `0` | 旧功能：买入后无限额预授权，**不建议打开** |
+| `PREAPPROVE_AFTER_BUY` | `1` | 买入成交后后台按固定额度预先授权（卖出 = 余额 × 1.01，报价币 ≈ 2 倍单笔上限，不是无限额），第一次卖出不用等授权；还要页面「预先授权」开着。`0` = 只在需要时授权 |
 | `NODEREAL_RPC` | （空） | 私有 RPC（例如 NodeReal，含 key，只放 `.env`）。填了就作为主节点：读链、查确认、扫 Four 事件（一次约 5 万块），并通过它的 WSS 订阅 Gang 新盘创建事件；公共节点自动备用 |
 | `NODEREAL_KEYS` | （空） | 多个 NodeReal key，逗号分隔（如 `key1,key2`，只放 `.env`）。轮流使用，被限流 / 额度用完的 key 冷却 5 分钟；页面只显示「NodeReal #1 / #2」，不显示 key |
 | `RPC_URL` | 有 `NODEREAL_RPC` 用它，否则 `https://bsc-dataseed.bnbchain.org` | 读链用的 BSC RPC |

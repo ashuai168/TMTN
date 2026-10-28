@@ -3,7 +3,7 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes } from 'node:crypto';
 import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
-import { PREAPPROVE, QUOTE_TOKENS, dataFile, EXPECT_WALLET } from './config.js';
+import { PREAPPROVE_AFTER_BUY, QUOTE_TOKENS, dataFile, EXPECT_WALLET } from './config.js';
 import { setApprovalCtx, capFor, capLabel, sendApproval, listApprovals } from './approvals.js';
 import { DRY_RUN, AUTH_SIMULATE_LOGGED_OUT, MAX_TRADE_BNB, LIVE_SETTINGS_FILE, BNB_NATIVE, BINANCE_CHAIN_ID, WALLET_LABEL } from './config.js';
 const RULE_FILE = dataFile('tokenRules.json');
@@ -12,11 +12,11 @@ import { ethers } from 'ethers';
 const POS_FILE = dataFile('positions.json');
 import { Portal } from './portal.js';
 import * as openFour from './openFour.js';
-import { GangTrade } from './gangTrade.js';
+import { GangTrade, GANG_PAD } from './gangTrade.js';
 import { GangV2 } from './gangV2Pads.js';
 import { V3_TRADE } from './gangV3.js';
 import { fairBuy, fairSell } from './gangFair.js';
-import { FlapNft } from './flapNft.js';
+import { FlapNft, FLAP_PORTAL } from './flapNft.js';
 import { DexDirect } from './dexDirect.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
 import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt, assertLiquid, isQuoteToken, routeTokens, dexPrice } from './quoteRoutes.js';
@@ -58,7 +58,7 @@ export class LiveTrader extends EventEmitter {
       sellToBnb: loadSaved().sellToBnb !== false,
       preApproveCap: loadSaved().preApproveCap !== false, walletOn: loadSaved().walletOn || {} };   /* 多钱包「参与下单」开关，重启后保留 */   // 预先授权（较大固定额度，用户可在页面关闭）；关掉 = 只授权本次数量   // 卖出后自动把报价币（BNCB / GANG / 币股…）换回 BNB，默认开，可在交易设置里关   // 一键买卖面板的预设金额 / 比例（页面上编辑，存 live-settings.json）
     this.claimable = []; this.claimRetry = new Map(); this.claiming = new Set(); this.inflight = new Set(); this.tokenQ = new Map(); this.dupAt = new Map();
-    this.preapproving = new Set();
+    this.preapproving = new Map();   // 钱包:代币 → 后台预先授权的 Promise（卖出时先等它）
     this.on('order', (o) => { try { latency.record(o, { gasLevel: this.settings.gas, rpc: this.market.provider?._getConnection?.().url || null }); } catch {} });
     this.status = { connected: false, error: null, dryRun: DRY_RUN, maxTradeBnb: loadMaxTrade(), auth: { state: 'checking', agentId: null, address: null, checkedAt: 0, message: '' }, login: null };
   }
@@ -872,6 +872,9 @@ export class LiveTrader extends EventEmitter {
     } else {
       const pct = Math.min(100, order.amount);
       if (this.status.auth.state !== 'ok') throw new Error('币安钱包未登录，请在终端运行 baw auth signin');
+      // 买入后的后台预先授权还没上链：先等它（最多 20 秒），免得再发一笔授权
+      const pw = this.preapproving.get(`${w.address}:${t.address}`.toLowerCase());
+      if (pw) { const t0 = Date.now(); await Promise.race([pw, sleep(20_000)]); step('等后台预先授权上链', Date.now() - t0); }
       if (this.fairMinting(t)) {
         r = await fairSell({ provider: this.market.provider, contractCall: baw.contractCall, wallet: w.address, token: t.address, pct, step });
       } else if (this.useGangV2(t)) {
@@ -902,36 +905,56 @@ export class LiveTrader extends EventEmitter {
     Object.assign(order, { status: 'filled', dryRun: false, venue: r.venue, tx: r.txHash, txs: r.hashes, reason: r.note || null, latencyMs: Date.now() - order.ts });
     this.quoteCache.clear(); this.refreshBalance();
     this.emit('order', order);
-    if (PREAPPROVE && side === 'buy' && this.useOpenFour(t)) setTimeout(() => this.preApprove(t, w).catch(() => {}), 0);
+    if (side === 'buy') this.prewarmApprovals(t, w);
     return order;
   }
 
-  // 买入成交后后台预授权：把代币 max 授权给卖出要用的合约（OpenFour 内盘 = Core），卖出时就不用再等授权。
-  // Flap Portal 卖的是曲线份额不需要授权；外盘走 baw market-order，由 baw 自己处理，所以这里只处理 OpenFour。
-  async preApprove(t, w) {
-    const key = t.address.toLowerCase();
+  // 买入成交后后台「预先授权」。只在设置里「预先授权」开着时做，额度仍是固定额度、不是无限额：
+  // - 卖出：把这次买到的代币授权给卖出要用的合约，额度 = 当前余额 × 1.01（Gang V2/V3 pad、Gang V1 pad、Flap 门槛盘 Portal、OpenFour Core）
+  // - 报价币（Gang V2/V3 盘）：剩余额度不到固定额度一半时补到约 2 倍单笔上限
+  // 这样第一次卖出 / 下一次买入都不用再等授权。Flap 普通 Portal 卖的是曲线份额、外盘走 baw，都不需要授权。失败只记一笔失败的授权记录，不影响买单。
+  async sellSpender(t, w) {
+    if (this.useGangV2(t)) return (await this.gangV2.curve(t.address)).pad;
+    if (this.useGang(t)) return GANG_PAD;
+    if (this.useFlapNft(t)) return FLAP_PORTAL;
+    if (this.useOpenFour(t)) return (await openFour.info(t.address, w.address))?.contracts?.core || null;
+    return null;
+  }
+  prewarmApprovals(t, w) {
+    if (!PREAPPROVE_AFTER_BUY || this.settings.preApproveCap === false || !w?.address) return;
+    const key = `${w.address}:${t.address}`.toLowerCase();
     if (this.preapproving.has(key)) return;
-    this.preapproving.add(key);
-    const order = { id: randomBytes(5).toString('hex'), ts: Date.now(), walletId: w.id, wallet: w.label, token: t.address, symbol: t.symbol, platform: t.platform,
-      side: 'approve', amount: 0, source: '预授权', via: 'preapprove', status: 'pending', steps: [], dryRun: false, route: 'OpenFour Core 预授权（max）' };
-    const step = (name, ms) => { order.steps.push({ name, ms: Math.round(ms) }); };
-    try {
-      const t0 = Date.now();
-      const i = await openFour.info(t.address, w.address);
-      const core = i?.contracts?.core;
-      if (!core) throw new Error('没拿到 Core 地址');
-      const erc = new ethers.Contract(t.address, ['function allowance(address,address) view returns (uint256)', 'function approve(address,uint256) returns (bool)'], this.market.provider);
-      const cur = await erc.allowance(w.address, core);
-      step(`查询授权 ${cur > 0n ? '已有' : '0'}`, Date.now() - t0);
-      if (cur >= ethers.MaxUint256 / 2n) { this.preapproving.delete(key); return; }   // 已足够，不发交易、不记录
+    const job = this.prewarmJob(t, w).catch(() => {}).finally(() => this.preapproving.delete(key));
+    this.preapproving.set(key, job);
+  }
+  async prewarmJob(t, w) {
+    const erc = new ethers.Interface(['function allowance(address,address) view returns (uint256)', 'function balanceOf(address) view returns (uint256)']);
+    const prov = this.market.tradeProvider || this.market.provider;
+    const read = async (to, fn, args) => erc.decodeFunctionResult(fn, await prov.call({ to, data: erc.encodeFunctionData(fn, args) }))[0];
+    const spender = await this.sellSpender(t, w).catch(() => null);
+    const jobs = [];
+    if (spender) {
+      let bal = 0n; for (let i = 0; i < 10 && bal <= 0n; i++) { bal = await read(t.address, 'balanceOf', [w.address]).catch(() => 0n); if (bal <= 0n) await sleep(500); }
+      if (bal > 0n && (await read(t.address, 'allowance', [w.address, spender]).catch(() => 0n)) < bal) jobs.push({ token: t.address, spender, symbol: t.symbol, kind: 'sell', amount: bal });
+    }
+    if (this.useGangV2(t)) {
+      const { pad, c } = await this.gangV2.curve(t.address); const q = this.gangV2.quoteToken(c);
+      const cap = await capFor({ token: q, wallet: w.address, amount: 1n, kind: 'quote' });
+      if (cap > 1n && (await read(q, 'allowance', [w.address, pad]).catch(() => 0n)) < cap / 2n) jobs.push({ token: q, spender: pad, symbol: t.quote || '报价币', kind: 'quote', amount: cap });
+    }
+    for (const j of jobs) {
+      if (this.settings.preApproveCap === false) return;
+      const order = { id: randomBytes(5).toString('hex'), ts: Date.now(), walletId: w.id, wallet: w.label, token: j.token, symbol: j.symbol, platform: t.platform,
+        side: 'approve', amount: 0, source: '预先授权', via: 'preapprove', status: 'pending', steps: [], dryRun: false, route: `买入后预先授权${j.kind === 'sell' ? '卖出' : '报价币'}（${capLabel(j.kind)}）` };
+      const step = (name, ms) => { order.steps.push({ name, ms: Math.round(ms), at: Date.now() - order.ts }); this.emit('order', order); };
       this.orders.unshift(order); this.emit('order', order);
-      const hash = await this.portal.send({ wallet: w.address, to: t.address, inputData: erc.interface.encodeFunctionData('approve', [core, ethers.MaxUint256]), label: `授权 ${t.symbol}`, step });
-      Object.assign(order, { status: 'filled', tx: hash, txs: [hash], venue: 'approve(Core, max)', latencyMs: Date.now() - order.ts });
-    } catch (e) {
-      Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts });
-      if (!this.orders.includes(order)) this.orders.unshift(order);
-    } finally { this.preapproving.delete(key); }
-    this.emit('order', order);
+      try {
+        const cap = await capFor({ token: j.token, wallet: w.address, amount: j.amount, kind: j.kind });
+        const hash = await sendApproval({ send: (o) => this.portal.send(o), wallet: w.address, token: j.token, spender: j.spender, amount: j.amount, cap, label: `预先授权 ${j.symbol}（${capLabel(j.kind)}）`, symbol: j.symbol, kind: j.kind, step });
+        Object.assign(order, { status: 'filled', tx: hash, txs: [hash], venue: `approve（${capLabel(j.kind)}）`, latencyMs: Date.now() - order.ts });
+      } catch (e) { Object.assign(order, { status: 'failed', reason: e.message, latencyMs: Date.now() - order.ts }); }
+      this.emit('order', order);
+    }
   }
 
   // 「发射后自动领取」：Flap Agent 曲线迁移后，份额要调用 Portal.claim(market) 领成代币（Four 的代币本来就在钱包里，不用领）。
