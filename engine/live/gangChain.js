@@ -16,7 +16,8 @@ export const GANG_OLD_PAD = '0x315Ba2e8952D06094CC636b2B84229FA32fb23A7';
 export const GANG_V2_LAUNCHPAD = '0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E';
 const T_OLD = '0xe57a519fe6a031fac5d360f4b8ce246c86dd280b40dc37b68c0a7cc7394ef9c0';
 const T_V2 = '0xd23a447045c377a966a79f59983bae21db7b92fead61df8ace4aea5628043791';
-const FILTER = { address: [GANG_OLD_PAD, GANG_V2_LAUNCHPAD], topics: [[T_OLD, T_V2]] };
+export const GANG_STOCKS_PAD = '0x245a42cE8337DECe0f1C04f8430C90C8D98b88e4';   // gang.fun track "stocks" 的 pad，Created 事件 topic 与 V2 相同（0xd23a4470…）
+const FILTER = { address: [GANG_OLD_PAD, GANG_V2_LAUNCHPAD, GANG_STOCKS_PAD], topics: [[T_OLD, T_V2]] };
 // Gang V3（GangLaunchpad）主网地址还没公布：按新 Created topic 订阅全链，发出事件的合约在 handle 里核对是不是官方的（gangV3.verifyV3Pad）
 const FILTER_V3 = { topics: [[T_V3_CREATED, T_FAIR_CREATED]] };
 const coder = ethers.AbiCoder.defaultAbiCoder();

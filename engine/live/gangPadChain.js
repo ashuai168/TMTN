@@ -8,7 +8,7 @@ import { NODEREAL_WSS } from './config.js';
 import { WsLogs, PUBLIC_WSS } from './rpc.js';
 import { V3_PADS, v3Events } from './gangV3.js';
 
-const PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
+const PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1', '0x245a42cE8337DECe0f1C04f8430C90C8D98b88e4'];   // 和 gangV2Pads.V2_PADS 一致（0x245a = stocks pad）
 const T_BUY = '0x6e59ac1e0b7a4b5c385ffff3601e05644c2ed9d875089895ed1b88e9cf8c632a';
 const T_SELL = '0x00055e00ae56ca9d108326c7fd1ab1e6380614100b19bf3e4d1411240a726d86';
 // Gang V3 内盘的 Buy / Sell 事件 topic 和字段顺序都和 V2 一样（tax 恒为 0），发现 V3 内盘后加进地址列表、重连订阅

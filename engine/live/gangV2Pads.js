@@ -10,7 +10,8 @@ import { BNB_NATIVE } from './config.js';
 import { getRoute, setRoute, waitReceived } from './quoteRoutes.js';
 import { V3_PADS, isV3Pad, v3PadAbi, normCurve, assertV3Trade, v3Pending } from './gangV3.js';   // Gang V3：曲线公式、buy / sell 和 V2 相同，curves() 多两个字段
 
-export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1'];
+// 0x245a…88e4：gang.fun track "stocks" 的又一个 pad（ABI / Buy / Created 事件与 V2 相同，字节码核对过）；接口 /api/tokens 的 v2Launchpad 字段对这些盘写的是 0x1B8F，不可信，以链上 curves() 为准
+export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1', '0x245a42cE8337DECe0f1C04f8430C90C8D98b88e4'];
 const trimBnb = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
 const USDT = '0x55d398326f99059fF775485246999027B3197955';   // BSC USDT（18 位小数）
 const ONDO_RE = /one side must be a supported stablecoin|Unsupported token pair for Ondo/i;
