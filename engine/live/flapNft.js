@@ -44,7 +44,7 @@ const coder = ethers.AbiCoder.defaultAbiCoder();
 const f18 = (v) => Number(ethers.formatEther(v));
 const minOut = (v, slippagePct) => (v * BigInt(10000 - Math.min(9900, Math.round(slippagePct * 100)))) / 10000n;
 const ERR = { NFTGatedOnly: '钱包没有门槛 NFT（NFTGatedOnly）', BuyCapExceeded: '已到每个地址 2% 买入上限（BuyCapExceeded）', SlippageTooHigh: '滑点不够（SlippageTooHigh），重新报价再试', TokenNotTradable: '内盘已关闭（已迁移，TokenNotTradable）' };
-const why = (e) => { const d = e?.data || e?.info?.error?.data; try { const p = d && iface.parseError(d); if (p) return ERR[p.name] || p.name; } catch { /* 不是已知错误 */ } return e?.shortMessage || e?.message || String(e); };
+const why = (e) => { const d = e?.data || e?.info?.error?.data; try { const p = d && iface.parseError(d); if (p) return ERR[p.name] || p.name; } catch { /* 不是已知错误 */ } return e?.reason ? e.reason : /^0x[0-9a-f]{8}/i.test(d || '') ? `合约拒绝（未知错误码 ${d.slice(0, 10)}）` : e?.shortMessage || e?.message || String(e); };
 
 export class FlapNft extends EventEmitter {
   constructor(provider, send = null) {
@@ -330,7 +330,7 @@ export class FlapNft extends EventEmitter {
 
   async quoteBuy(token, wallet, amountBnb) {
     const value = ethers.parseEther(String(amountBnb));
-    const out = (await this.call(FLAP_PORTAL, iface, 'quoteExactInput', [[ZERO, token, value]], wallet))[0];
+    const out = (await this.call(FLAP_PORTAL, iface, 'quoteExactInput', [[ZERO, token, value]], wallet).catch((e) => { throw Object.assign(new Error(`Flap Portal 报价被拒：${why(e)}`), { cause: e }); }))[0];
     return { value, out };
   }
   async quoteSell(token, wallet, amount) { return (await this.call(FLAP_PORTAL, iface, 'quoteExactInput', [[token, ZERO, amount]], wallet))[0]; }

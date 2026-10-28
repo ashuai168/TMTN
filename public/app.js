@@ -1157,7 +1157,8 @@ function note(text, kind = 'ok') { const el = document.createElement('div'); el.
 // 把链上 / baw 的英文报错翻成中文
 const ERR_ZH = [
   [/wallet cap|max.*per wallet|exceeds? .*cap/i, '已达到单个钱包的持仓上限，不能再买了'],
-  [/insufficient funds|insufficient balance|not enough/i, '余额不足'],
+  [/slippage is not enough/i, '价格变动超过滑点，没有成交（门槛盘也可能是这个钱包已买满每地址 2% 上限，再买换不出币）'],   // 聚合器原话，以前被下一条的「not enough」当成余额不足
+  [/insufficient funds|insufficient balance|not enough (bnb|balance|funds|gas)/i, '余额不足'],
   [/slippage|too little received|min(imum)? ?out|INSUFFICIENT_OUTPUT/i, '价格变动超过滑点容忍度，请调大滑点后重试'],
   [/not whitelisted|whitelist/i, '钱包不在白名单'],
   [/deadline|expired/i, '交易超时过期'],
@@ -1182,8 +1183,8 @@ function zhErr(msg) {
   const s = String(msg || ''); if (!s || /[\u4e00-\u9fa5]/.test(s) && !/[A-Za-z]{6,}/.test(s.replace(/BNB|baw|Four|Flap|Agent|Portal|PancakeSwap/g, ''))) return s;
   const sim = /simulation failed|execution reverted|revert/i.test(s);
   for (const [re, zh] of ERR_ZH) if (re.test(s)) return (sim ? '交易预演失败：' : '') + zh;
-  const m = s.match(/reverted:?\s*([^"\n(]+)/i);
-  if (sim) return '交易预演失败，合约拒绝' + (m ? `（${m[1].trim()}）` : '');
+  const m = s.match(/reverted:?\s*([^"\n(]+)/i), why = m?.[1].trim(), code = s.match(/data="(0x[0-9a-f]{8})/i)?.[1];   // 自定义错误没有原因文字，只有 4 字节错误码
+  if (sim) return '交易预演失败，合约拒绝' + (why ? `（${why}）` : code ? `（未知合约错误 ${code}）` : '');
   return '下单失败：' + s.slice(0, 120);
 }
 
