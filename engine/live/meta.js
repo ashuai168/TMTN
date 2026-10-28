@@ -19,7 +19,8 @@ export function ipfsUrl(v) {
 // 2026-10-28 核对过实际在用的：Flap 元数据 / 图片 flap.mypinata.cloud，Four static.four.meme，Gang cdn.gang.fun（+ 字节云 IPFS），Agent ID space.id，shrine
 export const MEDIA_HOSTS = ['four.meme', 'space.id', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com'];
 // 明确屏蔽（就算 IMG_HOSTS 里加了也不连）：validation.alphapulsehq.top = 第三方转存的元数据 / 图片，链接带签名和追踪参数（6 个 Flap 盘在用，含仿冒七仔的 0x8c8b…7777）
-export const BLOCKED_HOSTS = ['alphapulsehq.top'];
+// 185.130.45.236 / *.trycloudflare.com：2026-10-28 两个针对本程序的 XSS 盘（名字是带 onerror 的 <img>，元数据也放在这两处）
+export const BLOCKED_HOSTS = ['alphapulsehq.top', '185.130.45.236', 'trycloudflare.com'];
 const hostIn = (h, list) => list.some((x) => h === x || h.endsWith('.' + x));
 const warned = new Set();
 export function mediaHostOk(u) {

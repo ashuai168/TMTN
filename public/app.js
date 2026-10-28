@@ -174,7 +174,7 @@ const tagsHtml = (t) => {
   const kind = t.platform === 'four' ? (t.agentExclusive !== false ? '<i class="tag r">Agent 专属</i>' : '<i class="tag r">Four 内盘</i>')
     : t.platform === 'gang' ? gangKind(t)
     : (t.source && t.source !== 'agent-curve' ? '<i class="tag p">Flap 内盘</i>' : '<i class="tag p">Agent 曲线</i>');
-  return st + kind + `<i class="tag y">${t.quote} 池</i>` + nftChip(t) + taxChip(t) + divChip(t) + (t.chg?.h1 != null ? `<i class="tag chg" title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</i>` : '');
+  return st + kind + `<i class="tag y">${esc(t.quote)} 池</i>` + nftChip(t) + taxChip(t) + divChip(t) + (t.chg?.h1 != null ? `<i class="tag chg" title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</i>` : '');
 };
 const wallet = (id) => S.wallets.find((w) => w.id === id) || {};
 const eligible = (w, t) => LIVE() ? { ok: true, why: '以合约为准' } : !t || t.platform !== 'four' ? { ok: true } : t.officialTest ? { ok: false, why: '未在白名单' } : !w.agentId ? { ok: false, why: '未绑定 Agent ID' } : !w.whitelisted ? { ok: false, why: '未在白名单' } : { ok: true };
@@ -743,7 +743,7 @@ function renderHead() {
       <div class="th-main">
         <div class="th-title">${favStar(t.address)}<b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b><span class="muted">${esc(t.name)}</span>${tagsHtml(t)}</div>
         <div class="th-sub"><span>代币 <span class="mono">${short(t.address, 8, 6)}</span> <span class="copy" data-copy="${t.address}">⧉</span></span><span>创建者 ${whoHtml(t.creator, t.creatorName || NAMES[String(t.creator || '').toLowerCase()])}</span>${t.firstBuyer ? `<span>首买 <a href="https://bscscan.com/address/${esc(t.firstBuyer)}" target="_blank" rel="noopener" title="${esc(t.firstBuyer)}">${whoHtml(t.firstBuyer, t.firstBuyerName || NAMES[t.firstBuyer.toLowerCase()])}</a></span>` : ''}</div>
-        <div class="th-sub"><span>预设 ${t.preset}</span><span title="${fullTime(t.createdAt)}">${age(t.createdAt)} 前创建</span></div>
+        <div class="th-sub"><span>预设 ${esc(t.preset || '')}</span><span title="${fullTime(t.createdAt)}">${age(t.createdAt)} 前创建</span></div>
       </div>
       <div class="links"><button class="ca-big ${caOk(t.address) ? 'ok' : ''}" data-cacopy="${t.address}" title="复制合约地址：${t.address}"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><rect x="8" y="8" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 8V4H4v12h4" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>${caOk(t.address) ? '已复制 ✓' : '复制CA'}</span></button>${xsBtn(t.address, 'xs-head')}<a href="#" data-ext="four">${t.platform === 'four' ? 'Four' : t.platform === 'gang' ? 'Gang' : t.platform === 'dex' ? 'DexScreener' : 'Flap'}</a><a href="#" data-ext="bsc">BscScan</a><a href="#" data-ext="gmgn">GMGN</a>${blockLinks(t)}</div>${ruleBanner(t.address)}
       <div class="th-price"><div class="p">$${sub(t.priceUsd)}</div><div class="s">每枚 · ${sub(t.price)} ${esc(t.quote || 'BNB')}</div></div>
@@ -1078,8 +1078,8 @@ function renderInfo(t) {
   $('#tokenInfo').innerHTML = `<h4>${t.platform === 'four' ? 'Binance Agent 专属代币信息' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? 'Gang V3 代币信息' : t.gangTrack === 'v2' ? 'Gang V2 代币信息' : 'Gang 代币信息') : t.platform === 'dex' ? '外盘代币信息' : 'Flap Agent 曲线代币信息'}</h4>
     ${box('代币', t.address)}${t.vault ? box(LIVE() ? 'Market' : 'Vault', t.vault) : ''}${t.creator ? box('创建者', t.creator) : ''}
     <div class="kv"><span>平台</span><b class="sans">${t.platform === 'four' ? 'OpenFour（four.meme）' : t.platform === 'gang' ? (/^v3/.test(t.gangTrack || '') ? `gang.fun V3（GangLaunchpad，报价币 ${esc(t.quote)}）${t.gangV3 ? ' · ' + esc(v3Tip(t)) : ''}` : t.gangTrack === 'v2' ? `gang.fun V2（报价币 ${esc(t.quote)}，买卖要先换币，非原子）` : 'gang.fun（Agent ID 专属，合约 0x315B…23A7）') : t.platform === 'dex' ? `普通外盘代币（最深池 ${esc(t.preset.replace(/^外盘代币 · /, ''))}，币安聚合买卖）` : 'Flap（flap.sh）'}</b></div>
-    <div class="kv"><span>预设</span><b class="sans">${t.preset} <span class="muted mono">${t.presetId}</span></b></div>
-    <div class="kv"><span>计价资产</span><b>${t.quote}${t.quote !== 'BNB' ? '（Core 同笔兑换）' : ''}</b></div>
+    <div class="kv"><span>预设</span><b class="sans">${esc(t.preset || '')} <span class="muted mono">${t.presetId}</span></b></div>
+    <div class="kv"><span>计价资产</span><b>${esc(t.quote)}${t.quote !== 'BNB' ? '（Core 同笔兑换）' : ''}</b></div>
     <div class="kv"><span>状态</span><b class="sans ${t.stage === 'curve' ? 'b' : t.stage === 'dex' ? 'g' : 'r'}">${t.stage === 'curve' ? `内盘 ${t.progress.toFixed(2)}%` : t.platform === 'dex' ? `外盘 · 流动性 $${Math.round(t.liqUsd || 0).toLocaleString()}` : t.stage === 'dex' ? '已迁移 PancakeSwap' : '已撤池'}</b></div>
     <div class="kv"><span>交易资格</span><b class="sans ${el.ok ? 'g' : 'r'}">${el.ok ? '你的钱包可交易' : '你的钱包' + el.why}</b></div>
     ${LIVE() ? `<div class="kv"><span>已筹 / 上限</span><b>${amt(t.raised)} / ${amt(t.target)} ${esc(t.quote)}</b></div>`
@@ -1625,12 +1625,14 @@ document.addEventListener('keydown', (e) => {
 /* ---------- 屏蔽（GMGN 式，全局，存在服务器） ---------- */
 // 屏蔽代币或开发者：战壕、左侧列表不显示，不响提示音、不弹通知、不自动买；搜索还能找到（标「已屏蔽」），持仓照常显示
 const lcA = (a) => String(a || '').toLowerCase();
-function isBlocked(t) { return !!(t && (S.blk.tokens[lcA(t.address)] || (t.creator && S.blk.devs[lcA(t.creator)]))); }
+// 名字 / 代号像 HTML 注入的直接当屏蔽（和服务端 engine/blocklist.js looksLikeHtml 同一条规则）
+const looksLikeHtml = (s) => /<\s*[a-z!\/]/i.test(String(s || '')) && /\bon[a-z]+\s*=|script|javascript:|import\s*\(/i.test(String(s || ''));
+function isBlocked(t) { return !!(t && (S.blk.tokens[lcA(t.address)] || (t.creator && S.blk.devs[lcA(t.creator)]) || looksLikeHtml(t.symbol) || looksLikeHtml(t.name))); }
 const blockCount = () => Object.keys(S.blk.tokens).length + Object.keys(S.blk.devs).length;
 function blockLinks(t) {
   const tok = S.blk.tokens[lcA(t.address)], dev = t.creator && S.blk.devs[lcA(t.creator)];
   return (tok ? `<a href="#" data-unblock="${t.address}" class="blk-on" title="已屏蔽这个币，点击取消屏蔽">已屏蔽</a>` : `<a href="#" data-block="${t.address}" title="屏蔽这个币：不再出现在战壕和列表里">⊘</a>`)
-    + (t.creator ? (dev ? `<a href="#" data-unblockdev="${t.creator}" class="blk-on" title="这个开发者已屏蔽，点击取消">开发者已屏蔽</a>` : `<a href="#" data-blockdev="${t.creator}" data-lbl="${esc(t.creatorName || short(t.creator, 6, 4))}" title="屏蔽该开发者：他发的所有币都不显示">⊘ 开发者</a>`) : '');
+    + (t.creator ? (dev ? `<a href="#" data-unblockdev="${esc(t.creator)}" class="blk-on" title="这个开发者已屏蔽，点击取消">开发者已屏蔽</a>` : `<a href="#" data-blockdev="${esc(t.creator)}" data-lbl="${esc(t.creatorName || short(t.creator, 6, 4))}" title="屏蔽该开发者：他发的所有币都不显示">⊘ 开发者</a>`) : '');
 }
 async function setBlock(kind, address, on, label, undo = true) {
   // 先在页面上立刻生效（不等服务器），保存失败再恢复
