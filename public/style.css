@@ -1239,3 +1239,10 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 /* 网络状态胶囊（WSS / RPC / 区块 / BNB）挪到底栏 */
 .botbar .pill { height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11px; gap: 5px; }
 .botbar .pill.mono { display: flex; }
+/* 右下角网络状态（延迟 + FPS） */
+.net-badge { gap: 6px; cursor: default; }
+.net-badge.g { color: var(--g); border-color: var(--g-line, rgba(30, 203, 129, .35)); background: var(--g-bg); }
+.net-badge.y { color: var(--y); border-color: rgba(240, 185, 11, .35); background: var(--y-bg); }
+.net-badge.r { color: var(--r); border-color: rgba(246, 70, 93, .35); background: var(--r-bg); }
+.net-badge b { font-weight: var(--fw-strong); } .net-badge .dot { box-shadow: none; }
+.nb-sep { width: 1px; height: 10px; background: currentColor; opacity: .4; }

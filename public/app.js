@@ -523,6 +523,20 @@ function pillState(el, st, ms, tip) {
   el.textContent = st === 'down' ? '断开' : st === 'retry' ? '重连中' : (ms != null ? ms + 'ms' : st === 'ok' ? '已连接' : '') + (st === 'partial' ? (ms != null ? ' · ' : '') + '部分' : '');
   if (tip != null) pill.title = tip;
 }
+// 右下角网络状态：圆点 + 稳定 / 一般 / 较差 + 链上 RPC 延迟 + 页面 FPS；悬停看后端、RPC、WSS 的分项
+const NB = { ping: null, fps: 0, frames: 0, t0: performance.now() };
+(function fpsLoop(t) { NB.frames++; if (t - NB.t0 >= 1000) { NB.fps = Math.round(NB.frames * 1000 / (t - NB.t0)); NB.frames = 0; NB.t0 = t; netBadge(); } requestAnimationFrame(fpsLoop); })(performance.now());
+async function pingBackend() { const t = performance.now(); try { await fetch('/api/cache-status', { cache: 'no-store' }); NB.ping = Math.round(performance.now() - t); } catch { NB.ping = null; } }
+setInterval(() => { if (!document.hidden) pingBackend(); }, 5000); pingBackend();
+function netBadge() {
+  const el = document.getElementById('netBadge'); if (!el) return;
+  const rpc = S.net?.rpc, down = rpc == null || NB.ping == null;
+  const ms = down ? null : Math.max(rpc, NB.ping);
+  const [cls, txt] = down ? ['r', '断开'] : ms < 150 ? ['g', '稳定'] : ms < 400 ? ['y', '一般'] : ['r', '较差'];
+  el.className = `pill mono net-badge ${cls}`;
+  el.innerHTML = `<i class="dot ${cls}"></i><span>${txt}</span><b>${ms != null ? ms : '—'} MS</b><i class="nb-sep"></i><b>${NB.fps} FPS</b>`;
+  el.title = `网络延迟（取最慢的一项）\n浏览器 → 后端：${NB.ping != null ? NB.ping + 'ms' : '超时'}\n后端 → 链上 RPC：${rpc != null ? rpc + 'ms' : '断开'}\n链上订阅 WSS：${S.net?.wss != null ? S.net.wss + 'ms' : '断开'}\n页面刷新：${NB.fps} FPS\n\n< 150ms 稳定 · < 400ms 一般 · 更慢为较差`;
+}
 function ago2(ts) { return !ts ? '—' : Math.round((Date.now() - ts) / 1000) + ' 秒前'; }   // 用函数声明：启动时可能在这行执行前就被调用
 function wssTip() {
   const sh = S.net.shrine; if (!LIVE() || !sh) return '';
@@ -535,6 +549,7 @@ function renderTop() {
   renderAuth();
   pillState($('#wssMs'), LIVE() ? S.net.wssState || (S.net.wss == null ? 'down' : 'ok') : (S.net.wss == null ? 'down' : 'ok'), S.net.wss, wssTip());
   pillState($('#rpcMs'), S.net.rpc == null ? 'down' : LIVE() && S.net.rpcNode?.fallback ? 'partial' : 'ok', S.net.rpc);
+  netBadge();
 
   $('#wssName').textContent = LIVE() ? '链上订阅' : 'GetBlock';
   const rn = S.net.rpcNode;

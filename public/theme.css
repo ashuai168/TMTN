@@ -328,3 +328,8 @@
 :root[data-theme="calm"] .wl-link { color: var(--accent); }
 :root[data-theme="calm"] .vm-ask { border-color: var(--warn); }
 :root[data-theme="calm"] .hold-q .hq-h b { color: var(--text); }
+/* 右下角网络状态 */
+:root[data-theme="calm"] .net-badge.g { color: var(--g); border-color: var(--g-line); background: var(--g-bg); }
+:root[data-theme="calm"] .net-badge.y { color: var(--warn); border-color: rgba(217, 165, 74, .35); background: var(--warn-bg); }
+:root[data-theme="calm"] .net-badge.r { color: var(--r); border-color: var(--r-line); background: var(--r-bg); }
+:root[data-theme="calm"] .botbar .pill { height: 20px; }
