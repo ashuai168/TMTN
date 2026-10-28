@@ -5,12 +5,14 @@
 //   更早的历史：GeckoTerminal 分钟 K 线（currency=token，直接是报价币单位），从迁移时间往后翻页补齐，10 分钟重拉一次
 // 区块时间按每段首尾两个区块的时间戳插值（不逐块查），K 线够用。价格、金额都是报价币单位（和内盘 K 线一致）
 import { ethers } from 'ethers';
+import { cache } from './cache.js';
 
 const FACTORY = '0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73';
 const WBNB = '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c';
 const SWAP = ethers.id('Swap(address,uint256,uint256,uint256,uint256,address)'), SYNC = ethers.id('Sync(uint112,uint112)');
 const SPAN = 4500;          // 公共节点 getLogs 每次最多 5000 个区块，且只保留最近约 5000 个区块的日志
 const MAX_SWAPS = 20_000;
+const ARCH_SPAN = 10_000, ARCH_GAP = 200_000;   // 有归档节点时：重启后库里的位置离最新最多约 1 天（20 万块）也能用它接上，一次查 1 万块
 const i = new ethers.Interface([
   'function getPair(address,address) view returns (address)', 'function getReserves() view returns (uint112,uint112,uint32)',
   'function token0() view returns (address)', 'function decimals() view returns (uint8)',
@@ -19,7 +21,8 @@ const abi = ethers.AbiCoder.defaultAbiCoder();
 const isW = (a) => !a || a === ethers.ZeroAddress || String(a).toLowerCase() === WBNB;
 
 export class DexFeed {
-  constructor(provider) { this.p = provider; this.bts = new Map(); }
+  // arch：可选的归档 / 日志节点（RPC_ARCHIVE=1 时传入），只用来补公共节点已经不给的较早区块
+  constructor(provider, arch = null) { this.p = provider; this.arch = arch; this.bts = new Map(); }
 
   async call(to, fn, args = []) { return i.decodeFunctionResult(fn, await this.p.call({ to, data: i.encodeFunctionData(fn, args) })); }
 
@@ -74,21 +77,35 @@ export class DexFeed {
       const info = await this.pairOf(t); if (!info) return false;
       const [latest, res] = await Promise.all([this.p.getBlockNumber(), this.call(info.pair, 'getReserves').catch(() => null)]);
       if (res) t.dexQuoteRes = Number(ethers.formatUnits(info.tokenIs0 ? res[1] : res[0], info.qDec));   // 池子里的报价币，算底池用
-      if (!t.dexSwaps) { t.dexSwaps = []; t.dexTo = latest - SPAN; }
-      let added = (await this.history(t, info).catch(() => false)) ? 1 : 0;
+      let added = 0;
+      if (!t.dexSwaps) {
+        t.dexSwaps = []; t.dexTo = latest - SPAN;
+        // MySQL 缓存：以前读过的外盘成交（按池子存）和读到的区块。离最新不远（公共节点 4500 块内，有归档节点 20 万块内）就接着读，重启后不丢之前的外盘成交；
+        // 断得太久接不上就清掉旧的，和以前一样从最近 4500 块开始
+        const c = await cache.loadTrades('dex', info.pair, MAX_SWAPS).catch(() => null);
+        if (c?.cursor) {
+          if (latest - c.cursor <= (this.arch ? ARCH_GAP : SPAN)) { t.dexSwaps = c.rows; t.dexTo = Math.min(latest, c.cursor); added += c.rows.length; }
+          else await cache.clearTrades('dex', info.pair).catch(() => {});
+        }
+        t._dexDb = !!c;
+      }
+      if (await this.history(t, info).catch(() => false)) added++;
+      const fresh = [];
       while (t.dexTo < latest) {
-        const a = t.dexTo + 1, b = Math.min(a + SPAN - 1, latest);
-        const logs = await this.p.getLogs({ address: info.pair, topics: [[SWAP, SYNC]], fromBlock: a, toBlock: b });
+        const old = this.arch && latest - t.dexTo > SPAN, p = old ? this.arch : this.p;   // 公共节点只给最近约 5000 块的日志，更早的走归档节点
+        const a = t.dexTo + 1, b = Math.min(a + (old ? ARCH_SPAN : SPAN) - 1, old ? latest - SPAN : latest);
+        const logs = await p.getLogs({ address: info.pair, topics: [[SWAP, SYNC]], fromBlock: a, toBlock: b });
         if (logs.length) {
           const [ta, tb] = await Promise.all([this.ts(a), this.ts(b)]);
           let sync = null;
           for (const l of logs) {
             if (l.topics[0] === SYNC) { sync = l; continue; }
-            const r = this.parse(l, info, Math.round(ta + ((tb - ta) * (l.blockNumber - a)) / Math.max(1, b - a)), sync); if (r) { t.dexSwaps.push(r); added++; }
+            const r = this.parse(l, info, Math.round(ta + ((tb - ta) * (l.blockNumber - a)) / Math.max(1, b - a)), sync); if (r) { t.dexSwaps.push(r); fresh.push(r); added++; }
           }
           if (t.dexSwaps.length > MAX_SWAPS) t.dexSwaps.splice(0, t.dexSwaps.length - MAX_SWAPS);
         }
         t.dexTo = b;
+        if (t._dexDb && (fresh.length || t.dexTo - (t._dexSaved || 0) >= 2000)) { cache.saveTrades('dex', info.pair, fresh.splice(0), t.dexTo, (x) => `${x.tx}:${x.side}:${x.tokens}`).catch(() => {}); t._dexSaved = t.dexTo; }   // 新成交和读到的区块存回库
       }
       return added > 0;
     } finally { t._dexBusy = false; }

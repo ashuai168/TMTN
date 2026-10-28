@@ -96,9 +96,11 @@ class Cache {
 
   // ---- MySQL：成交历史 ----
   // 读出某个盘已存的成交（按时间升序）和补到的位置；数据库不可用返回 null
-  async loadTrades(src, token) {
+  // limit：只要最新的这么多笔（外盘 Swap 这种会很多的）
+  async loadTrades(src, token, limit = 0) {
     const k = lc(token);
-    const [rows, cur] = await Promise.all([this.q('SELECT j FROM trades WHERE src=? AND token=? ORDER BY ts, uid', [src, k]), this.q('SELECT cur FROM hist_cursor WHERE src=? AND token=?', [src, k])]);
+    const sel = limit ? this.q('SELECT j FROM trades WHERE src=? AND token=? ORDER BY ts DESC, uid DESC LIMIT ?', [src, k, limit]).then((r) => r && r.reverse()) : this.q('SELECT j FROM trades WHERE src=? AND token=? ORDER BY ts, uid', [src, k]);
+    const [rows, cur] = await Promise.all([sel, this.q('SELECT cur FROM hist_cursor WHERE src=? AND token=?', [src, k])]);
     if (!rows || !cur) return null;
     const list = []; for (const r of rows) { try { list.push(JSON.parse(r.j)); } catch { /* 坏行跳过 */ } }
     if (list.length || cur.length) this.stats.hits++; else this.stats.misses++;
@@ -114,6 +116,8 @@ class Cache {
     if (cursor != null) return (await this.q('INSERT INTO hist_cursor (src, token, cur, at) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE cur=VALUES(cur), at=VALUES(at)', [src, k, Math.round(cursor), Date.now()])) != null;
     return true;
   }
+  // 清掉某个盘存的成交和位置（中间断了太久、节点补不回来时，免得库里留一段接不上的旧数据）
+  async clearTrades(src, token) { const k = lc(token); await this.q('DELETE FROM trades WHERE src=? AND token=?', [src, k]); await this.q('DELETE FROM hist_cursor WHERE src=? AND token=?', [src, k]); }
   // 增量历史的通用流程：已存的 + fetchFrom(上次位置) 拿到的新成交，按 uid 去重合并，新的存回去。
   // fetchFrom(null, null) = 没有缓存，按原来的方式从头拉；第二个参数是已存的 { rows, cursor }。返回合并后的成交（升序）
   async history(src, token, fetchFrom, uidOf) {

@@ -80,7 +80,7 @@ export class LiveMarket extends EventEmitter {
     this.curve = new AgentCurve(this.provider);
     this.four = new FourMeme();
     this.gang = new GangFun();
-    this.dexFeed = new DexFeed(new ethers.JsonRpcProvider(PUBLIC_RPC, 56, { staticNetwork: true }));   // 已发射币的外盘成交（PancakeSwap V2 池子的 Swap 事件）
+    this.dexFeed = new DexFeed(new ethers.JsonRpcProvider(PUBLIC_RPC, 56, { staticNetwork: true }), RPC_ARCHIVE ? this.provider : null);   // 已发射币的外盘成交（PancakeSwap V2 池子的 Swap 事件）
     this.gangChain = new GangChain(this.provider);   // 链上创建事件，比接口轮询快
     this.gangChain.on('token', (it) => this.onGangChainToken(it));
     this.flapChain = new FlapChain(this.provider);   // Flap 成交 / 新市场：链上订阅（代替 shrine 推送）
@@ -590,7 +590,16 @@ export class LiveMarket extends EventEmitter {
     const h = t._v3Hist ||= { rows: [], block: 0, at: 0 };
     if (h.busy) return h.busy;
     if (Date.now() - h.at < 15_000) return 0;
+    const uid = (x) => `${x.tx}:${x.side}:${x.tokens}`; let n = 0;
     h.busy = (async () => {
+      if (!h.db) {   // MySQL 缓存：先读出以前查过的链上成交和查到的区块，只补那之后的（往回多查 15 块防重组），重启后不再从开盘重扫。库暂时连不上就下次再试
+        const c = await cache.loadTrades('gang-pad', t.address).catch(() => null);
+        if (c) {
+          h.db = true; const had = h.block;
+          if (c.cursor) { const ids = new Set(h.rows.map(uid)); for (const x of c.rows) if (!ids.has(uid(x))) { h.rows.push(x); n++; } h.rows.sort((a, b) => a.ts - b.ts); h.block = Math.max(h.block, c.cursor - 15); }
+          h.cur = c.cursor && c.cursor >= had ? c.cursor : 0;   // 0 = 内存里有库里没有的，下次整份存一遍
+        }
+      }
       this._gv2 ||= new GangV2(this.provider, null);
       const { pad } = await this._gv2.curve(t.address);
       const head = await this.provider.getBlockNumber();
@@ -601,14 +610,18 @@ export class LiveMarket extends EventEmitter {
         h.block = Math.max(1, head - (RPC_ARCHIVE ? 3_000_000 : 300_000), head - Math.ceil(age / bt) - 600) - 1;   // RPC_ARCHIVE：归档节点，最多往前 300 万块（约半个月）；否则公共节点只给最近约 30 万块（约 1.5 天）的日志，再早报 archive 错误、每 45 秒卡在同一块重试；更早的成交靠接口（gangSeedHist）
       }
       // 每 2000 块（归档节点 1 万块）记一次进度：中途被限流 / 出错，下次从断点接着查，不从头重来；出错 60 秒后再试
-      const seen = new Set(h.rows.map((x) => `${x.tx}:${x.side}:${x.tokens}`)); let n = 0;
+      const seen = new Set(h.rows.map(uid)), fresh = [];
       try {
         while (h.block < head) {
           const to = Math.min(head, h.block + (RPC_ARCHIVE ? 10_000 : 2000));
-          for (const x of await this.gangPads.history(t.address, pad, h.block + 1, to)) { const id = `${x.tx}:${x.side}:${x.tokens}`; if (!seen.has(id)) { seen.add(id); h.rows.push(x); n++; } }
+          for (const x of await this.gangPads.history(t.address, pad, h.block + 1, to)) { const id = uid(x); if (!seen.has(id)) { seen.add(id); h.rows.push(x); fresh.push(x); n++; } }
           h.block = to;
         }
-      } finally { h.at = Date.now() + (h.block < head ? 45_000 : 0); if (n) this.applyV3History(t); }
+      } finally {
+        h.at = Date.now() + (h.block < head ? 45_000 : 0); if (n) this.applyV3History(t);
+        // 新成交和查到的区块存回库（没有新成交时每 2000 块记一次位置）
+        if (h.db && h.block && (fresh.length || !h.cur || h.block - h.cur >= 2000)) { const all = !h.cur; h.cur = h.block; cache.saveTrades('gang-pad', t.address, all ? h.rows : fresh, h.block, uid).then((ok) => { if (!ok) h.cur = 0; }).catch(() => { h.cur = 0; }); }
+      }
       return n;
     })().finally(() => { h.busy = null; });
     return h.busy;
