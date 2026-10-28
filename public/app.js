@@ -127,6 +127,7 @@ const gangKind = (t) => (t.gangTrack === 'v3' ? `<i class="tag gangy v3" title="
 const fairLeft = (t) => (t.gangFair && !t.gangFair.launched ? ` · 还差 ≥${t.gangFair.minWalletsLeft} 地址` : '');
 const gangVer = (t) => ({ v3: 'V3', v3fair: 'V3 打新', v2: 'V2' }[t.gangTrack] || 'V1');
 const gangVerChip = (t) => (t.platform !== 'gang' ? '' : `<i class="chip gv ${/^v3/.test(t.gangTrack || '') ? 'v3' : ''}" title="${esc(t.gangTrack === 'v3' ? v3Tip(t) : 'gang.fun ' + gangVer(t))}">Gang ${gangVer(t)}</i>`);
+const gangV = (t) => (/^v3/.test(t.gangTrack || '') ? 'v3' : t.gangTrack === 'v2' ? 'v2' : 'v1');   // 战壕筛选用：V3（含打新）/ V2 / V1 老盘
 const gangBadge = (t) => (/^v3/.test(t.gangTrack || '') ? 'G3' : t.gangTrack === 'v2' ? 'G2' : 'G1');
 // Flap 税币（门槛盘）：买 / 卖税、税收怎么分（营销给受益人 / 分红 / 回流 / 销毁）、分红币、累计
 const bpsTxt = (b) => `${+(b / 100).toFixed(2)}%`;
@@ -2325,7 +2326,7 @@ for (const ms of [4000, 8000, 22000]) window.addEventListener('order-done', () =
 const PLATS = ['flap', 'four', 'gang'];
 const platOf = (t) => (t.platform === 'four' || t.platform === 'gang' ? t.platform : 'flap');
 const TCOLS = { new: '新创建', soon: '即将打满', dex: '已开盘' };
-const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false, hideTax2c: false } });
+const defPreset = () => ({ amt: 0, slip: 35, f: { plats: [...PLATS], minMc: '', maxMc: '', minHolders: '', minProg: '', minAge: '', maxAge: '', quote: '', social: false, maxTax: '', hideUnknownTax: false, hideTax2c: false, gangVers: [] } });
 const TR = (() => {
   let s = null; try { s = JSON.parse(localStorage.getItem('trench') || 'null'); } catch { /* ignore */ }
   const st = s && s.cols ? s : { cols: {}, hidden: [] };
@@ -2399,11 +2400,12 @@ function tcHead(k) {
       <button class="tc-ic tc-funnel ${active ? 'act' : ''}" data-tf="${k}" title="${esc(tcFilterSummary(k))}"><svg viewBox="0 0 16 16" width="15" height="15" style="pointer-events:none"><path d="M2 3h12l-4.6 5.4v4.4l-2.8 1.4V8.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
     </span></div>`;
 }
-function tcActive(k) { const f = P(k).f; return !!(f.plats.length < 3 || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax || f.hideTax2c); }
+function tcActive(k) { const f = P(k).f; return !!(f.plats.length < 3 || f.gangVers?.length || f.minMc || f.maxMc || f.minHolders || f.minProg || f.minAge || f.maxAge || f.quote || f.social || f.maxTax !== '' && f.maxTax != null || f.hideUnknownTax || f.hideTax2c); }
 // 漏斗按钮的提示文字：当前预设下生效的筛选条件
 function tcFilterSummary(k) {
   const f = P(k).f, x = [];
   if (f.plats.length < 3) x.push('平台 ' + f.plats.join('/'));
+  if (f.gangVers?.length) x.push('Gang ' + f.gangVers.map((v) => v.toUpperCase()).join('/'));
   if (f.maxTax !== '' && f.maxTax != null) x.push(`税率 ≤ ${f.maxTax}%`);
   if (f.hideUnknownTax) x.push('隐藏税率未知');
   if (f.hideTax2c) x.push('隐藏 dev 吃税');
@@ -2429,6 +2431,7 @@ function tcFilterPop(k) {
 function tcMatch(k, t) {
   const c = TR.cols[k], f = P(k).f;
   if (!f.plats.includes(platOf(t))) return false;
+  if (f.gangVers?.length && platOf(t) === 'gang' && !f.gangVers.includes(gangV(t))) return false;   // Gang 版本：不选 = 全部
   if (isBlocked(t)) return false;
   const n = (v) => (v === '' || v == null ? null : Number(v));
   const mcMin = mcK(f.minMc), mcMax = mcK(f.maxMc);
@@ -2703,8 +2706,10 @@ function tfModal(k) {
     m.innerHTML = `<div class="tfm">
       <div class="tfm-h"><b>筛选 · ${TCOLS[k]} · P${TR.cols[k].preset}</b><button class="tfm-x" data-x>×</button></div>
       <div class="tfm-b">
-        <div class="tfm-s"><div class="tfm-t"><span>平台</span><button class="tfm-all" data-pall>全选</button></div>
+        <div class="tfm-s"><div class="tfm-t"><span>平台</span><span><button class="tfm-all" data-gv3only title="平台只留 Gang，版本只留 V3（含 V3 打新）">只看 Gang V3</button> <button class="tfm-all" data-pall>全选</button></span></div>
           <div class="tfm-chips">${PLATS.map((p) => `<button class="tfm-c pf-${p}${dr.plats.includes(p) ? ' on' : ''}" data-plat="${p}">${PN[p]}</button>`).join('')}</div></div>
+        ${dr.plats.includes('gang') ? `<div class="tfm-s"><div class="tfm-t"><span>Gang 版本</span><span class="muted">不选 = 全部</span></div>
+          <div class="tfm-chips">${[['v3', 'V3（含打新）'], ['v2', 'V2'], ['v1', 'V1 老盘']].map(([v, l]) => `<button class="tfm-c pf-gang${(dr.gangVers || []).includes(v) ? ' on' : ''}" data-gv="${v}">${l}</button>`).join('')}</div></div>` : ''}
         <div class="tfm-s"><div class="tfm-t"><span>报价代币</span><span class="muted">不选 = 全部</span></div>
           <div class="tfm-chips">${quotes.map((q) => `<button class="tfm-c${qs.has(q) ? ' on' : ''}" data-q="${esc(q)}">${esc(q)}</button>`).join('')}</div></div>
         <div class="tfm-s"><div class="tfm-t"><span>市值（K$）</span><span class="muted">填 5 = $5K</span></div><div class="tfm-row"><input data-f="minMc" value="${esc(dr.minMc)}" placeholder="最低，如 5"/><span>~</span><input data-f="maxMc" value="${esc(dr.maxMc)}" placeholder="最高，如 50"/></div></div>
@@ -2726,7 +2731,9 @@ function tfModal(k) {
     const b = e.target.closest('button'); if (!b) return; const x = b.dataset;
     if (x.x != null) return close();
     if (x.plat) { const st = new Set(dr.plats); st.has(x.plat) ? (st.size > 1 && st.delete(x.plat)) : st.add(x.plat); dr.plats = PLATS.filter((p) => st.has(p)); }
-    else if (x.pall != null) dr.plats = [...PLATS];
+    else if (x.pall != null) { dr.plats = [...PLATS]; dr.gangVers = []; }
+    else if (x.gv) { const st = new Set(dr.gangVers || []); st.has(x.gv) ? st.delete(x.gv) : st.add(x.gv); dr.gangVers = ['v3', 'v2', 'v1'].filter((v) => st.has(v)); }
+    else if (x.gv3only != null) { dr.plats = ['gang']; dr.gangVers = ['v3']; }
     else if (x.q) { const st = qset(); st.has(x.q) ? st.delete(x.q) : st.add(x.q); dr.quote = [...st].join(','); }
     else if (x.taxq != null) dr.maxTax = x.taxq;
     else if (x.reset != null) Object.assign(dr, defPreset().f);
