@@ -1189,12 +1189,14 @@ const ERR_ZH = [
   [/migrat|graduat|curve (is )?(full|completed|closed)/i, '内盘已满或已迁移'],
   [/gas/i, 'Gas 不足或估算失败'],
 ];
+// 已知的合约自定义错误码（4 字节）→ 中文
+const ERR_CODE_ZH = { '0x8698bf37': '内盘合约里没有这个币（UnknownToken），多半是终端把盘认错了版本、发到了别的 Gang 合约，没有成交' };
 function zhErr(msg) {
   const s = String(msg || ''); if (!s || /[\u4e00-\u9fa5]/.test(s) && !/[A-Za-z]{6,}/.test(s.replace(/BNB|baw|Four|Flap|Agent|Portal|PancakeSwap/g, ''))) return s;
   const sim = /simulation failed|execution reverted|revert/i.test(s);
   for (const [re, zh] of ERR_ZH) if (re.test(s)) return (sim ? '交易预演失败：' : '') + zh;
   const m = s.match(/reverted:?\s*([^"\n(]+)/i), why = m?.[1].trim(), code = s.match(/data="(0x[0-9a-f]{8})/i)?.[1];   // 自定义错误没有原因文字，只有 4 字节错误码
-  if (sim) return '交易预演失败，合约拒绝' + (why ? `（${why}）` : code ? `（未知合约错误 ${code}）` : '');
+  if (sim) return '交易预演失败，合约拒绝' + (why ? `（${why}）` : ERR_CODE_ZH[code] ? `：${ERR_CODE_ZH[code]}` : code ? `（未知合约错误 ${code}）` : '');
   return '下单失败：' + s.slice(0, 120);
 }
 
