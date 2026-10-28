@@ -1989,10 +1989,15 @@ document.addEventListener('click', async (e) => {
 const OLDER = {};   // token → { items, end, complete, loading, err }
 function olderTrades() { const k = S.selected || ''; return (OLDER[k] ||= { items: [], end: false, complete: true, loading: false, err: null }); }
 async function loadOlderTrades() {
-  const k = S.selected, o = olderTrades(); if (!k || !LIVE() || o.loading || o.end) return;
+  const k = S.selected, o = olderTrades(); if (!k || !LIVE() || o.loading || o.end || o.pending) return;
   const all = [...(S.detail?.trades || []), ...o.items]; const before = all.length ? Math.min(...all.map((x) => x.ts)) : 0;
   o.loading = true; o.err = null; renderAct();
-  try { const r = await api(`/api/trades/${k}?before=${before}&limit=150`); o.items.push(...r.items); o.end = r.end; o.complete = r.complete; }
+  try {
+    const r = await api(`/api/trades/${k}?before=${before}&limit=150`);
+    // 后端还在补这个盘的链上成交（刚重启 / 节点出错）：不算到底，3 秒后再要，不再停在「已到开盘第一笔」
+    if (r.pending) { o.pending = true; setTimeout(() => { o.pending = false; if (S.selected === k && !o.end) loadOlderTrades(); }, 3000); }
+    else { o.pending = false; o.items.push(...r.items); o.end = r.end; o.complete = r.complete; }
+  }
   catch (e) { o.err = e.message; }
   o.loading = false; if (S.selected === k) renderAct();
 }
@@ -2050,7 +2055,7 @@ function renderAct() {
   const prevTop = body.scrollTop, prevH = body.scrollHeight, atBottom = prevH - prevTop - body.clientHeight < 30;
   body.innerHTML = rows.slice(0, 1500).map((r) => `<div class="act-r ${isMe(r.trader) ? 'mine' : ''}" data-trader="${esc(r.trader || '')}" title="${fullTime(r.ts)} · ${r.side === 'buy' ? '买入' : '卖出'} ${K(r.tokens)} 个">
     <span class="act-amt ${r.side === 'buy' ? 'g' : 'r'}"><i class="sd ${r.side}"></i>$${(r.usd ?? (r.bnb || 0) * qu).toFixed(2)}</span><span class="mc">${usd(tradeMc(r, t))}</span><span>${LIVE() && r.trader ? gmgnWho(r.trader, nameOf(r), 4, 4) : esc(short(r.trader || '', 4, 4))}</span><span class="tm">${relT(r.ts)}</span></div>`).join('')
-    + (LIVE() ? `<div class="act-foot" id="actFoot">${OT.end ? '— 已到开盘第一笔 —' : OT.loading ? '正在加载…' : (actAsc ? '正在补全更早的成交…' : '往下滚动加载更早的成交')}</div>` : '');
+    + (LIVE() ? `<div class="act-foot" id="actFoot">${OT.end ? '— 已到开盘第一笔 —' : OT.loading || OT.pending ? '正在补全链上成交…' : (actAsc ? '正在补全更早的成交…' : '往下滚动加载更早的成交')}</div>` : '');
   if (actAsc) { if (atBottom) body.scrollTop = body.scrollHeight; else body.scrollTop = prevTop; }   // 正序：在底部时跟着新成交往下，否则保持不动
   else body.scrollTop = prevTop;
 }

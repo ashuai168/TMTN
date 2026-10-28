@@ -634,12 +634,16 @@ export class LiveMarket extends EventEmitter {
           h.block = to;
         }
       } finally {
-        h.at = Date.now() + (h.block < head ? 45_000 : 0); if (n) this.applyV3History(t);
+        // 出错没查完：已经有成交的 60 秒后再试；一笔都还没有的（刚重启 / 刚打开的盘）15 秒就再试，免得活动栏长时间只有实时进来的几笔
+        h.at = Date.now() + (h.block < head && h.rows.length ? 45_000 : 0); h.synced = h.block >= head; if (n) this.applyV3History(t);
         // 新成交和查到的区块存回库（没有新成交时每 2000 块记一次位置）
         if (h.db && h.block && (fresh.length || !h.cur || h.block - h.cur >= 2000)) { const all = !h.cur; h.cur = h.block; cache.saveTrades('gang-pad', t.address, all ? h.rows : fresh, h.block, uid).then((ok) => { if (!ok) h.cur = 0; }).catch(() => { h.cur = 0; }); }
       }
       return n;
-    })().finally(() => { h.busy = null; });
+    })().catch((e) => {   // 查链上成交失败要能在日志里看到（以前静默吞掉，活动栏只剩自己的几笔也查不出原因）；同一个币 1 分钟最多记一次
+      if (!(h.errAt > Date.now() - 60_000)) { h.errAt = Date.now(); console.log(`[Gang V3] ${t.symbol || t.address} 链上成交补查失败（查到区块 ${h.block || '-'}，${h.rows.length} 笔）：${e.shortMessage || e.message}`); }
+      throw e;
+    }).finally(() => { h.busy = null; });
     return h.busy;
   }
   // 接口成交不全的 pad（CHAIN_HIST_PADS）上的 V2 盘：和 V3 一样用 gangV3History 从链上 Buy / Sell 重建 K 线和成交；
@@ -1026,21 +1030,25 @@ export class LiveMarket extends EventEmitter {
   async allTrades(t) {
     this._all ||= new Map(); const c = this._all.get(t.address);
     if (c && Date.now() - c.at < 60_000) return c;
-    let list = [], complete = true;
-    if (t.source === 'gang' && (t.gangTrack === 'v3' || (t._gangPad && t.stage !== 'dex'))) { if (t.gangTrack !== 'v3') await this.gangSeedHist(t); await this.gangV3History(t); list = (t._v3Hist?.rows || []).map((x) => this.v3Row(t, x)); }
+    let list = [], complete = true, pending = false;
+    // V3 / 链上补的 pad 盘：链上成交还没补到最新区块（刚重启、节点出错、限流中）时标 pending，不缓存，前端过几秒再要。
+    // 以前这时返回空列表 + 已到底，活动栏只剩实时进来的几笔（往往只有自己的），还显示「已到开盘第一笔」（BUILDER 0xe252…4b2f 2026-10-28）
+    if (t.source === 'gang' && (t.gangTrack === 'v3' || (t._gangPad && t.stage !== 'dex'))) { if (t.gangTrack !== 'v3') await this.gangSeedHist(t); await this.gangV3History(t).catch(() => {}); list = (t._v3Hist?.rows || []).map((x) => this.v3Row(t, x)); pending = !t._v3Hist?.synced; }
     else if (t.source === 'gang' && t.gangTrack !== 'v3fair') { const k = this.qScale(t); list = (await this.gang.history(t.address, 20000)).map((x) => (k === 1 ? x : { ...x, price: x.price * k, bnb: x.bnb * k })); }
     else if (t.source === 'four-agent') list = await this.four.tokenTrades(t.address);
     else if (t.source === 'flap-nft') list = (await this.flapNft.history(t.address, true).catch(() => this.flapNft.trades(t.address))).map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx }));   // 门槛盘：Portal 内盘成交（从创建起）
     else if (t.market) { list = await this.fsiHistory(t); complete = list.length < 9000; }
     list = [...new Map(list.map((x) => [`${x.tx}:${x.side}:${x.tokens}`, x])).values()].sort((a, b) => b.ts - a.ts).slice(0, 20000);
     for (const x of list) { x.name ||= this.names.peek(x.trader); x.usd = (x.bnb || 0) * this.quoteUsd(t); }
-    const v = { at: Date.now(), list, complete };
+    const v = { at: Date.now(), list, complete, pending };
+    if (pending) return v;
     this._all.set(t.address, v); if (this._all.size > 20) this._all.delete(this._all.keys().next().value);
     return v;
   }
   async tradesPage(address, before, limit = 100) {
     const t = this.get(address); if (!t) return null;
-    const { list, complete } = await this.allTrades(t);
+    const { list, complete, pending } = await this.allTrades(t);
+    if (pending) return { items: [], end: false, complete: false, pending: true, total: list.length };   // 还在补链上历史：先不给，前端稍后重试
     const i = before ? list.findIndex((x) => x.ts < before) : 0;
     const items = i < 0 ? [] : list.slice(i, i + limit);
     return { items, end: i < 0 || i + limit >= list.length, complete, total: list.length };
