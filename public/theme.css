@@ -189,3 +189,11 @@ html[data-theme="new"] body { font-size: 13px; }
 [data-theme="new"] .wchip.on { border-color: var(--line2); }
 /* 战壕卡片里的小标签是固定宽度的格子，不加描边（空格子会露出来） */
 [data-theme="new"] .tcard .chip, [data-theme="new"] .tlc .chip { box-shadow: none; }
+/* 买入钱包：不要框，一行一个，选中的打 ✓（和效果图一样） */
+[data-theme="new"] .wchips { flex-direction: column; gap: 2px; }
+[data-theme="new"] .wchip, [data-theme="new"] .wchip.on { border: 0; background: none; padding: 3px 0; border-radius: 0; width: 100%; }
+[data-theme="new"] .wchip.on { color: var(--text); }
+[data-theme="new"] .wchip:hover { color: var(--text); }
+[data-theme="new"] .mw-chip .mw-ck { color: var(--g); margin-left: auto; }
+/* 卡片里的空标签格子不显示底色 */
+[data-theme="new"] .chip:empty { background: none !important; box-shadow: none !important; }
