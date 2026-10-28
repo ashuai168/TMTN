@@ -421,6 +421,7 @@ export class LiveMarket extends EventEmitter {
       for (const x of j?.items || []) {
         // 已经由链上 Created 事件收录的 V3 盘：事件里已筹 / 进度是 0，gang.fun 的 V2 列表又不收 V3，以前就一直显示 0/15。这里按接口刷新已筹 / 目标 / 进度，没有图标的补上
         const ex = x?.address && this.get(x.address);
+        if (ex && ex.source === 'gang' && ex.gangTrack === 'v1') { ex.gangTrack = 'v3'; this.gangV2Curve(ex).catch(() => {}); }   // 在 V3 列表里却被标成老盘的（链上收录时 track 丢了）：改回 V3，战壕和买卖才走对
         if (ex && ex.source === 'gang' && ex.gangTrack === 'v3' && !x.graduated && !ex._chainCurve) {
           const dec = Number(x.quoteDecimals) || 18, raised = Number(ethers.formatUnits(BigInt(x.realQuote || 0), dec)), grad = Number(ethers.formatUnits(BigInt(x.gradAmt || 0), dec));
           if (raised > 0 || Number(x.progressPct) > 0) Object.assign(ex, { raised, progress: Number(x.progressPct) || (grad > 0 ? Math.min(100, (raised / grad) * 100) : ex.progress), ...(grad > 0 && { target: grad }) });
