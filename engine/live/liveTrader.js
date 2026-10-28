@@ -861,7 +861,7 @@ export class LiveTrader extends EventEmitter {
         : this.useGangV2(t) ? await this.gangV2.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, payQuote })
         : this.useGang(t) ? await this.gangTrade.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step })
         : this.useOpenFour(t) ? await this.openFourBuy({ w, t, amt, slippage, step })
-        : this.useFlapNft(t) ? await this.flapNft.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, fast: order.via === 'quick', bnbQuote: !t.quoteAddress })   /* BNB 盘才按回执改成本（报价币盘事件金额是报价币） */
+        : this.useFlapNft(t) ? await this.flapNft.buy({ wallet: w.address, token: t.address, amountBnb: trim(amt), slippage, step, fast: order.via === 'quick', bnbQuote: !t.quoteAddress })   /* 成本按实际花的 BNB（多给的会退回）：BNB 盘读 Portal 事件，报价币盘按余额差 */
         : this.usePortal(t, 'buy')
         ? await this.portal.buy({ wallet: w.address, market: t.market, quoteAddress: t.quoteAddress, quoteSym: t.quote, amountBnb: trim(amt), slippage, step, payQuote, quoteRate: t.quoteAddress ? await this.gangV2.quoteRate(t.quoteAddress, { stale: 30_000 }).catch(() => null) : null })
         : await this.dexTrade({ t, w, side: 'buy', qty: amt, slippage, step });

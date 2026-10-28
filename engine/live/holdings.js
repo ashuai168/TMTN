@@ -192,8 +192,8 @@ export class Holdings {
       if (p.amount > 0 && !(t.price > 0) && t.source === 'gang' && (t.gangTrack === 'v2' || t.gangTrack === 'v3')) await this.market.gangV2Curve?.(t).catch(() => {});
       const hx = extra.get(lc(p.token)), h = hx && !hx.appOnly ? hx : this.hist.get(lc(p.token));
       // 有钱包历史就用历史（包括别处买的）；没有就用本程序的订单记录
-      // 钱包历史里只有卖出、没有买入（baw 还没收录这笔买入，订单补记也过了时间窗）：买入成本用本程序的订单记录，否则成本只剩手续费、盈亏变成几百万 %
-      const appBuy = !!h && !h.buys && p.boughtBnb > 0;
+      // 钱包历史漏了买入（baw 还没收录 / 只收录了几笔里的一部分，订单补记也过了时间窗）：本程序记的买入明显更多时用本程序的，否则成本只剩手续费、盈亏变成几百万 %
+      const appBuy = !!h && p.boughtBnb > 0 && (!h.buys || (t.platform === 'flap' && p.boughtBnb > h.boughtBnb * 1.05 + 1e-6));   // 部分漏收只看 Flap（baw 收录 Portal 买入慢）；Gang 等的旧订单记录可能偏大，不拿来覆盖历史
       const bought = appBuy ? p.boughtBnb : h ? h.boughtBnb : p.boughtBnb || 0, sold = h ? h.soldBnb : p.soldBnb || 0, fees = h ? h.fees : 0;
       const costUsd = appBuy ? p.boughtBnb * bnbUsd + h.feesUsd : h ? h.boughtUsd + h.feesUsd : (bought + fees) * bnbUsd;
       // 价格以报价币计（GANG、BNCB…），折成 BNB：× 报价币/BNB 汇率（和行情同一来源）

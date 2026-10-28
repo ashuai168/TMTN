@@ -378,8 +378,18 @@ export class FlapNft extends EventEmitter {
     if (!fast) await this.simulate(wallet, inputData, q.value);   // 快捷买入不模拟，直接发（报价 + 滑点保护照旧）
     const hash = await this.send({ wallet, to: FLAP_PORTAL, valueWei: q.value, inputData, label: 'Flap Portal.swapExactInput 买入', step });
     // 「买 N%」给的金额超过 2% 上限时 Portal 会退回多的：成本按回执里 Portal 记的实际花费，不按发出去的 msg.value
-    const spent = !bnbQuote ? null : portalSpent(await this.provider.getTransactionReceipt(hash).catch(() => null), wallet, f18(q.value));
+    // BNB 盘读 Portal 买入事件；报价币盘（BNCB 等，事件金额是报价币）按这一块前后的 BNB 余额差减 gas 算（多的 BNB 一样会退回）
+    const rc = await this.provider.getTransactionReceipt(hash).catch(() => null);
+    let spent = bnbQuote ? portalSpent(rc, wallet, f18(q.value)) : null;
+    if (spent == null && rc) spent = await this.spentByBalance(rc, wallet, q.value).catch(() => null);
     return { venue: 'Flap Portal.swapExactInput（内盘，BNB）', expected: f18(q.out), txHash: hash, hashes: [hash], ...(spent != null ? { spent } : {}) };
+  }
+
+  // 一笔买入实际花的 BNB：这一块前后的余额差 − gas。不在 (0, 发出的 BNB] 里就当读不准（同一块里还有别的转账等），返回 null
+  async spentByBalance(rc, wallet, valueWei) {
+    const [b0, b1] = await Promise.all([this.provider.getBalance(wallet, rc.blockNumber - 1), this.provider.getBalance(wallet, rc.blockNumber)]);
+    const d = b0 - b1 - rc.gasUsed * (rc.gasPrice ?? rc.effectiveGasPrice ?? 0n);
+    return d > 0n && d <= BigInt(valueWei) ? f18(d) : null;
   }
 
   async sell({ wallet, token, pct, slippage, step }) {
