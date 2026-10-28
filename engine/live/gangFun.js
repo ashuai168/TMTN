@@ -103,14 +103,23 @@ export class GangFun extends EventEmitter {
     return x.side === 'buy' ? n('bnb') + n('fee') : n('bnb');
   }
 
+  // 成交接口：V2 盘走 /stocks。不在 V2 列表里的盘（搜索 / 链上事件刚收录的）先按老盘查，404 再按 /stocks 查，查到就记成 V2
+  async tradesGet(address, qs) {
+    let v2 = this.v2.get(address);
+    if (!v2) {
+      try { return { j: await this.get(`/tokens/${address}/trades?${qs}`), v2 }; } catch (e) { if (!/HTTP 404/.test(e.message)) throw e; }
+      const j = await this.get(`/stocks/tokens/${address}/trades?${qs}`); this.v2.set(address, v2 = { quoteUsd: 0 }); return { j, v2 };
+    }
+    return { j: await this.get(`/stocks/tokens/${address}/trades?${qs}`), v2 };
+  }
+
   // 全部成交历史（翻页，最多 max 条），只用来从开盘起重建 K 线，不当作新成交推送。返回按时间升序的 { ts, price, bnb }
   // 有 MySQL 缓存：从最新往回翻，接上库里最新的那笔（多翻 5 分钟重叠）就停，旧的从库里读。cursor = 1 表示库里已经从开盘起拉全
   async history(address, max = 4000) {
-    const v2 = this.v2.get(address);
     const rows = await cache.history('gang', address, async (cur, old) => {
       const have = old?.rows || [], stopAt = have.length ? have.at(-1).ts - 300_000 : 0; const out = []; let full = false;
       for (let off = 0; off < max;) {
-        const j = await this.get(`${v2 ? '/stocks' : ''}/tokens/${address}/trades?limit=200&offset=${off}&sort=ts_desc`);
+        const { j, v2 } = await this.tradesGet(address, `limit=200&offset=${off}&sort=ts_desc`);
         for (const x of j.items || []) out.push({ ts: x.ts * 1000, price: Number(x.price), bnb: GangFun.amt(x, v2), tx: x.tx, side: x.side, trader: x.trader, name: x.traderHandle || null, tokens: Number(x.tokens) });
         if (!j.hasMore || !j.nextOffset) { full = true; break; }
         if (stopAt && out.at(-1)?.ts < stopAt && (cur === 1 || have.length + out.length >= max)) { full = cur === 1; break; }   // 接上已存的了
@@ -123,8 +132,7 @@ export class GangFun extends EventEmitter {
 
   // 拉一个盘的成交（选中代币时也会调用，limit 大一些用来画 K 线）
   async trades(address, limit = 200) {
-    const v2 = this.v2.get(address);
-    const j = await this.get(`${v2 ? '/stocks' : ''}/tokens/${address}/trades?limit=${limit}&offset=0&sort=ts_desc`);
+    const { j, v2 } = await this.tradesGet(address, `limit=${limit}&offset=0&sort=ts_desc`);
     const last = this.lastTx.get(address) || 0;
     const k = 1;   // 和全站约定一致：价格 / 金额都用报价币单位，换美元时再乘 quoteUsd
     const rows = (j.items || []).map((x) => ({ token: address, side: x.side, trader: x.trader, name: x.traderHandle || null,

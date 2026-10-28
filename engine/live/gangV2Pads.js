@@ -12,6 +12,8 @@ import { V3_PADS, isV3Pad, v3PadAbi, normCurve, assertV3Trade, v3Pending } from 
 
 // 0x245a…88e4：gang.fun track "stocks" 的又一个 pad（ABI / Buy / Created 事件与 V2 相同，字节码核对过）；接口 /api/tokens 的 v2Launchpad 字段对这些盘写的是 0x1B8F，不可信，以链上 curves() 为准
 export const V2_PADS = ['0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E', '0xF81C4E51c48466c6025B0165b1Ea0F6978c712cb', '0x60aee38576035E757deD30fF8db8A8DA476430C1', '0x245a42cE8337DECe0f1C04f8430C90C8D98b88e4'];
+// gang.fun 接口对这些 pad 上的盘成交 / 已筹不全（SMK5C：接口成交停在 10-23、已筹 0.3，链上 12.5 BNB、10-28 又有几百笔）：曲线状态和成交以链上为准（liveMarket.gangV2Curve / gangSeedHist）
+export const CHAIN_HIST_PADS = new Set(['0x245a42ce8337dece0f1c04f8430c90c8d98b88e4']);
 const trimBnb = (n) => Number(n).toFixed(18).replace(/\.?0+$/, '') || '0';
 const USDT = '0x55d398326f99059fF775485246999027B3197955';   // BSC USDT（18 位小数）
 const ONDO_RE = /one side must be a supported stablecoin|Unsupported token pair for Ondo/i;

@@ -11,7 +11,7 @@ import { GangChain, QUOTE_DEC } from './gangChain.js';
 import { FlapChain } from './flapChain.js';
 import { FlapNft } from './flapNft.js';
 import { GangPadChain } from './gangPadChain.js';
-import { GangV2 } from './gangV2Pads.js';
+import { GangV2, CHAIN_HIST_PADS } from './gangV2Pads.js';
 import { V3_TRADE, V3_PADS } from './gangV3.js';
 import { fairList } from './gangFair.js';
 import { DexFeed, dexBars, compactCandles } from './dexFeed.js';
@@ -387,13 +387,20 @@ export class LiveMarket extends EventEmitter {
   // Gang V2 新盘：本后端的订阅还没看到、但主后端已经发来狙击订单时（钱包 2 等），直接读链上曲线把它加进列表
   async lookupGangV2(address) {
     this._gv2 ||= new GangV2(this.provider, null);
-    const { c } = await this._gv2.curve(address);
-    const erc = new ethers.Contract(address, ['function name() view returns (string)', 'function symbol() view returns (string)'], this.provider);
-    const [name, symbol] = await Promise.all([erc.name().catch(() => ''), erc.symbol().catch(() => '?')]);
-    const q = String(c.quote).toLowerCase(), quoteSymbol = q === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' || c.quote === ethers.ZeroAddress ? 'BNB' : await this.gangChain.symbolOf(q);
+    const { pad, c } = await this._gv2.curve(address);
+    const a = address.toLowerCase(), erc = new ethers.Contract(address, ['function name() view returns (string)', 'function symbol() view returns (string)'], this.provider);
+    // gang.fun /api/tokens/<CA>（约 0.15 秒）：创建时间、持有人、成交笔数；接口没收录就用现在的时间
+    const [name, symbol, info] = await Promise.all([erc.name().catch(() => ''), erc.symbol().catch(() => '?'), fetch('https://gang.fun/api/tokens/' + a, { signal: AbortSignal.timeout(3000) }).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
+    const q = String(c.quote).toLowerCase(), wb = q === '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c' || c.quote === ethers.ZeroAddress, quoteSymbol = wb ? 'BNB' : await this.gangChain.symbolOf(q);
+    // 已筹 / 目标 / 进度从链上曲线读（以前收录时都是 0，页面显示 0/15、0.00%）
+    const dec = wb ? 18 : await this._gv2.decimals(q).catch(() => 18), raised = Number(ethers.formatUnits(BigInt(c.realQuote || 0), dec)), grad = Number(ethers.formatUnits(BigInt(c.gradAmt || 0), dec));
     if (this.get(address)) return this.get(address);   // 读链期间订阅已经收录
-    this.upsertGang({ address: address.toLowerCase(), name, symbol, creator: String(c.creator).toLowerCase(), createdAt: Math.floor(Date.now() / 1000), graduated: !!c.graduated, raisedQuote: 0, progressPct: 0, quoteSymbol, quoteAddress: q, track: c.v3 ? 'v3' : 'v2', taxed: !!c.taxed }, false);
-    return this.get(address);
+    if (!c.v3 && !this.gang.v2.has(a)) this.gang.v2.set(a, { quoteUsd: Number(info?.quoteUsd) || 0 });   // V2 盘的成交接口走 /stocks
+    this.upsertGang({ address: a, name: name || info?.name || '', symbol: symbol || info?.symbol || '?', creator: String(c.creator).toLowerCase(), createdAt: Number(info?.createdAt) || Math.floor(Date.now() / 1000),
+      graduated: !!c.graduated, raisedQuote: raised, progressPct: c.graduated ? 100 : grad > 0 ? Math.min(100, (raised / grad) * 100) : 0, gradAmtQuote: grad || undefined, holders: info?.holders ?? null, trades: info?.trades, lastTradeAt: info?.lastTradeAt,
+      quoteSymbol, quoteAddress: q, track: c.v3 ? 'v3' : 'v2', taxed: !!c.taxed }, false);
+    const t = this.get(address); if (t && CHAIN_HIST_PADS.has(String(pad).toLowerCase())) t._gangPad = String(pad).toLowerCase();
+    return t;
   }
 
   // Gang V3 曲线盘 + 打新盘：以前只靠链上 Created 事件收录，重启后之前创建的都没了。启动时和每 30 秒从 gang.fun 列表补齐：
@@ -438,7 +445,7 @@ export class LiveMarket extends EventEmitter {
     const qa = String(it.quoteAddress || '').toLowerCase();
     if (t._qDec == null && qa && QUOTE_DEC[qa]) t._qDec = QUOTE_DEC[qa];   // 已知的非 18 位报价币（XAUt 6 位、BEM 8 位）马上用，不等链上曲线
     else if (t._qDec == null && qa && (it.track === 'v2' || it.track === 'v3') && qa !== '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c') { this._gv2 ||= new GangV2(this.provider, null); this._gv2.decimals(qa).then((d) => { t._qDec ??= d; }).catch(() => {}); }
-    const raised = Number(it.raisedQuote ?? it.raisedBnb) || 0, pct = Number(it.progressPct) || 0;
+    const raised = Number(it.raisedQuote ?? it.raisedBnb) || 0, pct = Number(it.progressPct) || 0, chainCurve = t._chainCurve;
     Object.assign(t, {
       source: 'gang', platform: 'gang', agentExclusive: true, symbol: it.symbol, name: it.name, quote: it.quoteSymbol || 'BNB', quoteAddress: it.quoteAddress || null, creator: it.creator,
       creatorName: it.creatorHandle || null, feeBps: 100, sellFeeBps: 100, stage: it.graduated ? 'dex' : 'curve', migratedAt: it.graduatedAt ? it.graduatedAt * 1000 : t.migratedAt, raised: t._qDec && t._qDec !== 18 ? t.raised : raised, progress: pct, target: t._qDec && t._qDec !== 18 ? t.target : it.gradAmtQuote || (pct > 0 ? Math.round((raised / (pct / 100)) * 10) / 10 : (t.target || 15)),   /* 非 18 位报价币（XAUt）接口按 18 位给，数会小 1e12 倍，用链上读的 */ gangTrack: /^v3/.test(t.gangTrack || '') ? t.gangTrack : it.track || 'v1' /* 链上认出的 V3 不被接口的 v2 覆盖 */, remaining: t._v2Rem ?? null,   // 剩余可售：V2 从合约读，读到之前 / 老盘未知 = null（页面显示「—」）
@@ -446,6 +453,7 @@ export class LiveMarket extends EventEmitter {
       price: (t._qDec && t._qDec !== 18 ? 0 : Number(it.priceQuote ?? it.priceBnb)) || t.price, mcapUsd: (t._qDec && t._qDec !== 18 ? 0 : Number(it.fdvUsd)) || t.mcapUsd || 0,   // 币股等报价币盘接口常不给 fdvUsd，别把成交算出的市值覆盖成 0
       holders: it.holders ?? null, pair: it.pair || t.pair || null, tradeCount: it.trades ?? t.tradeCount ?? 0,   // 2026-10-27 起这几项被上一行的注释吞掉没有赋值
     });
+    if (chainCurve) Object.assign(t, chainCurve);   // 接口数据不全的 pad（CHAIN_HIST_PADS）：已筹 / 目标 / 进度用 gangV2Curve 读的链上值，不被接口的旧数覆盖
     if (t.gangTrack === 'v3fair' && t._fair) this.applyFair(t);   // 打新币：接口 / 链上事件按内盘给的 0/15、curve 不对，用 pad 读到的覆盖
     else if (t.gangTrack === 'v3fair' && !t._fairAt) this.gangFairState(t).catch(() => {});   // 新打新盘（链上 Created 事件刚进来）：马上读一次 pad，不等 15 秒轮询
     if (!existed) t.createdAt = it.createdAt * 1000;
@@ -588,9 +596,9 @@ export class LiveMarket extends EventEmitter {
       const head = await this.provider.getBlockNumber();
       if (!h.block) {   // 按平均出块时间从创建时间倒推起始区块，多往前 600 块
         const [a, b] = await Promise.all([this.provider.getBlock(head), this.provider.getBlock(head - 10_000)]);
-        let c = t.createdAt || (a.timestamp - 86_400) * 1000; if (c > 1e14) c /= 1000;   // 接口给毫秒时 createdAt 会被多乘一次 1000
+        let c = t._histFrom || t.createdAt || (a.timestamp - 86_400) * 1000; if (c > 1e14) c /= 1000;   // _histFrom：接口已给到的最后一笔（gangSeedHist），链上只补之后的   // 接口给毫秒时 createdAt 会被多乘一次 1000
         const bt = (a.timestamp - b.timestamp) / 10_000 || 0.45, age = Math.max(0, a.timestamp - Math.floor(c / 1000));
-        h.block = Math.max(1, head - 400_000, head - Math.ceil(age / bt) - 600) - 1;
+        h.block = Math.max(1, head - 300_000, head - Math.ceil(age / bt) - 600) - 1;   // 公共节点只给最近约 30 万块（约 1.5 天）的日志，再早报 archive 错误、每 45 秒卡在同一块重试；更早的成交靠接口（gangSeedHist）
       }
       // 每 2000 块记一次进度：中途被限流 / 出错，下次从断点接着查，不从头重来；出错 60 秒后再试
       const seen = new Set(h.rows.map((x) => `${x.tx}:${x.side}:${x.tokens}`)); let n = 0;
@@ -604,6 +612,15 @@ export class LiveMarket extends EventEmitter {
       return n;
     })().finally(() => { h.busy = null; });
     return h.busy;
+  }
+  // 接口成交不全的 pad（CHAIN_HIST_PADS）上的 V2 盘：和 V3 一样用 gangV3History 从链上 Buy / Sell 重建 K 线和成交；
+  // 接口已有的旧成交先放进去（链上节点查不到太久以前的日志），链上从接口最后一笔之后查起
+  async gangSeedHist(t) {
+    if (t._v3Hist) return;
+    const rows = await this.gang.history(t.address).catch(() => []);
+    if (t._v3Hist) return;
+    t._v3Hist = { rows: rows.map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx })), block: 0, at: 0 };
+    t._histFrom = rows.at(-1)?.ts || null;
   }
   v3Row(t, x) { const k = this.qScale(t); return { ts: x.ts, side: x.side, bnb: x.bnb * k, tokens: x.tokens, price: x.price * k, trader: x.trader, tx: x.tx }; }
   applyV3History(t) {
@@ -797,10 +814,12 @@ export class LiveMarket extends EventEmitter {
         // 选中时拉一次较长的成交记录画 K 线（5 秒内不重复请求）
         // 已发射的不再拉：内盘不会有新成交，成交列表换成外盘的之后重拉会把同一批内盘成交重复记进 K 线成交量
         // V3 曲线盘：gang.fun 成交接口没有 V3 的成交，K 线 / 成交 / 成交量都从 pad 的链上事件重建（第一次最多等 4 秒，之后只补新区块）
-        if (t.gangTrack === 'v3') await Promise.race([this.gangV3History(t).then((n) => { if (n) this.emit('detail', t.address); }), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
+        const ch = t.gangTrack !== 'v3' && t._gangPad && t.stage !== 'dex';   // 接口成交不全的 pad 上的 V2 盘，见 gangSeedHist
+        if (ch) await this.gangSeedHist(t);
+        if (t.gangTrack === 'v3' || ch) await Promise.race([this.gangV3History(t).then((n) => { if (n) this.emit('detail', t.address); }), new Promise((r) => setTimeout(r, 4000))]).catch(() => {});
         else if (t.stage !== 'dex' && (!t.gangAt || Date.now() - t.gangAt > 5000)) { t.gangAt = Date.now(); await this.gang.trades(t.address, 200); }
         // 第一次选中：拉全部成交，从开盘起重建 K 线（也清掉改单位之前按 BNB 记的旧 K 线，全部是报价币单位）；10 分钟重建一次
-        if (t.gangTrack !== 'v3' && (!t.gangFullAt || Date.now() - t.gangFullAt > 600_000)) {
+        if (t.gangTrack !== 'v3' && !ch && (!t.gangFullAt || Date.now() - t.gangFullAt > 600_000)) {
           t.gangFullAt = Date.now();
           const rows = await this.gang.history(t.address).catch(() => null);
           if (rows?.length) { const k = this.qScale(t); t.candles = []; let vol = 0; for (const r of rows) { vol += (r.bnb || 0) * k; if (r.price > 0) this.pushCandle(t, r.ts, r.price * k, r.bnb * k); } t.volume = vol; t._volFull = true; t.volumeH24 = false; t._chgAt = 0; }   // 成交量 = 开盘起全部成交（报价币）
@@ -956,6 +975,11 @@ export class LiveMarket extends EventEmitter {
     if (!c.graduated && tokRes > 0n && (dec !== 18 || !(t.price > 0))) { t.price = Number(ethers.formatUnits(q, dec)) / Number(ethers.formatEther(tokRes)); const u = this.quoteUsd(t); if (u) t.mcapUsd = t.price * 1e9 * u; }
     if (c.v3) { t.gangV3 = { ...c.v3, trade: V3_TRADE }; t.gangDiv = { taxed: c.taxed && c.v3.dividendBps > 0, taxBps: Math.max(c.v3.buyTaxBps, c.v3.sellTaxBps), vault: null, stats: t.gangDiv?.stats || null }; }   // V3：毕业后外盘收税，分红比例 > 0 才分红
     else if (t.gangDiv?.taxed == null) t.gangDiv = { taxed: !!c.taxed, taxBps: c.taxed ? 100 : 0, vault: null, stats: null };   // 新盘接口还没收录时，按合约 curves().taxed 先判断分红
+    if (CHAIN_HIST_PADS.has(String(pad).toLowerCase())) {   // 接口数据不全的 pad：已筹 / 目标 / 进度以链上为准（upsertGang 不再用接口的覆盖）
+      t._gangPad = String(pad).toLowerCase();
+      const raised = Number(ethers.formatUnits(real, dec)), target = Number(ethers.formatUnits(grad, dec));
+      t._chainCurve = { raised, target, progress: c.graduated ? 100 : target > 0 ? Math.min(100, (raised / target) * 100) : 0 }; Object.assign(t, t._chainCurve);
+    }
     t._v2Rem = c.graduated ? 0 : Math.max(0, Number(ethers.formatEther(soldAtGrad > sold ? soldAtGrad - sold : 0n)));
     t.remaining = t._v2Rem; t._v2At = Date.now(); t._chgAt = 0;
   }
@@ -966,7 +990,7 @@ export class LiveMarket extends EventEmitter {
     this._all ||= new Map(); const c = this._all.get(t.address);
     if (c && Date.now() - c.at < 60_000) return c;
     let list = [], complete = true;
-    if (t.source === 'gang' && t.gangTrack === 'v3') { await this.gangV3History(t); list = (t._v3Hist?.rows || []).map((x) => this.v3Row(t, x)); }
+    if (t.source === 'gang' && (t.gangTrack === 'v3' || (t._gangPad && t.stage !== 'dex'))) { if (t.gangTrack !== 'v3') await this.gangSeedHist(t); await this.gangV3History(t); list = (t._v3Hist?.rows || []).map((x) => this.v3Row(t, x)); }
     else if (t.source === 'gang' && t.gangTrack !== 'v3fair') { const k = this.qScale(t); list = (await this.gang.history(t.address, 20000)).map((x) => (k === 1 ? x : { ...x, price: x.price * k, bnb: x.bnb * k })); }
     else if (t.source === 'four-agent') list = await this.four.tokenTrades(t.address);
     else if (t.source === 'flap-nft') list = (await this.flapNft.history(t.address, true).catch(() => this.flapNft.trades(t.address))).map((x) => ({ ts: x.ts, side: x.side, bnb: x.bnb, tokens: x.tokens, price: x.price, trader: x.trader, tx: x.tx }));   // 门槛盘：Portal 内盘成交（从创建起）
