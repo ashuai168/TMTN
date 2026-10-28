@@ -284,13 +284,25 @@ export class LiveMarket extends EventEmitter {
     this.loadMeta(t, ipfsUrl(meta) || g?.meta?.uri);
     if (g && (name || symbol || meta)) { const m = { ...g.meta, ...(name && { name }), ...(symbol && { symbol }), ...(meta && { uri: ipfsUrl(meta) }) }; if (JSON.stringify(m) !== JSON.stringify(g.meta || {})) { g.meta = m; this.flapNft.save(); } }
   }
+  // 计价币代号 / 小数位：读链上，读到就按地址缓存（所有盘共用）；读失败（节点限流）不缓存，下次再读。以前只在计价币地址第一次出现时读一次，失败就一直显示「?」（Marvel Dog / MRVLB 2026-10-28）
+  async quoteMeta(addr) {
+    const k = String(addr).toLowerCase(); this.qMeta ||= new Map(); const c = this.qMeta.get(k); if (c) return c;
+    const i = new ethers.Interface(['function symbol() view returns (string)', 'function decimals() view returns (uint8)']);
+    const rd = (fn) => this.provider.call({ to: addr, data: i.encodeFunctionData(fn) }).then((r) => i.decodeFunctionResult(fn, r)[0]).catch(() => null);
+    const [symbol, dec] = await Promise.all([rd('symbol'), rd('decimals')]);
+    const m = { symbol: symbol || getRoute(k)?.symbol || null, decimals: dec == null ? null : Number(dec) };
+    if (m.symbol && m.decimals != null) this.qMeta.set(k, m);
+    return m;
+  }
   async applyFlapNftState(t, st) {
-    if (st.quote !== ethers.ZeroAddress && t.quoteAddress?.toLowerCase() !== st.quote.toLowerCase()) {
-      t.quoteAddress = st.quote; t.quote = await this.provider.call({ to: st.quote, data: '0x95d89b41' }).then((r) => ethers.AbiCoder.defaultAbiCoder().decode(['string'], r)[0]).catch(() => '?');
-      t.flapNativeSwap = st.nativeSwap;
+    if (st.quote !== ethers.ZeroAddress) {
+      if (t.quoteAddress?.toLowerCase() !== st.quote.toLowerCase()) Object.assign(t, { quoteAddress: st.quote, quote: '?', quoteDec: null, flapNativeSwap: st.nativeSwap });
+      if (t.quote === '?' || t.quoteDec == null) { const m = await this.quoteMeta(st.quote); if (m.symbol) t.quote = m.symbol; if (m.decimals != null) t.quoteDec = m.decimals; }
     }
-    const price = Number(ethers.formatEther(st.price));
-    t.raised = Number(ethers.formatEther(st.reserve)); t.progress = st.status === 4 ? 100 : Math.min(100, st.progress);
+    // Portal 的储备、价格是报价币最小单位：按报价币小数位换算（目前见到的计价币都是 18 位，qs = 1）
+    const qs = 10 ** (18 - (t.quoteDec ?? 18));
+    const price = Number(ethers.formatEther(st.price)) * qs;
+    t.raised = Number(ethers.formatEther(st.reserve)) * qs; t.progress = st.status === 4 ? 100 : Math.min(100, st.progress);
     t.target = t.progress > 0 && t.progress < 100 ? t.raised / (t.progress / 100) : t.target;
     t.remaining = Math.max(0, Number(ethers.formatEther(st.dexThresh)) - Number(ethers.formatEther(st.circulating)));
     // 有链上成交以后 K 线只按成交画（成交时间、成交后价格）；还没补到成交时才用轮询价格兜底。已迁移的内盘价格读出来是 0，不覆盖
@@ -487,20 +499,21 @@ export class LiveMarket extends EventEmitter {
   ingestFlapNft(t, tr) {
     const key = `${tr.tx}:${tr.idx}`; t.nftKeys ||= new Set(); if (t.nftKeys.has(key)) return null; t.nftKeys.add(key);
     if (tr.side === 'buy') t.buys++; else t.sells++;
-    t.volume += tr.bnb;
+    const qs = 10 ** (18 - (t.quoteDec ?? 18)), bnb = tr.bnb * qs, price = tr.price * qs;   // 成交金额 / 价格按报价币小数位换算（18 位时不变）
+    t.volume += bnb;
     if (t.holdersKnown && tr.trader) {
       const v = (t.bal.get(tr.trader) || 0) + (tr.side === 'buy' ? tr.tokens : -tr.tokens);
       if (v > 1e-6) t.bal.set(tr.trader, v); else t.bal.delete(tr.trader);
       t.holders = t.bal.size;
     }
-    return { ts: tr.ts, side: tr.side, bnb: tr.bnb, tokens: tr.tokens, price: tr.price, trader: tr.trader, tx: tr.tx };
+    return { ts: tr.ts, side: tr.side, bnb, tokens: tr.tokens, price, trader: tr.trader, tx: tr.tx };
   }
   onFlapNftTrade(tr) {
     const t = this.get(tr.token); if (!t || t.source !== 'flap-nft') return;
     const trade = this.ingestFlapNft(t, tr); if (!trade) return;
-    if (t.stage === 'curve' && tr.ts >= (t.lastTradeAt || 0)) { const q = this.quoteUsd(t); if (q && tr.price > 0) t.mcapUsd = tr.price * 1e9 * q; }
+    if (t.stage === 'curve' && tr.ts >= (t.lastTradeAt || 0)) { const q = this.quoteUsd(t); if (q && trade.price > 0) t.mcapUsd = trade.price * 1e9 * q; }
     this.addTrade(t, trade);
-    if (Date.now() - tr.ts < 60_000) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: tr.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });
+    if (Date.now() - tr.ts < 60_000) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: trade.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });
   }
   // 从创建起的全部内盘成交重建：买卖笔数、成交量、持有人（净买入 > 0 的地址）、K 线（换掉轮询价格画的点，外盘部分留着）、最近 100 笔
   async flapNftHistory(t, urgent = false) {
@@ -643,6 +656,8 @@ export class LiveMarket extends EventEmitter {
     if (!l.token) return;
     // 列表只来自链上：Flap 用 Agent Curve Reader，Four 用 Agentic Wallet 专属模板事件；shrine 只给已有的盘补充信息
     if (!this.tokens.has(this.key(l.token))) return;
+    // Flap Portal 门槛盘 / 普通盘：来源、计价币、进度都读链上。以前 shrine 的新盘推送会把来源改成 shrine，之后 flapNftTick 不再刷新（进度 0/0），下单也不走 Portal（灭建国 0x42be…7777 2026-10-28）
+    if (this.get(l.token)?.source === 'flap-nft') return;
     const isNew = !this.tokens.has(this.key(l.token));
     const t = this.base(l.token);
     const created = sec2ms(l.timestamp || l.createdAt);
