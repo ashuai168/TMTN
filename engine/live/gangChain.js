@@ -11,6 +11,7 @@ import { ethers } from 'ethers';
 import { NODEREAL_WSS } from './config.js';
 import { WsLogs, PUBLIC_WSS } from './rpc.js';
 import { T_V3_CREATED, T_FAIR_CREATED, isV3Pad, verifyV3Pad } from './gangV3.js';
+import { checkGangChain } from './routeGuard.js';
 
 export const GANG_OLD_PAD = '0x315Ba2e8952D06094CC636b2B84229FA32fb23A7';
 export const GANG_V2_LAUNCHPAD = '0x1B8F3f69DFa0a7F63d308C7EB0Fd38D8b099966E';
@@ -84,6 +85,8 @@ export class GangChain extends EventEmitter {
       quoteSymbol, quoteAddress: v2 ? quoteAddress : null, logo: logo ? (/^ipfs:\/\//i.test(logo) ? 'https://cdn.gang.fun/ipfs/' + logo.replace(/^ipfs:\/\/(ipfs\/)?/i, '') : new URL(logo, 'https://gang.fun').href) : null, track: fair ? 'v3fair' : v3 ? 'v3' : v2 ? 'v2' : 'v1', pad: v3 ? log.address.toLowerCase() : null,   // logo：V3 Created 事件里是 ipfs://CID，换成 gang.fun 自己的网关（Flap 的网关不给别家的 CID，返回 403）。track / pad 必须写在注释前面：之前被注释吞掉，链上新盘全被当成老盘，买入发到老盘合约回滚 UnknownToken（0x8698bf37）
       fromChain: true, block: log.blockNumber, tx: log.transactionHash, seenAt, timeP,
     };
+    it.srcPad = log.address.toLowerCase(); it.srcTopic = log.topics[0];   // 发出创建事件的合约：routeGuard 只按它推盘型，核对上面这段字面量（字段被注释吞掉时会报警）
+    checkGangChain(it);
     this.emit('token', it);
     timeP.then((ts) => { if (ts != null && ts !== it.createdAt) { it.createdAt = ts; this.emit('tokenTime', it); } });
   }

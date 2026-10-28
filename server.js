@@ -21,6 +21,7 @@ import { cache } from './engine/live/cache.js';
 import { fairPctBnb } from './engine/live/gangFair.js';
 import { mountUpdater } from './engine/updater.js';
 import { mediaHostOk } from './engine/live/meta.js';
+import { routeEvents, routeAlerts } from './engine/live/routeGuard.js';
 
 // 日志脱敏：控制台 / live.log 里出现的 RPC 地址（含 NodeReal key）一律打码
 for (const k of ['log', 'info', 'warn', 'error']) { const f = console[k].bind(console); console[k] = (...a) => f(...a.map((x) => (typeof x === 'string' ? redactSecrets(x) : x instanceof Error ? redactSecrets(x.stack || x.message) : x))); }
@@ -138,6 +139,7 @@ const state = () => ({
   ...modeInfo(), block: market.block, bnbUsd: market.bnbUsd, gangMcap: market.gangMcap || 0, net,
   wallets: trader.walletsView(), settings: trader.settings, gasPresets: GAS_PRESETS, config: agent.config, usage: agent.usageView(),
   tokens: market.list(), positions: trader.positionsView(), snipeCurve: SNIPE_FEE_CURVE, claimable: LIVE ? trader.claimable : [],
+  routeAlerts: routeAlerts.slice(0, 10),
 });
 
 app.post('/api/claim', async (req, res) => { if (!LIVE) return res.status(400).json({ error: '只有实盘模式能领取' }); res.json(await trader.claimOne(req.body.market, '手动领取')); });
@@ -710,6 +712,7 @@ wss.on('connection', (ws) => {
 });
 
 market.on('launch', (s) => broadcast({ type: 'launch', data: s }));
+routeEvents.on('alert', (a) => broadcast({ type: 'routeAlert', data: a }));   // 路由自检报警：页面顶部红条
 // 实盘行情：选中的代币每 3 秒刷新一次详情
 if (LIVE) setInterval(() => new Set([...wss.clients].map((c) => c.sub).filter(Boolean)).forEach((a) => market.refresh(a)), 3000);
 market.on('image', (u) => { if (u.length <= 2000 && imgHostOk(u)) imgWarm(u).catch(() => {}); });

@@ -21,6 +21,7 @@ import * as fsi from './fsi.js';
 import { cache } from './cache.js';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { getRoute, MIN_LIQ_USD } from './quoteRoutes.js';
+import { watchToken } from './routeGuard.js';
 const FOUR_REG = dataFile('fourTokens.json');
 const FLAP_REG = dataFile('flapCreated.json');
 const BOOT = Date.now();
@@ -505,10 +506,12 @@ export class LiveMarket extends EventEmitter {
       (this.gangLat ||= []).unshift({ symbol: it.symbol, address: it.address, block: it.block, createdAt: it.createdAt * 1000, seenAt: it.seenAt, latencyMs: lat, viaApiFirst: apiFirst }); this.gangLat.length = Math.min(this.gangLat.length, 20);
       console.log(`[Gang 链上] 新盘 ${it.symbol}（${it.track === 'v3' ? 'V3 · ' + it.quoteSymbol : it.track === 'v3fair' ? 'V3 打新 · ' + it.quoteSymbol : it.track === 'v2' ? 'V2 · ' + it.quoteSymbol : '老盘 · BNB'}）区块 ${it.block}，出块后 ${lat}ms 发现${apiFirst ? '（接口已先收录）' : ''}`);
     });
-    if (this.tokens.has(this.key(it.address))) return;
+    const ex = this.get(it.address);
+    if (ex) { ex._srcPad ||= it.srcPad; ex._srcTopic ||= it.srcTopic; watchToken(ex, 'Gang 链上新盘（接口已先收录）'); return; }
     this.gang.seen.set(it.address, -1);
     this.upsertGang(it, true);
     const t = this.get(it.address);
+    if (t) { t._srcPad = it.srcPad; t._srcTopic = it.srcTopic; watchToken(t, 'Gang 链上新盘'); }   // 路由自检：盘型和发出创建事件的合约对不上就报警
     if (t && it.track === 'v3fair') this.gangFairState(t).catch(() => {});
     if (t && (it.track === 'v2' || it.track === 'v3')) this.gangV2Curve(t).then(() => { if (!(t.price > 0) && t.launchPrice > 0) { t.price = t.launchPrice; const q = this.quoteUsd(t); if (q && !(t.mcapUsd > 0)) t.mcapUsd = t.price * 1e9 * q; } }).catch(() => {});
   }

@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "check": "node scripts/check.mjs",
+    "check:offline": "node scripts/check.mjs --offline",
     "dev": "node --watch server.js",
     "watch:four": "node scripts/watch-four.js",
     "testnet:info": "node scripts/testnet-info.js",

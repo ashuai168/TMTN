@@ -20,6 +20,7 @@ import { FlapNft, FLAP_PORTAL } from './flapNft.js';
 import { DexDirect } from './dexDirect.js';   // 本会话实现（3 个 pad）；gangV2.js 是另一个会话的版本，这里没用
 import * as latency from './latency.js';
 import { setQuoteLookup, USDT, ONDO_RE, viaUsdt, markViaUsdt, assertLiquid, isQuoteToken, routeTokens, dexPrice } from './quoteRoutes.js';
+import { preTrade, watchToken } from './routeGuard.js';
 // 一键全部换回 BNB：价值低于这个美元数的零头跳过（不值 gas）。QUOTE_SWEEP_MIN_USD 可调
 const SWEEP_MIN_USD = Number(process.env.QUOTE_SWEEP_MIN_USD || 1);
 const NOT_SWEEP = new Set(['USDT', 'USDC', 'USD1', 'U', 'BUSD', 'FDUSD', 'BTCB', 'ETH', 'SOL', 'BNB']);   // 路线表里的这些不算计价币余额（BNB 那行是 WBNB，本来就在计价币里）
@@ -413,6 +414,7 @@ export class LiveTrader extends EventEmitter {
 
   async preview({ walletId, token, side, amount, slippage }, again = false) {
     const t = this.market.get(token); if (!t) return null;
+    watchToken(t, '报价');
     const base = { route: this.route(t, side) };
     if (!(Number(amount) > 0) || !this.wallets.length) return base;
     const key = [walletId, token, side, amount, slippage].join('|'); const c = this.quoteCache.get(key);
@@ -831,6 +833,7 @@ export class LiveTrader extends EventEmitter {
 
   async executeRoute(order, t, w, step) {
     const { side, slippage } = order;
+    preTrade(t, side);   // 路由自检：盘型和链上来源对不上（会发到错误的合约）就拦下，不发交易
     const p = this.pos(w.id, t.address);
     let r;
     if (side === 'buy') {

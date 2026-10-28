@@ -254,6 +254,7 @@ function onMsg({ type, data, full }) {
     case 'holdings': setHoldSnap(data); break;
     case 'rules': S.rules = data || {}; scheduleRender(); if (S.view === 'hold') renderHold(); break;
     case 'settings': S.settings = data; renderControls(); break;
+    case 'routeAlert': routeAlert(data); break;
   }
 }
 
@@ -1225,6 +1226,24 @@ function topPop(o) {
   if (![...POP.values()].some((v) => v.o.status === 'pending')) popTimer = setTimeout(() => { el.classList.remove('show'); POP.clear(); }, cs.includes('err') ? 6000 : 4000);
 }
 
+// 路由自检报警（engine/live/routeGuard.js）：某个币的盘型 / pad 和链上来源对不上，买卖可能发到错误的合约。页面顶部红条，点 × 关掉
+function routeAlert(a) {
+  let box = $('#routeAlert');
+  if (!box) {
+    box = document.createElement('div'); box.id = 'routeAlert';
+    box.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:200;background:#b3261e;color:#fff;font-size:13px;line-height:1.5;padding:6px 40px 6px 12px;box-shadow:0 2px 8px rgba(0,0,0,.4);max-height:40vh;overflow:auto';
+    const x = document.createElement('button'); x.textContent = '×'; x.title = '关闭';
+    x.style.cssText = 'position:absolute;top:4px;right:8px;background:none;border:0;color:#fff;font-size:18px;cursor:pointer';
+    x.addEventListener('click', () => box.remove());
+    const list = document.createElement('div'); list.className = 'ra-list';
+    box.append(x, list); document.body.append(box);
+  }
+  const row = document.createElement('div');
+  row.innerHTML = `<b>⚠ 路由自检报警</b> · ${esc(a.where || '')} · <b>${esc(a.symbol || '?')}</b> <span class="mono">${esc(a.token || '')}</span> · ${esc((a.problems || []).join('；'))} · <span>修好前别买这个币</span>`;
+  const list = box.querySelector('.ra-list'); list.prepend(row);
+  while (list.children.length > 5) list.lastChild.remove();
+}
+
 function toast(o) {
   const el = document.createElement('div');
   const ok = o.status === 'filled';
@@ -2120,6 +2139,7 @@ document.addEventListener('click', (e) => {
   try { S.fast = localStorage.fast === '1'; } catch { S.fast = false; }
   const st = await api('/api/state');
   if (st.holdings) setHoldSnap(st.holdings);
+  (st.routeAlerts || []).filter((a) => Date.now() - a.at < 3_600_000).reverse().forEach(routeAlert);
   S.orderSlots = !!st.orderSlots;   // 后端支持「只在指定钱包下单」
   Object.assign(S, { mode: st.mode, baw: st.baw, block: st.block, bnbUsd: st.bnbUsd, gangMcap: st.gangMcap, net: st.net, wallets: st.wallets, settings: st.settings, config: st.config, usage: st.usage, positions: st.positions, orders: st.orders, logs: st.logs, records: st.records, snipeCurve: st.snipeCurve });
   S.tokens = new Map(st.tokens.map((t) => [t.address, t]));
