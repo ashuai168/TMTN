@@ -45,7 +45,7 @@ export class MetaFetcher {
         const j = await res.json();
         const links = j.links || {};
         const v = { image: ipfsUrl(j.image || j.img), description: j.description || '', website: j.website || links.website || '',
-          twitter: j.twitter || links.twitter || '', telegram: j.telegram || links.telegram || '' };
+          twitter: j.twitter || links.twitter || '', telegram: j.telegram || links.telegram || '', metaCreator: /^0x[0-9a-fA-F]{40}$/.test(j.creator || '') ? j.creator.toLowerCase() : null };   // Flap 元数据里的 creator = 发币交易的 from（核对过）
         this.cache.set(url, v); cb(v);
         return;
       } catch { await sleep(1500 * (k + 1)); }

@@ -299,6 +299,7 @@ export class LiveMarket extends EventEmitter {
       if (t.quoteAddress?.toLowerCase() !== st.quote.toLowerCase()) Object.assign(t, { quoteAddress: st.quote, quote: '?', quoteDec: null, flapNativeSwap: st.nativeSwap });
       if (t.quote === '?' || t.quoteDec == null) { const m = await this.quoteMeta(st.quote); if (m.symbol) t.quote = m.symbol; if (m.decimals != null) t.quoteDec = m.decimals; }
     }
+    if (!t.quoteKnown) { t.quoteKnown = true; this.revalueTrades(t); }   // 计价币确定了：之前进来的成交按它重算美元
     // Portal 的储备、价格是报价币最小单位：按报价币小数位换算（目前见到的计价币都是 18 位，qs = 1）
     const qs = 10 ** (18 - (t.quoteDec ?? 18));
     const price = Number(ethers.formatEther(st.price)) * qs;
@@ -338,16 +339,22 @@ export class LiveMarket extends EventEmitter {
           await this.applyFlapNftState(t, st); await this.flapNftTax(t);
         } catch { /* 下一轮 */ }
         // 名字没读到就重试（已迁移的也要：以前只重试内盘，迁移盘读失败一次就一直显示「?」）
-        if ((!t.name || t.symbol === '?' || !t.metaUrl) && Date.now() - (t.metaTryAt || 0) > 30_000) await this.flapNftMeta(t).catch(() => {});
+        // 刚发币时节点常读不到：5 秒、10 秒、20 秒后重试，之后每 30 秒；名字有了、只差图标 / 简介的，单独重试元数据（不再读链）
+        if (!t.name || t.symbol === '?' || !t.metaUrl) { if (Date.now() - (t.metaTryAt || 0) > Math.min(30_000, 5000 * 2 ** (t.nameTries || 0))) { t.nameTries = (t.nameTries || 0) + 1; await this.flapNftMeta(t).catch(() => {}); } }
+        else if (!t.metaOk) this.loadMeta(t, t.metaUrl);
       }
     } finally { this.nftBusy = false; }
   }
 
   // 图标 / 简介 / 社交链接，异步补上；列表每 0.5 秒推送一次，到了就显示
+  // 以前设了 metaUrl 就不再请求：IPFS 网关 429 / 刚发币元数据还没传开时失败一次，图标就一直是「?」（2026-10-28 门槛盘 201 个里只有 28 个有图）。
+  // 现在没拿到结果的同一个 url 按 15 秒、30 秒、1 分钟…最多 10 分钟的间隔重试（调用方每轮都会再调）；拿到一次就不再请求
   loadMeta(t, url) {
-    if (!url || t.metaUrl === url) return;
-    t.metaUrl = url;
-    this.meta.get(url, (m) => { Object.assign(t, m); this.emit('detail', t.address); });
+    if (!url) return;
+    if (t.metaUrl === url && (t.metaOk || Date.now() - (t.metaAt || 0) < Math.min(600_000, 15_000 * 2 ** (t.metaTries || 0)))) return;
+    if (t.metaUrl !== url) Object.assign(t, { metaUrl: url, metaOk: false, metaTries: 0 }); else t.metaTries = (t.metaTries || 0) + 1;
+    t.metaAt = Date.now();
+    this.meta.get(url, ({ metaCreator, ...m }) => { Object.assign(t, m); t.metaOk = true; if (!t.creator && metaCreator) t.creator = metaCreator; this.emit('detail', t.address); });   // 创建者：链上没给的（Flap Portal 盘）用元数据里的
   }
 
   // 搜索粘贴地址：已在列表直接返回；否则查 Four 链上，查到就加进列表；都不是内盘时按普通外盘代币收录（lookupDex）
@@ -519,9 +526,9 @@ export class LiveMarket extends EventEmitter {
   onFlapNftTrade(tr) {
     const t = this.get(tr.token); if (!t || t.source !== 'flap-nft') return;
     const trade = this.ingestFlapNft(t, tr); if (!trade) return;
-    if (t.stage === 'curve' && tr.ts >= (t.lastTradeAt || 0)) { const q = this.quoteUsd(t); if (q && trade.price > 0) t.mcapUsd = trade.price * 1e9 * q; }
+    if (t.stage === 'curve' && tr.ts >= (t.lastTradeAt || 0)) { const q = this.tradeUsd(t); if (q && trade.price > 0) t.mcapUsd = trade.price * 1e9 * q; }
     this.addTrade(t, trade);
-    if (Date.now() - tr.ts < 60_000) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, usd: trade.bnb * this.quoteUsd(t), mcapUsd: t.mcapUsd });
+    if (Date.now() - tr.ts < 60_000) this.emit('trade', { address: t.address, symbol: t.symbol, ...trade, mcapUsd: t.mcapUsd });
   }
   // 从创建起的全部内盘成交重建：买卖笔数、成交量、持有人（净买入 > 0 的地址）、K 线（换掉轮询价格画的点，外盘部分留着）、最近 100 笔
   async flapNftHistory(t, urgent = false) {
@@ -529,9 +536,9 @@ export class LiveMarket extends EventEmitter {
     const list = await this.flapNft.history(t.address, urgent);
     Object.assign(t, { nftKeys: new Set(), buys: 0, sells: 0, volume: 0, holdersKnown: true, bal: new Map(), holders: 0, nftHistAt: Date.now() });
     t.candles = (t.candles || []).filter((c) => c.dex); t.trades = (t.trades || []).filter((x) => x.dex);
-    const q = this.quoteUsd(t), keep = [];
+    const q = this.tradeUsd(t), keep = [];
     for (const tr of list) { const x = this.ingestFlapNft(t, tr); if (!x) continue; this.noteFirstBuy(t, x); if (x.price) this.pushCandle(t, x.ts, x.price, x.bnb); keep.push(x); }
-    for (const x of keep.slice(-100)) { x.usd = x.bnb * q; x.mcapUsd = x.price * 1e9 * q; x.name = this.names.peek(x.trader); }
+    for (const x of keep.slice(-100)) { x.usd = q > 0 ? x.bnb * q : null; x.mcapUsd = x.price * 1e9 * q; x.name = this.names.peek(x.trader); }
     t.trades = [...keep.slice(-100), ...t.trades].sort((a, b) => b.ts - a.ts).slice(0, 100);
     const last = keep.at(-1);
     if (last) { t.lastTradeAt = Math.max(t.lastTradeAt || 0, last.ts); if (t.stage === 'curve') { t.price = last.price; if (q) t.mcapUsd = last.price * 1e9 * q; } else if (!(t.price > 0)) { t.price = last.price; if (q) t.mcapUsd = last.price * 1e9 * q; } }
@@ -715,10 +722,18 @@ export class LiveMarket extends EventEmitter {
   // 记下这个币最早的一笔买入（trades 只留 100 条，所以单独存）
   noteFirstBuy(t, tr) { if (tr?.side === 'buy' && tr.trader && (!t.firstBuy || tr.ts < t.firstBuy.ts)) t.firstBuy = { ts: tr.ts, trader: tr.trader }; }
 
+  // 成交美元用的报价币价格。Flap Portal 盘在第一次读到 Portal 状态之前不知道计价币（base() 默认写的是 BNB）：这时返回 0，成交先不定美元（页面按现价换算），
+  // 读到以后 revalueTrades 重算。以前按 BNB 价估，BNCB 计价盘的首笔买入 14 BNCB 显示成 $10,738（AIvirus 0x6442…7777 2026-10-28）
+  tradeUsd(t) { return t.source === 'flap-nft' && !t.quoteKnown ? 0 : this.quoteUsd(t); }
+  revalueTrades(t) {
+    const q = this.tradeUsd(t), v = (x) => { x.usd = q > 0 ? x.bnb * q : null; };
+    for (const x of t.trades || []) v(x);
+    for (const x of this.flow) if (x.address === t.address) v(x);
+  }
   addTrade(t, tr) {
     if (tr.tx && t.trades.some((x) => x.tx === tr.tx && x.side === tr.side)) return;
     this.noteFirstBuy(t, tr);
-    tr.usd = tr.bnb * this.quoteUsd(t); tr.mcapUsd = t.mcapUsd; tr.name = this.names.peek(tr.trader);
+    { const q = this.tradeUsd(t); tr.usd = q > 0 ? tr.bnb * q : null; } tr.mcapUsd = t.mcapUsd; tr.name = this.names.peek(tr.trader);
     t.trades.unshift(tr); t.trades.sort((a, b) => b.ts - a.ts); if (t.trades.length > 100) t.trades.length = 100;
     if (tr.price) { if (tr.ts >= (t.lastTradeAt || 0)) t.price = tr.price; this.pushCandle(t, tr.ts, tr.price, tr.bnb); }   // 补进来的旧成交只画 K 线，不改现价
     t.lastTradeAt = Math.max(t.lastTradeAt || 0, tr.ts);
