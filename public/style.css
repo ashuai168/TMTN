@@ -1239,3 +1239,5 @@ body.trkp-on .hg-open { left: calc(var(--trkpW, 340px) + 18px); }
 .net-badge.r { color: var(--r); border-color: rgba(246, 70, 93, .35); background: var(--r-bg); }
 .net-badge b { font-weight: var(--fw-strong); } .net-badge .dot { box-shadow: none; }
 .nb-sep { width: 1px; height: 10px; background: currentColor; opacity: .4; }
+/* 一键买卖浮窗：复制CA 按钮定宽，「复制CA」↔「已复制 ✓」切换时标题和代币名不再挪动/换行 */
+.qbp-h .ca-big.sm { width: 6.6em; padding: 0; justify-content: center; flex: none; box-sizing: border-box; }
