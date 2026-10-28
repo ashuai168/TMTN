@@ -100,7 +100,10 @@ const logoImg = (t) => {
   const st = imgState.get(src); if (!st) probeImg(src);
   return st === 'ok' ? `<img src="${esc(proxied(src))}" alt="" decoding="async" referrerpolicy="no-referrer">` : '';
 };
-const logoHtml = (t, cls = '') => t.platform === 'four' ? `<div class="logo ${cls}">.ai${logoImg(t)}</div>` : `<div class="logo flap ${cls}">${esc(String(t.symbol || '?').slice(0, 2).toUpperCase())}${logoImg(t)}</div>`;
+// 代号还没读到（服务端占位「?」）：显示名字，名字也没有就显示短合约地址；头像用代号 / 名字首字，都没有就留空，不显示「?」
+const symOk = (t) => !!t.symbol && t.symbol !== '?';
+const symTxt = (t) => (symOk(t) ? t.symbol : t.name || short(t.address) || '?');
+const logoHtml = (t, cls = '') => t.platform === 'four' ? `<div class="logo ${cls}">.ai${logoImg(t)}</div>` : `<div class="logo flap ${cls}">${esc(String(symOk(t) ? t.symbol : t.name || '').slice(0, 2).toUpperCase())}${logoImg(t)}</div>`;
 // 底池数量：≥1 保留 2 位小数，<1 最多 4 位，去掉末尾的 0（666.5000177780021 → 666.5）
 // 数量统一用紧凑写法：≥1000 用 K/M/B（两位小数），1～1000 两位小数，<1 最多 4 位；完整数字放在 title 里
 const amt = (v) => { v = Number(v) || 0; if (!v) return '0'; if (Math.abs(v) >= 1000) return K(v, 2).replace(/\.?0+([KMB])$/, '$1'); if (v < 0.0001) return '<0.0001'; return (v >= 1 ? v.toFixed(2) : v.toFixed(4)).replace(/\.?0+$/, ''); };
@@ -744,7 +747,7 @@ function renderHead() {
     <div class="th-row">
       ${logoHtml(t, 'lg')}
       <div class="th-main">
-        <div class="th-title">${favStar(t.address)}<b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b><span class="muted">${esc(t.name)}</span>${tagsHtml(t)}</div>
+        <div class="th-title">${favStar(t.address)}<b class="ctick" data-ctick="${esc(symOk(t) ? t.symbol : t.address)}" title="点击复制代号">${esc(symTxt(t))}</b>${t.name && t.name !== symTxt(t) ? `<span class="muted">${esc(t.name)}</span>` : ''}${tagsHtml(t)}</div>
         <div class="th-sub"><span>代币 <span class="mono">${short(t.address, 8, 6)}</span> <span class="copy" data-copy="${t.address}">⧉</span></span><span>创建者 ${whoHtml(t.creator, t.creatorName || NAMES[String(t.creator || '').toLowerCase()])}</span>${t.firstBuyer ? `<span>首买 <a href="https://bscscan.com/address/${esc(t.firstBuyer)}" target="_blank" rel="noopener" title="${esc(t.firstBuyer)}">${whoHtml(t.firstBuyer, t.firstBuyerName || NAMES[t.firstBuyer.toLowerCase()])}</a></span>` : ''}</div>
         <div class="th-sub"><span>预设 ${esc(t.preset || '')}</span><span title="${fullTime(t.createdAt)}">${age(t.createdAt)} 前创建</span></div>
       </div>
@@ -1553,7 +1556,7 @@ function renderSearch() {
   searchIdx = Math.min(searchIdx, Math.max(0, rows.length - 1));
   const wl = isAddr ? (noteOf(q) || NAMES[q] || '') : '';
   box.innerHTML = rows.length ? rows.map(([k, t], i) => { const on = i === searchIdx ? 'on' : '';
-    return k === 'a' ? `<div data-a="${t.address}" class="${on}">${logoHtml(t, 'xs')}<b>${esc(t.symbol)}</b><span class="mono muted">${short(t.address)}</span><span class="spacer"></span>${isBlocked(t) ? '<span class="blk-tag">已屏蔽</span><button class="qb" data-unblock="' + t.address + '">取消屏蔽</button>' : ''}<span class="mono">${usd(t.mcapUsd)}</span></div>`
+    return k === 'a' ? `<div data-a="${t.address}" class="${on}">${logoHtml(t, 'xs')}<b>${esc(symOk(t) ? t.symbol : t.name || '—')}</b><span class="mono muted">${short(t.address)}</span><span class="spacer"></span>${isBlocked(t) ? '<span class="blk-tag">已屏蔽</span><button class="qb" data-unblock="' + t.address + '">取消屏蔽</button>' : ''}<span class="mono">${usd(t.mcapUsd)}</span></div>`
       : k === 'lookup' ? `<div data-lookup="${esc(q)}" class="${on}">在链上查找代币 <span class="mono">${short(q)}</span> …</div>`
       : `<div data-wlook="${esc(q)}" class="${on}">🔎 ${isAddr ? `查这个钱包的 .ai 域名 / 写备注${wl ? ` <span class="spacer"></span>${whoHtml(q, NAMES[q])}` : ''}` : `查 <b>${esc(q)}</b> 的地址 / 写备注`}</div>`; }).join('')
     : '<div class="muted">没有匹配</div>';
@@ -2509,7 +2512,7 @@ function tcCard(t, k) {
     <div class="tc-l"><div class="tc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: gangBadge(t) }[plat]}</i></div>
       <div class="tc-prog"><i style="width:${curve ? prog : 100}%"></i></div><div class="tc-dev ${isMe(t.creator) ? 'me' : ''}" title="创建者（Dev）：${esc(t.creator || '')}${isMe(t.creator) ? '（我）' : ''}">${esc(dev)}</div></div>
     <div class="tc-m">
-      <div class="tc-n"><b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b>${t.name && t.name !== t.symbol ? `<span>${esc(t.name)}</span>` : ''}<button class="tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button>${xsBtn(t.address, 'tc-xs')}</div>
+      <div class="tc-n"><b class="ctick" data-ctick="${esc(symOk(t) ? t.symbol : t.address)}" title="点击复制代号">${esc(symTxt(t))}</b>${t.name && t.name !== symTxt(t) ? `<span>${esc(t.name)}</span>` : ''}<button class="tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button>${xsBtn(t.address, 'tc-xs')}</div>
       <div class="tc-chips">${nftChip(t, 'chip')}${taxChip(t, 'chip')}${divChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
       <div class="tc-meta"><span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tc-route ${curve ? '' : 'dex'}">${route}</div>
@@ -2526,10 +2529,10 @@ function tlCard(t) {
   const plat = platOf(t), curve = t.stage === 'curve', prog = Math.min(100, Number(t.progress) || 0), k = curve ? 'new' : 'dex', st = tcState.get(t.address);
   const dev = t.creatorName || (t.creator ? short(t.creator, 6, 4) : '');
   const route = curve ? `${amtFmt(t.raised)}/${amtFmt(t.target)} ${esc(t.quote || 'BNB')} · ${prog.toFixed(1)}%${fairLeft(t)}` : `${t.gangFair ? '打新已发射 · 外盘' : '已迁移 DEX'} · ${esc(t.quote || 'BNB')}`;
-  return `<div class="tlc ${plat} ${t.address === S.selected ? 'sel' : ''}" data-pa="${t.address}" title="${esc(t.name || t.symbol)}${dev ? ' · Dev ' + esc(dev) : ''}">
+  return `<div class="tlc ${plat} ${t.address === S.selected ? 'sel' : ''}" data-pa="${t.address}" title="${esc(t.name || symTxt(t))}${dev ? ' · Dev ' + esc(dev) : ''}">
     <div class="tlc-img">${logoHtml(t, 'tl')}<i class="tc-badge ${plat}">${{ flap: 'F', four: '4', gang: gangBadge(t) }[plat]}</i></div>
     <div class="tlc-m">
-      <div class="tlc-r1"><b class="ctick" data-ctick="${esc(t.symbol)}" title="点击复制代号">${esc(t.symbol)}</b>${t.name && t.name !== t.symbol ? `<span class="tlc-nm">${esc(t.name)}</span>` : ''}
+      <div class="tlc-r1"><b class="ctick" data-ctick="${esc(symOk(t) ? t.symbol : t.address)}" title="点击复制代号">${esc(symTxt(t))}</b>${t.name && t.name !== symTxt(t) ? `<span class="tlc-nm">${esc(t.name)}</span>` : ''}
         <span class="tlc-mc" title="${t.mcapEst ? '还没有成交，按同模板开盘价估算' : '市值'}">${t.mcapEst ? '≈' : ''}${usd(t.mcapUsd)}</span>
         <button class="tlc-ic tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tlc-ic tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button>${xsBtn(t.address, 'tlc-ic tc-xs')}</div>
       <div class="tlc-r2">${nftChip(t, 'chip')}${taxChip(t, 'chip')}${divChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent</i>' : ''}<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span>1h ${chgTxt(t.chg.h1)}</span>` : ''}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>

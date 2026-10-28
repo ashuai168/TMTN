@@ -19,7 +19,10 @@ export const FLAP_PORTAL = '0xe2cE6ab80874Fa9Fa2aAE65D277Dd6B8e65C9De0';
 const T_GATED = '0x2179156b3d2ade0f0de96eff28a7c29d924002784e113e69108d91a02cbf9098';      // FlapNFTGated(address token, address nft)
 const T_GATE_UPD = '0xef4dac2f9b1190c744c50eaead877aa2f222bafb1ef8bb2c60baed13f4b63cd8';   // FlapNFTGateUpdated(address token, address oldNft, address newNft)
 const T_DEX = '0x6e4f47630b8745b8cacbd44f42a8a33e7eea7cc08ef22fc7630f4f385784ff7d';        // LaunchedToDEX(address token, address pool, uint256 amount, uint256 eth)
-const TOPICS = [[T_GATED, T_GATE_UPD, T_DEX]];
+// TokenCreated(uint256 ts, address creator, uint256 nonce, address token, string name, string symbol, string meta)：和 FlapNFTGated 在同一笔交易（紧跟在它后面），
+// 名字 / 代号 / 图标 CID 直接从事件拿，不用等 name() / symbol()：刚发币时节点常读不到，列表里先显示几秒「?」（蝴蝶 2026-10-28）
+const T_CREATED = '0x504e7f360b2e5fe33cbaaae4c593bc55305328341bf79009e43e0e3b7f699603';
+const TOPICS = [[T_GATED, T_GATE_UPD, T_DEX, T_CREATED]];
 // 内盘成交（链上核对过 FI 0x779c…7777 的买卖交易）：TokenBought / TokenSold(uint256 ts, address token, address trader, uint256 amount, uint256 eth, uint256 fee, uint256 postPrice)，
 // 全在 data 里（没有 indexed）。ts = 区块时间（秒），amount = 代币数量，eth = 报价币金额（含手续费；BNCB 盘就是 BNCB），postPrice = 成交后价格（报价币 wei / 个）
 const T_BUY = '0xa800a2038683844fac66747f771bfdfae862eb28b16bcfa387afa9fbacce8ff7';
@@ -229,8 +232,17 @@ export class FlapNft extends EventEmitter {
         const [token, nft] = coder.decode(['address', 'address'], l.data); const k = token.toLowerCase();
         if (this.reg.tokens[k]) return;
         const g = { token: k, nft: nft.toLowerCase(), block: l.blockNumber, tx: l.transactionHash, seenAt: Date.now(), at: null };
+        const m = this.created?.get(k); if (m) g.meta = m;   // TokenCreated 先到了（一般是门槛事件先到）
         this.reg.tokens[k] = g; this.status.gated++; this.save();
         this.emit('gated', g, { restore: false }); this.resubTrades();
+      } else if (t0 === T_CREATED) {
+        // Portal 上所有 Flap 币的创建都会推过来，只留最近 64 个（门槛事件在同一笔交易里，前后差几毫秒）
+        const [, , , token, name, symbol, meta] = coder.decode(['uint256', 'address', 'uint256', 'address', 'string', 'string', 'string'], l.data); const k = token.toLowerCase();
+        const m = { ...(name && { name }), ...(symbol && { symbol }), ...(meta && { uri: /^https?:\/\//i.test(meta) ? meta : `https://flap.mypinata.cloud/ipfs/${meta}` }) };
+        const g = this.reg.tokens[k];
+        if (!g) { this.created ||= new Map(); this.created.set(k, m); if (this.created.size > 64) this.created.delete(this.created.keys().next().value); return; }
+        if (g.meta?.name && g.meta?.symbol) return;
+        g.meta = { ...m, ...g.meta }; this.save(); this.emit('meta', g);
       } else if (t0 === T_GATE_UPD) {
         const [token, , newNft] = coder.decode(['address', 'address', 'address'], l.data); const g = this.get(token);
         if (g && newNft === ZERO && !g.removed) { g.removed = true; this.save(); this.emit('ungated', g); }

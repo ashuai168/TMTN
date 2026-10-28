@@ -91,6 +91,8 @@ export class LiveMarket extends EventEmitter {
     // Flap 普通 Portal 的 Agent ID 门槛盘（NFT-gated）：只有这类 Portal 盘会进列表（普通 Flap Portal 盘本终端不跟踪）
     this.flapNft = new FlapNft(this.provider);
     this.flapNft.on('gated', (g, o) => this.upsertFlapNft(g, o).catch(() => {}));
+    // 发币交易里 Portal 的 TokenCreated 带着名字 / 代号 / 图标：到了就补上，不等 name() / symbol() 读链
+    this.flapNft.on('meta', (g) => { const t = this.get(g.token); if (t?.source !== 'flap-nft' || !g.meta) return; Object.assign(t, { symbol: t.symbol === '?' ? g.meta.symbol || '?' : t.symbol, name: t.name || g.meta.name || '' }); this.loadMeta(t, t.metaUrl || ipfsUrl(g.meta.uri)); this.emit('detail', t.address); });
     this.flapNft.on('ungated', (g) => { const t = this.get(g.token); if (t?.nftGate) { t.nftGate = { ...t.nftGate, removed: true }; this.emit('detail', t.address); } });
     this.flapNft.on('trade', (tr) => { const t = this.get(tr.token); if (t) { t._nftEvery = 6000; t._nftAt = 0; } this.onFlapNftTrade(tr); });   // 有成交：下一轮马上读状态
     this.flapNft.on('dex', (g) => { const t = this.get(g.token); if (t && t.stage === 'curve') { t.stage = 'dex'; t.progress = 100; this.emit('migrate', this.summary(t)); } });
@@ -258,7 +260,7 @@ export class LiveMarket extends EventEmitter {
     if (existed && this.get(k).source !== 'flap-nft') return;
     // 先同步登记进列表（门槛 + 来源），名字 / 状态 / NFT 信息随后补上：搜索、钱包 2 收到订单时不用等这些读取
     const t = this.base(k);
-    if (g.meta) Object.assign(t, { symbol: t.symbol === '?' ? g.meta.symbol || '?' : t.symbol, name: t.name || g.meta.name || '' });   // 上次读到的名字先用上：节点限流时也不显示「?」
+    if (g.meta) Object.assign(t, { symbol: t.symbol === '?' ? g.meta.symbol || '?' : t.symbol, name: t.name || g.meta.name || '' });   // 发币事件 / 上次读到的名字先用上：节点限流、刚发币节点读不到时也不显示「?」
     Object.assign(t, { source: 'flap-nft', platform: 'flap', agentExclusive: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f', quote: t.quote || 'BNB', createdAt: g.at || g.seenAt, maxSupply: 1e9,
       nftGate: { capPct: 2, ...t.nftGate, nft: g.nft, removed: !!g.removed, plain: !!g.plain, known: g.nft === '0x60b9262456de011f7d15a54cdd8c48baaa8b022f' } });
     {
