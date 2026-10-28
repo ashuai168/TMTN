@@ -95,3 +95,5 @@ export const BNB_PRICE_URL = 'https://api.binance.com/api/v3/ticker/price?symbol
 // 买入成交后在后台按固定额度（卖出 = 余额 × 1.01，报价币 ≈ 2 倍单笔上限，不是无限额）预先授权，第一次卖出不用再等授权。
 // 还要页面上「预先授权」开着才会做（默认开）。设成 0 = 只在卖出 / 买入需要时才授权
 export const PREAPPROVE_AFTER_BUY = env('PREAPPROVE_AFTER_BUY', '1') === '1';
+// WBNB 盘卖出后：钱包 BNB ≥ 这个数就把卖得的 WBNB 留着（下次买 WBNB 盘不用先包装），不到才后台解包成 BNB；设 0 = 一直留 WBNB，很大 = 一直解包
+export const KEEP_WBNB_MIN_BNB = Number(env('KEEP_WBNB_MIN_BNB', '0.2'));

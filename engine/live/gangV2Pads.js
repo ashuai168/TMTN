@@ -6,7 +6,7 @@
 import { ethers } from 'ethers';
 import * as baw from './baw.js';
 import { capFor, capLabel, sendApproval } from './approvals.js';
-import { BNB_NATIVE } from './config.js';
+import { BNB_NATIVE, KEEP_WBNB_MIN_BNB } from './config.js';
 import { getRoute, setRoute, waitReceived } from './quoteRoutes.js';
 import { V3_PADS, isV3Pad, v3PadAbi, normCurve, assertV3Trade, v3Pending } from './gangV3.js';   // Gang V3：曲线公式、buy / sell 和 V2 相同，curves() 多两个字段
 
@@ -292,9 +292,11 @@ export class GangV2 {
 
   // 卖出到账的报价币换回 BNB：WBNB 直接解包；其他用 baw（Ondo 类经 USDT），失败最多再试 2 次
   async swapBack({ wallet, q, got, slippage, step, hashes }) {
-    // WBNB 和 BNB 1:1，卖出这笔上链就知道换回多少 BNB：解包放到后台，卖单不再多等一笔交易（约 2～3 秒）。
-    // 解包没成功的话 WBNB 留在钱包，下次买 WBNB 盘会直接用；同一钱包下一笔 Gang 买卖会先等解包结束
+    // WBNB 和 BNB 1:1，卖出这笔上链就知道换回多少 BNB。钱包 BNB 还有 KEEP_WBNB_MIN_BNB（默认 0.2）以上就留着 WBNB，下次买 WBNB 盘直接用、不用先包装；
+    // 不到才解包，而且放到后台，卖单不再多等一笔交易（约 2～3 秒）。解包没成功的话 WBNB 留在钱包；同一钱包下一笔 Gang 买卖会先等解包结束
     if (isWbnb(q)) {
+      const bnb = await this.provider.getBalance(wallet).catch(() => 0n);
+      if (bnb >= ethers.parseEther(String(KEEP_WBNB_MIN_BNB))) return { venue: 'Gang V2 sell → WBNB（BNB 够，留作备用）', expected: Number(ethers.formatEther(got)), txHash: hashes.at(-1), hashes, note: `钱包 BNB ${Number(ethers.formatEther(bnb)).toFixed(3)} ≥ ${KEEP_WBNB_MIN_BNB}，卖得的 ${Number(ethers.formatEther(got)).toFixed(4)} WBNB 留在钱包，下次买 WBNB 盘直接用` };
       const k = wallet.toLowerCase(), log = (n, ms) => step(n, ms);   // 不把解包的 txHash 记成订单的 pendingTx（订单已经结束）
       const job = this.send({ wallet, to: WBNB, inputData: erc20.encodeFunctionData('withdraw', [got]), label: 'WBNB→BNB 解包（后台）', step: log })
         .catch((e) => { console.warn(`[gang] WBNB 后台解包没成功，WBNB 留在钱包：${e.message}`); return null; })
