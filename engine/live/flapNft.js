@@ -42,6 +42,17 @@ const iface = new ethers.Interface([
 const erc = new ethers.Interface(['function name() view returns (string)', 'function symbol() view returns (string)', 'function balanceOf(address) view returns (uint256)', 'function allowance(address,address) view returns (uint256)', 'function metaURI() view returns (string)', 'function tokenURI(uint256) view returns (string)']);
 const coder = ethers.AbiCoder.defaultAbiCoder();
 const f18 = (v) => Number(ethers.formatEther(v));
+// 一笔交易里 Flap Portal 记的买入花费（BNB，含手续费）。Portal 会把超过每地址 2% 上限的部分在同一笔里退回，msg.value 不等于实际花的；没有这个钱包的买入事件就返回 null
+// 只对 BNB 报价的盘有意义：报价币盘（BNCB 等）事件里的金额是报价币数量。maxBnb = 实际发出的 BNB，算出来超过它就不用（返回 null）
+export function portalSpent(rc, wallet, maxBnb = Infinity) {
+  const w = String(wallet || '').toLowerCase(); let s = 0, n = 0;
+  for (const l of rc?.logs || []) {
+    if (String(l.address).toLowerCase() !== FLAP_PORTAL.toLowerCase() || l.topics?.[0] !== T_BUY) continue;
+    const [, , trader, , eth] = coder.decode(['uint256', 'address', 'address', 'uint256', 'uint256', 'uint256', 'uint256'], l.data);
+    if (trader.toLowerCase() === w) { s += f18(eth); n++; }
+  }
+  return n && s <= maxBnb * (1 + 1e-9) ? s : null;
+}
 const minOut = (v, slippagePct) => (v * BigInt(10000 - Math.min(9900, Math.round(slippagePct * 100)))) / 10000n;
 const ERR = { NFTGatedOnly: '钱包没有门槛 NFT（NFTGatedOnly）', BuyCapExceeded: '已到每个地址 2% 买入上限（BuyCapExceeded）', SlippageTooHigh: '滑点不够（SlippageTooHigh），重新报价再试', TokenNotTradable: '内盘已关闭（已迁移，TokenNotTradable）' };
 const why = (e) => { const d = e?.data || e?.info?.error?.data; try { const p = d && iface.parseError(d); if (p) return ERR[p.name] || p.name; } catch { /* 不是已知错误 */ } return e?.reason ? e.reason : /^0x[0-9a-f]{8}/i.test(d || '') ? `合约拒绝（未知错误码 ${d.slice(0, 10)}）` : e?.shortMessage || e?.message || String(e); };
@@ -359,14 +370,16 @@ export class FlapNft extends EventEmitter {
   }
 
   // 买入：一笔 swapExactInput{value}（BNB 盘原子完成；非 BNB 报价币盘由 Portal 自己把 BNB 换成报价币）。到 2% 上限时只成交到上限，多余 BNB 同笔退回
-  async buy({ wallet, token, amountBnb, slippage, step, fast = false }) {
+  async buy({ wallet, token, amountBnb, slippage, step, fast = false, bnbQuote = false }) {
     const q = await this.quoteBuy(token, wallet, amountBnb);
     if (q.out <= 0n) throw new Error('报价为 0：可能已到每个地址 2% 上限');
     step(`Flap Portal 报价 ${f18(q.out).toFixed(0)} 个`, 0);
     const inputData = iface.encodeFunctionData('swapExactInput', [[ZERO, token, q.value, minOut(q.out, slippage), '0x']]);
     if (!fast) await this.simulate(wallet, inputData, q.value);   // 快捷买入不模拟，直接发（报价 + 滑点保护照旧）
     const hash = await this.send({ wallet, to: FLAP_PORTAL, valueWei: q.value, inputData, label: 'Flap Portal.swapExactInput 买入', step });
-    return { venue: 'Flap Portal.swapExactInput（内盘，BNB）', expected: f18(q.out), txHash: hash, hashes: [hash] };
+    // 「买 N%」给的金额超过 2% 上限时 Portal 会退回多的：成本按回执里 Portal 记的实际花费，不按发出去的 msg.value
+    const spent = !bnbQuote ? null : portalSpent(await this.provider.getTransactionReceipt(hash).catch(() => null), wallet, f18(q.value));
+    return { venue: 'Flap Portal.swapExactInput（内盘，BNB）', expected: f18(q.out), txHash: hash, hashes: [hash], ...(spent != null ? { spent } : {}) };
   }
 
   async sell({ wallet, token, pct, slippage, step }) {
