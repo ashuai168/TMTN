@@ -86,11 +86,13 @@ const proxied = (src) => (/^https?:/i.test(src) ? '/api/img?u=' + encodeURICompo
 // 追踪栏 / 追踪页不走 scheduleRender：头像加载完后合并成一次重画，否则先画出来的卡片一直是文字占位
 let imgTrkT = 0;
 function imgRerenderTrk() { if (imgTrkT) return; imgTrkT = setTimeout(() => { imgTrkT = 0; try { if (typeof TP !== 'undefined' && TP.open && !document.querySelector('#trkPanel input.trk-ed')) renderTrkPanel(); if (S.view === 'track' && TRK.tab === 'feed' && !document.querySelector('#track input.trk-ed')) renderTrkFeed(); } catch { /* 还没初始化 */ } }, 300); }
+const imgTries = new Map();
 function probeImg(src) {
   imgState.set(src, 'loading');
   const i = new Image(); i.referrerPolicy = 'no-referrer';
   i.onload = () => { imgState.set(src, i.naturalWidth ? 'ok' : 'bad'); lastList = 0; scheduleRender(); imgRerenderTrk(); };
-  i.onerror = () => { imgState.set(src, 'bad'); setTimeout(() => imgState.delete(src), 20_000); };   // 失败的 20 秒后再试（以前一次失败就一直是文字占位，要刷新页面）
+  // 失败的 3 秒后再试（前 40 次，约 2 分钟；之后 60 秒一次）。以前一次失败就一直是文字占位，要刷新页面
+  i.onerror = () => { imgState.set(src, 'bad'); const n = (imgTries.get(src) || 0) + 1; imgTries.set(src, n); setTimeout(() => { imgState.delete(src); scheduleRender(); }, n <= 40 ? 3000 : 60_000); };
   i.src = proxied(src);
 }
 const logoImg = (t) => {

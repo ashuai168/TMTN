@@ -418,7 +418,7 @@ app.get('/api/token/:a', async (req, res) => {
 // 代币头像代理缓存：/api/img?u=<url> → data/img/<sha1>.<ext>，命中直接读盘，浏览器端 immutable 长缓存
 const IMG_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 'img');
 fs.mkdirSync(IMG_DIR, { recursive: true });
-const imgInflight = new Map(), imgFail = new Map();
+const imgInflight = new Map(), imgFail = new Map(), imgFailN = new Map();
 const IPFS_GW = ['https://flap.mypinata.cloud/ipfs/', 'https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
 // 只代理白名单里的图床（engine/live/meta.js 的 MEDIA_HOSTS，和元数据共用一份；.env IMG_HOSTS 可追加），只走 https；别的地址一律拒绝（防止被当成访问内网 / 任意网站的跳板）
 const imgHostOk = (u) => mediaHostOk(u);
@@ -477,7 +477,7 @@ function imgWarm(u, key = crypto.createHash('sha1').update(u).digest('hex')) {
   {
     let p = imgInflight.get(key);
     if (!p) { p = imgFetch(u).then(({ ct, buf }) => { const file = key + '.' + (EXT[ct] || 'img'); fs.writeFileSync(path.join(IMG_DIR, file), buf); const m = { ct, file, url: u }; fs.writeFileSync(meta, JSON.stringify(m)); return m; }).finally(() => imgInflight.delete(key)); imgInflight.set(key, p); }
-    return p.catch((e) => { imgFail.set(key, Date.now() + 60_000); if (imgFail.size > 5000) for (const [k, until] of imgFail) if (until < Date.now()) imgFail.delete(k);   /* 失败记录以前只增不减 */ throw e; });
+    return p.catch((e) => { const n = (imgFailN.get(key) || 0) + 1; imgFailN.set(key, n); if (imgFailN.size > 5000) imgFailN.clear(); imgFail.set(key, Date.now() + (n <= 40 ? 3000 : 60_000));   /* 失败只记 3 秒（页面 3 秒重试时真的会重新下载），连续 40 次以后 60 秒 */ if (imgFail.size > 5000) for (const [k, until] of imgFail) if (until < Date.now()) imgFail.delete(k);   /* 失败记录以前只增不减 */ throw e; });
   }
 }
 app.get('/api/names', (req, res) => {

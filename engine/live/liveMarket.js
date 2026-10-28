@@ -348,13 +348,15 @@ export class LiveMarket extends EventEmitter {
 
   // 图标 / 简介 / 社交链接，异步补上；列表每 0.5 秒推送一次，到了就显示
   // 以前设了 metaUrl 就不再请求：IPFS 网关 429 / 刚发币元数据还没传开时失败一次，图标就一直是「?」（2026-10-28 门槛盘 201 个里只有 28 个有图）。
-  // 现在没拿到结果的同一个 url 按 15 秒、30 秒、1 分钟…最多 10 分钟的间隔重试（调用方每轮都会再调）；拿到一次就不再请求
+  // 现在没拿到结果的同一个 url：前 40 次每 3 秒重试一次（约 2 分钟，自己定时，不等调用方），之后按 15 秒、30 秒、1 分钟…最多 10 分钟；拿到一次就不再请求
+  metaWait(t) { const n = t.metaTries || 0; return n < 40 ? 3000 : Math.min(600_000, 15_000 * 2 ** (n - 40)); }
   loadMeta(t, url) {
     if (!url) return;
-    if (t.metaUrl === url && (t.metaOk || Date.now() - (t.metaAt || 0) < Math.min(600_000, 15_000 * 2 ** (t.metaTries || 0)))) return;
+    if (t.metaUrl === url && (t.metaOk || Date.now() - (t.metaAt || 0) < this.metaWait(t) - 100)) return;
     if (t.metaUrl !== url) Object.assign(t, { metaUrl: url, metaOk: false, metaTries: 0 }); else t.metaTries = (t.metaTries || 0) + 1;
     t.metaAt = Date.now();
-    this.meta.get(url, ({ metaCreator, ...m }) => { Object.assign(t, m); t.metaOk = true; if (!t.creator && metaCreator) t.creator = metaCreator; this.emit('detail', t.address); if (m.image) this.emit('image', m.image); }, { front: !t.metaTries });   // 创建者：链上没给的（Flap Portal 盘）用元数据里的
+    this.meta.get(url, ({ metaCreator, ...m }) => { Object.assign(t, m); t.metaOk = true; if (!t.creator && metaCreator) t.creator = metaCreator; this.emit('detail', t.address); if (m.image) this.emit('image', m.image); }, { front: !t.metaTries });
+    if ((t.metaTries || 0) < 40) setTimeout(() => { if (!t.metaOk && t.metaUrl === url) this.loadMeta(t, url); }, 3000).unref?.();   // 创建者：链上没给的（Flap Portal 盘）用元数据里的
   }
 
   // 搜索粘贴地址：已在列表直接返回；否则查 Four 链上，查到就加进列表；都不是内盘时按普通外盘代币收录（lookupDex）
