@@ -197,3 +197,9 @@ html[data-theme="new"] body { font-size: 13px; }
 [data-theme="new"] .mw-chip .mw-ck { color: var(--g); margin-left: auto; }
 /* 卡片里的空标签格子不显示底色 */
 [data-theme="new"] .chip:empty { background: none !important; box-shadow: none !important; }
+/* 底部「我的持仓」：去掉小方框，标签在上、数值在下，横排留空（效果图 kpis） */
+[data-theme="new"] .mypos { gap: 6px 28px; padding: 12px 14px; }
+[data-theme="new"] .mypos > div { min-width: 0; padding: 0; border: 0; gap: 2px; }
+[data-theme="new"] .mypos > div > span { color: var(--dim); }
+[data-theme="new"] .mypos b { font: 500 15px var(--mono); }
+[data-theme="new"] .mypos small { color: var(--dim); }
