@@ -24,6 +24,8 @@ import { getRoute, MIN_LIQ_USD } from './quoteRoutes.js';
 import { watchToken } from './routeGuard.js';
 const FOUR_REG = dataFile('fourTokens.json');
 const FLAP_REG = dataFile('flapCreated.json');
+// 发射（迁移 / 毕业 / 打新开盘）时间登记表：{ 代币地址: 毫秒 }。「已开盘」列按它倒序，重启后直接用，不再重查
+const LAUNCH_FILE = dataFile('launched-at.json');
 const BOOT = Date.now();
 const GANG_TOKEN = '0x0c6302401aa5325c2e36f170f52c00b1d220b405';   // GANG 市值（底栏）：随报价币价格一起从 DexScreener 拿，不额外读 RPC
 
@@ -121,6 +123,7 @@ export class LiveMarket extends EventEmitter {
     this.four.start();
     this.fourRestore();
     setTimeout(() => this.fourDexCheck(), 20_000); this.fourDexTimer = setInterval(() => this.fourDexCheck(), 60_000);
+    setTimeout(() => this.launchSweep(), 5000); setInterval(() => this.launchSweep(), 15_000).unref?.();   // 已开盘的币：补发射时间（登记表 → 接口 / 链上 / DexScreener），没有 MC 的顺便补外盘市值
     setInterval(() => this.taxToSweep(), 3000).unref?.();   // 列表里已有的 Gang V3 币：后台补读税收接收地址（每个币只读一次）
     this.loadFairSales(); setInterval(() => this.loadFairSales(), 30_000).unref?.();   // 打新盘：gang.fun 普通代币接口不列，重启后链上订阅也不会补以前的，从打新列表接口补
     this.gang.start(); this.gangChain.start(); this.flapChain.start(); this.gangPads.start(); this.flapNft.start();
@@ -140,6 +143,67 @@ export class LiveMarket extends EventEmitter {
   stop() { this.timers?.forEach(clearInterval); }
 
   key(a) { return String(a || '').toLowerCase(); }
+  // 发射时间：运行中看到迁移才记「现在」；刚启动的 90 秒里看到的多半是停机期间早就发射的，不能记成现在，留给 launchSweep 去查真实时间
+  migNow() { return Date.now() - BOOT > 90_000 ? Date.now() : 0; }
+  emit(ev, ...a) {
+    if (ev === 'migrate' && a[0]?.address) { const t = this.get(a[0].address); if (t) { if (!t.migratedAt) t.migratedAt = this.migNow() || undefined; if (t.migratedAt) { a[0].migratedAt = t.migratedAt; this.saveLaunch(t); } } }
+    return super.emit(ev, ...a);
+  }
+  saveLaunch(t, ms = t.migratedAt) {
+    const m = (this._launch ||= (() => { try { return JSON.parse(readFileSync(LAUNCH_FILE, 'utf8')); } catch { return {}; } })());
+    if (!(ms > 0) || m[t.address] === ms) return;
+    t.migratedAt = ms; m[t.address] = ms;
+    clearTimeout(this._launchSave); this._launchSave = setTimeout(() => { try { writeFileSync(LAUNCH_FILE, JSON.stringify(m)); } catch { /* 下次再存 */ } }, 5000);
+  }
+  // 每 15 秒：已开盘但不知道发射时间的币，先查登记表；还没有的按来源补（每个币 10 分钟最多查一次，最多 3 次）：
+  // Flap Agent 曲线 = Reader.marketDetail().launchedAt（链上迁移时间）；Gang 打新 = gang.fun 打新列表的 lastMintAt（卖满那一笔即开盘）；
+  // 其它（Flap / Four / Gang V2·V3 / 打新没在列表里的）= DexScreener 外盘池子的 pairCreatedAt（优先已知池子，其次和报价币配的 PancakeSwap 池，再其次最早的池子）。
+  // 都查不到时前端用创建时间排。没有市值的（重启后的老打新盘 MC 显示 —）顺便用同一次 DexScreener 结果补上外盘市值 / 流动性
+  async launchSweep() {
+    if (this._launchRun) return; this._launchRun = true;
+    try {
+      const m = (this._launch ||= (() => { try { return JSON.parse(readFileSync(LAUNCH_FILE, 'utf8')); } catch { return {}; } })());
+      const ds = [], now = Date.now();
+      for (const t of this.tokens.values()) {
+        if (t.stage !== 'dex') continue;
+        if (t.migratedAt > 0) { if (!m[t.address]) this.saveLaunch(t); }
+        else if (m[t.address] > 0) t.migratedAt = m[t.address];
+        const needAt = !(t.migratedAt > 0) && (t._launchTry || 0) < 3 && now - (t._launchTryAt || 0) > 600_000;
+        const needMc = !t.dexMcapUsd && !(t.mcapUsd > 0) && !(t.price > 0) && now - (t._dsMcAt || 0) > 120_000;
+        if (!needAt && !needMc) continue;
+        if (needAt) { t._launchTry = (t._launchTry || 0) + 1; t._launchTryAt = now; }
+        if (needAt && t.source === 'agent-curve' && t.market) {
+          const d = await this.curve.detail(t.market).catch(() => null);
+          if (d?.launchedAt > 0) { this.saveLaunch(t, d.launchedAt); if (!needMc) continue; }
+        }
+        if (needMc) t._dsMcAt = now;
+        ds.push(t);
+      }
+      if (ds.some((t) => t.source === 'gang' && t.gangTrack === 'v3fair' && !(t.migratedAt > 0))) {
+        const l = await fairList('launched').catch(() => []);
+        for (const x of l) { const t = this.get(x.token), at = Number(x.lastMintAt) || 0; if (t && !(t.migratedAt > 0) && at > 0) this.saveLaunch(t, at < 1e12 ? at * 1000 : at); }
+      }
+      for (let i = 0; i < ds.length; i += 30) {
+        const chunk = ds.slice(i, i + 30);
+        const r = await fetch('https://api.dexscreener.com/tokens/v1/bsc/' + chunk.map((t) => t.address).join(','), { signal: AbortSignal.timeout(8000) }).then((x) => x.json()).catch(() => null);
+        if (!Array.isArray(r)) continue;
+        for (const t of chunk) {
+          const ps = r.filter((p) => String(p.baseToken?.address || '').toLowerCase() === t.address);
+          if (!ps.length) continue;
+          if (!(t.migratedAt > 0)) {
+            const qa = String(t.quoteAddress || '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c').toLowerCase(), at = (l) => l.map((p) => +p.pairCreatedAt || 0).filter((x) => x > 0).sort((a, b) => a - b)[0];
+            const ms = at(ps.filter((p) => t.pair && String(p.pairAddress).toLowerCase() === String(t.pair).toLowerCase()))
+              || at(ps.filter((p) => /pancake/i.test(p.dexId || '') && String(p.quoteToken?.address || '').toLowerCase() === qa)) || at(ps);
+            if (ms) this.saveLaunch(t, ms);
+          }
+          if (!t.dexMcapUsd && !(t.mcapUsd > 0) && !(t.price > 0)) {
+            const b = ps.sort((x, y) => (y.liquidity?.usd || 0) - (x.liquidity?.usd || 0))[0];
+            if (+b.marketCap || +b.fdv) Object.assign(t, { dexMcapUsd: +b.marketCap || +b.fdv, dexLiqUsd: b.liquidity?.usd || t.dexLiqUsd || 0 });
+          }
+        }
+      }
+    } finally { this._launchRun = false; }
+  }
   get(a) { return a ? this.tokens.get(this.key(a)) : null; }
 
   base(address) {
@@ -426,7 +490,7 @@ export class LiveMarket extends EventEmitter {
         const ex = x?.address && this.get(x.address);
         if (ex && ex.source === 'gang' && ex.gangTrack === 'v1') { ex.gangTrack = 'v3'; this.gangV2Curve(ex).catch(() => {}); }   // 在 V3 列表里却被标成老盘的（链上收录时 track 丢了）：改回 V3，战壕和买卖才走对
         if (ex && ex.source === 'gang' && /^v3/.test(ex.gangTrack || '') && x.graduated && ex.stage === 'curve') {   // V3 盘发射时链上没有事件推给我们：按接口状态移到「已发射」，以前要重启才过去
-          Object.assign(ex, { stage: 'dex', progress: 100, pair: x.pair || ex.pair || null }); ex.migratedAt ||= x.graduatedAt ? x.graduatedAt * 1000 : Date.now(); this.emit('migrate', this.summary(ex));
+          Object.assign(ex, { stage: 'dex', progress: 100, pair: x.pair || ex.pair || null }); ex.migratedAt ||= x.graduatedAt ? x.graduatedAt * 1000 : this.migNow() || undefined; this.emit('migrate', this.summary(ex));
         }
         if (ex && ex.source === 'gang' && ex.gangTrack === 'v3' && !x.graduated && !ex._chainCurve) {
           const dec = Number(x.quoteDecimals) || 18, raised = Number(ethers.formatUnits(BigInt(x.realQuote || 0), dec)), grad = Number(ethers.formatUnits(BigInt(x.gradAmt || 0), dec));
@@ -446,7 +510,7 @@ export class LiveMarket extends EventEmitter {
     for (const x of lists.flat()) {
       if (this.get(x.token) || (x.status === 'launched' && !(x.createdAt > day))) continue;
       this.upsertGang({ address: x.token.toLowerCase(), name: x.name, symbol: x.symbol, creator: String(x.creator || '').toLowerCase(), creatorHandle: x.creatorHandle, logo: x.logo, createdAt: x.createdAt || Math.floor(Date.now() / 1000),
-        graduated: x.status === 'launched', raisedQuote: 0, progressPct: 0, quoteSymbol: 'BNB', quoteAddress: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', track: 'v3fair' }, false);
+        graduated: x.status === 'launched', graduatedAt: x.status === 'launched' && x.lastMintAt > 0 ? (x.lastMintAt < 1e12 ? x.lastMintAt : x.lastMintAt / 1000) : null, raisedQuote: 0, progressPct: 0, quoteSymbol: 'BNB', quoteAddress: '0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c', track: 'v3fair' }, false);   // 打新卖满那一笔就开盘：lastMintAt = 发射时间
     }
   }
   // 搜索 / 下单时本后端还没收录的打新币：pad.sales() 有这个币就加进来
@@ -848,6 +912,7 @@ export class LiveMarket extends EventEmitter {
         Object.assign(t, { creator: d.creator, holders: d.holders, buys: d.buys, sells: d.sells, volume: d.volume, raised: d.pool, target: d.cap, progress: d.progress,
           remaining: d.remaining, totalShares: d.totalShares, maxWalletShares: d.maxWalletShares, buyTax: d.buyTaxBps / 100, sellTax: d.sellTaxBps / 100,
           feeBps: d.buyTaxBps + d.flapBuyFeeBps, stage: d.phase === 'graduated' ? 'dex' : 'curve' });   // launchedAt 是迁移时间，不是创建时间
+        if (d.phase === 'graduated' && d.launchedAt > 0 && !(t.migratedAt > 0)) this.saveLaunch(t, d.launchedAt);
         if (ticks.length) { t.candles = []; for (const k of ticks) this.pushCandle(t, k.ts, k.price, 0); t.price = ticks[ticks.length - 1].price; }
         for (const tr of [...trades].reverse()) { this.noteFirstBuy(t, tr); if (!t.trades.some((x) => x.tx === tr.tx && x.side === tr.side)) { tr.usd = tr.bnb * this.quoteUsd(t); t.trades.push(tr); } if (!ticks.length && tr.price) this.pushCandle(t, tr.ts, tr.price, tr.bnb); }
         for (const tr of trades) { const c = t.candles.find((x) => x.t === Math.floor(tr.ts / 1000)); if (c && ticks.length) c.v += tr.bnb; }
@@ -936,7 +1001,7 @@ export class LiveMarket extends EventEmitter {
     return {
       address: t.address, symbol: t.symbol, name: t.name, platform: t.platform, source: t.source, agentExclusive: !!t.agentExclusive, market: t.market,
       preset: t.source === 'gang' ? 'Gang（Agent 专属）' : t.source === 'agent-curve' ? 'Flap Agent Curve' : t.source === 'dex' ? `外盘代币 · ${t.dexDex || 'DEX'}` : t.source === 'flap-nft' ? (t.nftGate?.plain ? 'Flap · 普通盘' : t.nftGate?.known ? 'Flap · Agent ID 门槛' : 'Flap · NFT 门槛') : t.platform === 'four' ? (t.agentExclusive ? 'Binance Agent ID Exclusive' : 'Four.meme') : 'Flap',
-      presetId: t.presetId || '', quote: t.quote, quoteAddress: t.quoteAddress, creator: t.creator, firstBuyer: t.firstBuy?.trader || '', firstBuyerName: t.firstBuy ? this.names.peek(t.firstBuy.trader) : null, vault: t.market || '', createdAt: t.createdAt, officialTest: false,
+      presetId: t.presetId || '', quote: t.quote, quoteAddress: t.quoteAddress, creator: t.creator, firstBuyer: t.firstBuy?.trader || '', firstBuyerName: t.firstBuy ? this.names.peek(t.firstBuy.trader) : null, vault: t.market || '', createdAt: t.createdAt, migratedAt: t.stage === 'dex' && t.migratedAt > 0 ? t.migratedAt : null, officialTest: false,
       stage: t.stage, price: t.price, priceUsd, mcapUsd: t.dexMcapUsd ? t.dexMcapUsd : t.source === 'four-agent' ? (t.price || this.fourP0 || 0) * (t.maxSupply || 1e9) * this.quoteUsd(t) : t.mcapUsd || (priceUsd > 0 ? priceUsd * (t.maxSupply || 1e9) : 0),   /* 没有市值但有价格（报价币价格后到）：按现价 × 总量补上 */ mcapEst: t.source === 'four-agent' && !t.price && !!this.fourP0, liqUsd, quoteUsd: this.quoteUsd(t), raised: t.raised, target: t.target, progress: t.progress || 0,
       remaining: t.remaining, holders: t.holders, buys: t.buys, sells: t.sells, volume: t.volume, volumeH24: !!t.volumeH24, dexVol24: t.dexVol24 ?? null, dexBuys24: t.dexBuys24 ?? null, dexSells24: t.dexSells24 ?? null, dexCountMin: t.dexCountMin || 0, buyTax: t.buyTax, sellTax: t.sellTax,
       buyFeePct: t.source === 'four-agent' && t.feeBps == null ? null : this.buyFeePct(t), sellFeePct: this.sellFeePct(t), antiSniperPct: t.antiSniperPct || 0, antiSniper: !!t.antiSniper, lastTradeAt: t.lastTradeAt || 0, realToken: t.realToken !== false,
@@ -968,7 +1033,7 @@ export class LiveMarket extends EventEmitter {
     t.gangFair = { sold: f.sold, sharesLeft: 10_000 - f.sold, capShares: f.capShares, minWalletsLeft: Math.ceil((10_000 - f.sold) / f.capShares), sharePrice: f.sharePrice, mintPrice: f.sharePrice / f.tokensPerShare, launched: f.launched, mintFeeBps: f.mintFeeBps };
     if (f.launched) {
       Object.assign(t, { stage: 'dex', progress: 100, pair: f.pair || t.pair });
-      if (was !== 'dex') { t.migratedAt ||= Date.now(); this.emit('migrate', this.summary(t)); }
+      if (was !== 'dex') { t.migratedAt ||= this.migNow() || undefined; this.emit('migrate', this.summary(t)); }
     } else {
       t.stage = 'curve'; t.progress = f.sold / 100;
       if (!(t.price > 0)) { t.price = f.sharePrice / f.tokensPerShare; const q = this.quoteUsd(t); if (q) t.mcapUsd = t.price * 1e9 * q; }   // 打新阶段价格固定
@@ -1033,7 +1098,7 @@ export class LiveMarket extends EventEmitter {
     }
     t._v2Rem = c.graduated ? 0 : Math.max(0, Number(ethers.formatEther(soldAtGrad > sold ? soldAtGrad - sold : 0n)));
     t.remaining = t._v2Rem; t._v2At = Date.now(); t._chgAt = 0;
-    if (c.graduated && t.stage === 'curve') { Object.assign(t, { stage: 'dex', progress: 100 }); t.migratedAt ||= Date.now(); this.emit('migrate', this.summary(t)); }   // 合约里已发射：移到「已发射」
+    if (c.graduated && t.stage === 'curve') { Object.assign(t, { stage: 'dex', progress: 100 }); t.migratedAt ||= this.migNow() || undefined; this.emit('migrate', this.summary(t)); }   // 合约里已发射：移到「已发射」
   }
 
   // 某个币从开盘到现在的全部成交（新→旧），给「实时成交」往下翻页和交易者抽屉用。来源：Gang = gang.fun 全部成交；

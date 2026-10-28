@@ -2401,6 +2401,8 @@ const tcKnown = new Set(); let tcPrimed = false; const tcSoundAt = {};
 // 列提示音单独控制（只看这一列的开关，不受顶栏🔊影响）
 function colTone(f) { try { actx ||= new AudioContext(); if (actx.state === 'suspended') actx.resume(); const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = f; g.gain.value = 0.05; o.connect(g).connect(actx.destination); o.start(); o.stop(actx.currentTime + 0.07); } catch { /* 未授权音频 */ } }
 var lastPulse = 0;
+// 发射时间：迁移 / 毕业 / 打新开盘的时间（后端登记并持久化），不知道时退回创建时间
+const launchAt = (t) => t.migratedAt || t.createdAt || 0;
 
 function setView(v, fromRoute) {
   S.view = v;
@@ -2514,7 +2516,7 @@ function tcCard(t, k) {
     <div class="tc-m">
       <div class="tc-n"><b class="ctick" data-ctick="${esc(symOk(t) ? t.symbol : t.address)}" title="点击复制代号">${esc(symTxt(t))}</b>${t.name && t.name !== symTxt(t) ? `<span>${esc(t.name)}</span>` : ''}<button class="tc-fav ${isFav(t.address) ? 'on' : ''}" data-favq="${t.address}" title="${isFav(t.address) ? '取消收藏' : '收藏'}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M12 2.8l2.8 5.9 6.4.8-4.7 4.4 1.2 6.4L12 17.2l-5.7 3.1 1.2-6.4-4.7-4.4 6.4-.8z" fill="currentColor"/></svg></button><button class="tc-hide" data-block="${t.address}" title="屏蔽"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6.5 17.5l11-11" stroke="currentColor" stroke-width="2"/></svg></button>${xsBtn(t.address, 'tc-xs')}</div>
       <div class="tc-chips">${nftChip(t, 'chip')}${taxChip(t, 'chip')}${divChip(t, 'chip')}${gangVerChip(t)}<i class="chip q">◎ ${esc(t.quote || 'BNB')}</i>${t.agentExclusive ? '<i class="chip ag">Agent 专属</i>' : ''}</div>
-      <div class="tc-meta"><span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
+      <div class="tc-meta">${k === 'dex' && t.migratedAt ? `<span class="g" title="发射于 ${fullTime(t.migratedAt)} · 创建于 ${fullTime(t.createdAt)}">${age(t.migratedAt)}</span>` : `<span class="g" title="创建于 ${fullTime(t.createdAt)}">${age(t.createdAt)}</span>`}${t.chg?.h1 != null ? `<span title="1 小时涨幅">1h ${chgTxt(t.chg.h1)}</span>` : ''}${soc}<span title="持有人 / 交易笔数">👥 ${t.holders ?? '—'}/${(t.buys || 0) + (t.sells || 0)}</span></div>
       <div class="tc-route ${curve ? '' : 'dex'}">${route}</div>
       <div class="tc-who">${fb ? `<span class="g">👑</span> 首买 ${isMe(t.firstBuyer) ? `<b class="me">${esc(fb)}</b>${meTag(t.firstBuyer)}` : esc(fb)}` : ''}${hp ? `<span class="y" title="我的钱包持有（不是首买地址）">我持有 ${K(hp.amount)}${hp.pct != null ? ` · ${hp.pct.toFixed(2)}%` : ''}</span>` : ''}</div>
     </div>
@@ -2551,7 +2553,7 @@ function renderPulse() {
   const lists = {
     new: every.filter((t) => t.stage === 'curve' && tcMatch('new', t)).sort((a, b) => b.createdAt - a.createdAt || (a.address < b.address ? -1 : 1)),   // 同一时间的按地址排，顺序稳定
     soon: every.filter((t) => t.stage === 'curve' && t.progress > 0 && tcMatch('soon', t)).sort((a, b) => (TR.cols.soon.sort === 'mc' ? (b.mcapUsd || 0) - (a.mcapUsd || 0) : b.progress - a.progress)),
-    dex: every.filter((t) => t.stage === 'dex' && tcMatch('dex', t)).sort((a, b) => b.createdAt - a.createdAt || (a.address < b.address ? -1 : 1)),
+    dex: every.filter((t) => t.stage === 'dex' && tcMatch('dex', t)).sort((a, b) => launchAt(b) - launchAt(a) || (a.address < b.address ? -1 : 1)),   // 按发射（迁移）时间，最新在上；不知道发射时间的按创建时间
   };
   for (const [k, list] of Object.entries(lists)) {
     const body = $('#tcb-' + k); if (!body) continue;
