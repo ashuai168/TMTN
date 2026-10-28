@@ -20,6 +20,7 @@ import { dataFile } from './engine/live/config.js';
 import { cache } from './engine/live/cache.js';
 import { fairPctBnb } from './engine/live/gangFair.js';
 import { mountUpdater } from './engine/updater.js';
+import { mediaHostOk } from './engine/live/meta.js';
 
 // 日志脱敏：控制台 / live.log 里出现的 RPC 地址（含 NodeReal key）一律打码
 for (const k of ['log', 'info', 'warn', 'error']) { const f = console[k].bind(console); console[k] = (...a) => f(...a.map((x) => (typeof x === 'string' ? redactSecrets(x) : x instanceof Error ? redactSecrets(x.stack || x.message) : x))); }
@@ -419,9 +420,8 @@ const IMG_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data', 
 fs.mkdirSync(IMG_DIR, { recursive: true });
 const imgInflight = new Map(), imgFail = new Map();
 const IPFS_GW = ['https://flap.mypinata.cloud/ipfs/', 'https://ipfs.io/ipfs/', 'https://dweb.link/ipfs/', 'https://cloudflare-ipfs.com/ipfs/'];
-// 只代理这些图床（含子域名），只走 https；别的地址一律拒绝（防止被当成访问内网 / 任意网站的跳板）。IMG_HOSTS 可追加（逗号分隔）
-const IMG_HOSTS = ['four.meme', 'space.id', 'mypinata.cloud', 'gang.fun', 'gangfun-ipfs.tos-ap-southeast-1.bytepluses.com', 'shrine.trade', 'ipfs.io', 'dweb.link', 'cloudflare-ipfs.com', ...String(process.env.IMG_HOSTS || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)];
-const imgHostOk = (u) => { try { const x = new URL(u); return x.protocol === 'https:' && !x.username && !x.password && (!x.port || x.port === '443') && IMG_HOSTS.some((h) => x.hostname === h || x.hostname.endsWith('.' + h)); } catch { return false; } };
+// 只代理白名单里的图床（engine/live/meta.js 的 MEDIA_HOSTS，和元数据共用一份；.env IMG_HOSTS 可追加），只走 https；别的地址一律拒绝（防止被当成访问内网 / 任意网站的跳板）
+const imgHostOk = (u) => mediaHostOk(u);
 // 只收位图：按文件头判断真实格式（不信对方的 Content-Type），SVG（可以带脚本）一律不收
 const EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/avif': 'avif' };
 const sniffImg = (b) => {
