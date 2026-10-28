@@ -681,9 +681,20 @@ function renderStatus() {
 // 交易页顶部：我的余额 / 盈亏（与战壕卡片同一套数据：价格 × 数量 × 计价币 USD）
 // 持仓行（和「持仓」页同一份数据：市值、成本都折成 BNB，报价币盘按汇率换算）。交易页每 15 秒最多拉一次
 // 持仓快照：服务器每 5 秒推一次（下单后马上推），本地也存一份，刷新页面后立刻有数，不用等接口
-function setHoldSnap(d) { if (!d) return; HOLD.data = d; HOLD.at = Date.now(); try { localStorage.setItem('holdSnap', JSON.stringify(d)); } catch { /* 太大或无痕模式就算了 */ } scheduleRender(); if (S.view === 'hold') renderHold(); renderQB(); if (S.selected && S.tokens.has(S.selected)) renderMyPos(S.tokens.get(S.selected)); if (S.bottomTab === 'pos' || S.bottomTab === 'allpos') renderBottom(); }
+// 已清仓的币：没价格（price 0）时后端给的余额 / 盈亏是 null，页面显示「—」。数量是 0 余额就是 0，盈亏 = 已卖出 − 成本（已实现）
+function fixClosed(d) {
+  if (!d) return d;
+  const fix = (r) => { if (r.amount > 0 || r.valueBnb != null) return 0; const old = r.pnlUsd || 0;
+    r.valueBnb = 0; r.valueUsd = 0; r.pnlBnb = (r.soldBnb || 0) - (r.costBnb || 0); r.pnlUsd = (r.soldUsd || 0) - (r.costUsd || 0);
+    r.pnlPct = r.costUsd > 0 ? (r.pnlUsd / r.costUsd) * 100 : null; return r.pnlUsd - old; };
+  const add = (T, dv) => { if (T && dv) T.pnlUsd = (T.pnlUsd || 0) + dv; };
+  let dt = 0; for (const w of d.wallets || []) { let dw = 0; for (const r of w.rows || []) dw += fix(r); add(w.totals, dw); dt += dw; }
+  for (const r of d.rows || []) { const dv = fix(r); if (!d.wallets?.length) dt += dv; }   // 合并行的成本 / 已卖出是各钱包相加的，直接重算；合计按各钱包的差额补
+  add(d.totals, dt); return d;
+}
+function setHoldSnap(d) { if (!d) return; HOLD.data = fixClosed(d); HOLD.at = Date.now(); try { localStorage.setItem('holdSnap', JSON.stringify(d)); } catch { /* 太大或无痕模式就算了 */ } scheduleRender(); if (S.view === 'hold') renderHold(); renderQB(); if (S.selected && S.tokens.has(S.selected)) renderMyPos(S.tokens.get(S.selected)); if (S.bottomTab === 'pos' || S.bottomTab === 'allpos') renderBottom(); }
 function holdRow(t) {
-  if (!HOLD.data) { try { HOLD.data = JSON.parse(localStorage.getItem('holdSnap') || 'null'); HOLD.stale = true; } catch { /* ignore */ } }
+  if (!HOLD.data) { try { HOLD.data = fixClosed(JSON.parse(localStorage.getItem('holdSnap') || 'null')); HOLD.stale = true; } catch { /* ignore */ } }
   return HOLD.data?.rows?.find((r) => r.token.toLowerCase() === String(t.address).toLowerCase()) || null;
 }
 function holdStats(t) {
@@ -864,7 +875,7 @@ const usdAmt = (v) => (v == null || !isFinite(v) ? '—' : '$' + (v < 0.1 ? v.to
 const txLink = (tx) => (!tx ? '—' : LIVE() ? `<a href="https://bscscan.com/tx/${tx}" target="_blank" rel="noopener">${short(tx, 8, 6)} ↗</a>` : `${short(tx, 8, 6)} ↗`);
 // 「所有持仓」标签：按钱包拆开的持仓行（只要还持有的）。其他钱包按本后端（8788）的价格重新估值，和这里看到的行情一致
 function allPosRows() {
-  if (!HOLD.data) { try { HOLD.data = JSON.parse(localStorage.getItem('holdSnap') || 'null'); } catch { /* ignore */ } }   // 刚打开页面：先用上次的快照
+  if (!HOLD.data) { try { HOLD.data = fixClosed(JSON.parse(localStorage.getItem('holdSnap') || 'null')); } catch { /* ignore */ } }   // 刚打开页面：先用上次的快照
   const d = HOLD.data; if (!d) return [];
   const ws = d.wallets?.length ? d.wallets : [{ slot: 0, label: '', rows: d.rows || [] }];
   const own = new Map((ws[0].rows || []).map((r) => [String(r.token).toLowerCase(), r])), bu = d.bnbUsd || S.bnbUsd || 0;
@@ -935,7 +946,7 @@ function renderBottom() {
           <div title="我持有的这部分按现价值多少（不是代币市值）${hr.valueBnb != null ? '\n' + bnb(hr.valueBnb) + ' BNB' : ''}"><span>余额</span><b>${hr.valueUsd != null ? '$' + (hr.valueUsd).toFixed(2) : '—'}</b></div>
           <div title="${bnb(hr.costBnb)} BNB\n${usdTip(hr)}"><span>成本</span><b>$${(hr.costUsd || 0).toFixed(2)}</b></div>
           <div title="${bnb(hr.soldBnb)} BNB\n${usdTip(hr)}"><span>已卖出</span><b>$${(hr.soldUsd || 0).toFixed(2)}</b></div>
-          <div title="${usdTip(hr)}"><span>盈亏</span><b class="${(hr.pnlUsd ?? hr.pnlBnb ?? 0) >= 0 ? 'g' : 'r'}">${usdSigned(hr.pnlUsd)}</b><small>${hr.pnlPct != null ? (hr.pnlPct >= 0 ? '+' : '') + hr.pnlPct.toFixed(1) + '%' : ''}</small></div>
+          <div title="${usdTip(hr)}"><span>盈亏</span><b class="${hr.pnlUsd == null ? 'muted' : hr.pnlUsd >= 0 ? 'g' : 'r'}">${usdSigned(hr.pnlUsd)}</b><small>${hr.pnlPct != null ? (hr.pnlPct >= 0 ? '+' : '') + hr.pnlPct.toFixed(1) + '%' : ''}</small></div>
           ${hr.amount > 0 ? `<div class="acts"><button class="qb" data-hsell="${hr.walletId}:${hr.token}:50">卖 50%</button> <button class="qb" style="color:var(--r)" data-hsell="${hr.walletId}:${hr.token}:100">清仓</button></div>` : ''}
         </div>${posTradesHtml(hr, t)}`;
         holdRow(t); break;
@@ -2182,7 +2193,7 @@ try { applyRoute(); } catch {}
 /* ---------- 持仓：链上数量 + 钱包历史算成本；每 15 秒刷新 ---------- */
 try { const v = JSON.parse(localStorage.getItem('holdPlats') || 'null'); if (Array.isArray(v) && v.length) HOLD.plats = new Set(v); } catch { /* ignore */ }
 async function loadHold(refresh = false) {
-  try { HOLD.data = await api('/api/holdings' + (refresh ? '?refresh=1' : '')); } catch (e) { HOLD.err = e.message; }
+  try { HOLD.data = fixClosed(await api('/api/holdings' + (refresh ? '?refresh=1' : ''))); } catch (e) { HOLD.err = e.message; }
   renderHold(); loadQuoteBal(refresh);
 }
 // 计价币余额（BNCB / GANG / NVDAB / WBNB 等）：Flap、Gang V2 买卖中间换出来没换回 BNB 的部分。每个币一个「全部换回 BNB」

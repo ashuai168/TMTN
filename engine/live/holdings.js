@@ -140,7 +140,7 @@ export class Holdings {
       // 价格以报价币计（GANG、BNCB…），折成 BNB：× 报价币/BNB 汇率（和行情同一来源）
       const isBnbQuote = !t.quote || ['BNB', 'WBNB'].includes(String(t.quote).toUpperCase());
       const rate = isBnbQuote ? 1 : (bnbUsd ? (this.market.quoteUsd?.(t) || 0) / bnbUsd : 0);
-      let value = rate && t.price > 0 ? p.amount * t.price * rate : null, warn = rate ? null : `${t.quote} 对 BNB 的价格暂时拿不到，市值不显示`;
+      let value = !(p.amount > 0) ? 0 : rate && t.price > 0 ? p.amount * t.price * rate : null,   /* 已清仓：没价格也是 0，盈亏 = 已卖出 − 成本 */ warn = rate ? null : `${t.quote} 对 BNB 的价格暂时拿不到，市值不显示`;
       // 校验：Gang V2 盘按链上 quoteSell（全部持仓）× 汇率核对，差 50% 以上或数值离谱就不显示，免得给出错误数字
       const chk = p.amount > 0 && this.trader.useGangV2?.(t) ? await this.sellCheck(t, rate) : null;
       if (value != null && chk?.bnb != null && Math.abs(value - chk.bnb) > 0.5 * Math.max(chk.bnb, 1e-12)) { warn = `按价格算 ${value.toFixed(4)} BNB，和链上卖出报价 ${chk.bnb.toFixed(4)} BNB 差太多，暂不显示`; value = null; }
