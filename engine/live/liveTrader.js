@@ -342,7 +342,9 @@ export class LiveTrader extends EventEmitter {
 
   useOpenFour(t) { return t.source === 'four-agent' && this.onCurve(t); }
   // Flap 普通 Portal 的 Agent ID 门槛盘：内盘时直接调 Portal.swapExactInput（tx.origin 必须持有门槛 NFT；币安聚合不保证打到内盘）
-  useFlapNft(t) { return t.source === 'flap-nft' && this.onCurve(t); }
+  // 非 BNB 计价、Portal 又没开「原生 BNB 自动换报价币」（getTokenV8Safe 第 10 个字 = 0）的盘，BNB 进 Portal 必回滚（错误码 0x6a855977，土豆 / xOPAI 2026-10-28 核对过），
+  // 改走币安聚合（它先把 BNB 换成报价币再进 Portal，钱包 2 这样成交过）
+  useFlapNft(t) { return t.source === 'flap-nft' && this.onCurve(t) && t.flapNativeSwap !== false; }
   // 下单前的门槛检查：钱包没有门槛 NFT → 返回「跳过」原因（不发交易）；能交易 / 不是门槛盘 → null
   async nftBlock(t, w) { return this.useFlapNft(t) && w?.address ? this.flapNft.block(t.address, w.address).catch(() => null) : null; }
 
