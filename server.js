@@ -682,6 +682,9 @@ app.post('/api/settings', (req, res) => {
   if (rest.qbPresets !== undefined) { trader.settings.qbPresets = rest.qbPresets; if (LIVE) trader.saveSetting('qbPresets', rest.qbPresets); }
   if (rest.sellToBnb !== undefined) { trader.settings.sellToBnb = rest.sellToBnb !== false; if (LIVE) trader.saveSetting('sellToBnb', trader.settings.sellToBnb); }
   if (rest.preApproveCap !== undefined) { trader.settings.preApproveCap = rest.preApproveCap !== false; if (LIVE) trader.saveSetting('preApproveCap', trader.settings.preApproveCap); }
+  // 「预先授权」「卖出后自动换回 BNB」对所有钱包生效：同步给 WALLET_PEERS 里的其他钱包后端（以前只改了主后端，钱包 2 还是旧设置，卖出前要当场授权）
+  const sync = Object.fromEntries(['preApproveCap', 'sellToBnb'].filter((k) => rest[k] !== undefined).map((k) => [k, rest[k] !== false]));
+  if (Object.keys(sync).length) for (const p of WALLET_PEERS) peerFetch(p, '/api/settings', sync).catch((e) => console.warn(`[settings] 同步到钱包 ${p.slot} 失败：${e.message}`));
   if (LIVE && rest.autoClaim !== undefined) { trader.saveSetting('autoClaim', !!rest.autoClaim); if (rest.autoClaim) trader.scanClaims(); } broadcast({ type: 'settings', data: trader.settings }); res.json(trader.settings); });
 app.post('/api/wallet/:id', (req, res) => {
   if (LIVE) return res.status(400).json({ error: '实盘行情模式不能修改钱包' });

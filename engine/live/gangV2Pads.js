@@ -32,7 +32,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isWbnb = (a) => !a || a === ethers.ZeroAddress || a.toLowerCase() === WBNB.toLowerCase();
 
 export class GangV2 {
-  constructor(provider, send) { this.provider = provider; this.send = send; this.pads = new Map(); this.slots = new Map(); }
+  constructor(provider, send) { this.provider = provider; this.send = send; this.pads = new Map(); this.slots = new Map(); this.unwrapping = new Map(); }
+  unwrapDone(wallet) { return this.unwrapping.get(String(wallet).toLowerCase()) || null; }
 
   async call(to, i, fn, args, from) { return i.decodeFunctionResult(fn, await this.provider.call({ to, from, data: i.encodeFunctionData(fn, args) })); }
 
@@ -206,6 +207,7 @@ export class GangV2 {
   // 真实买入：先拿报价币（已有足够的就直接用）→ 授权 → 报价 + 模拟 → buy
   // payQuote：BNB 不够、改用钱包里现有报价币直接付时的报价币数量（liveTrader.fundingPlan 算的），不再换 BNB
   async buy({ wallet, token, amountBnb, slippage, step, payQuote = null }) {
+    await this.unwrapDone(wallet);   // 上一笔卖出的 WBNB 还在后台解包：等它结束再读余额，不然会把正在解包的 WBNB 当成可用
     // 预检只等一轮：这个币的 pad / 报价币查过一次就记住，曲线状态、小数位、报价币余额、授权额度、剩余额度、汇率同时读；
     // 汇率用 5 分钟内的旧值（同时后台刷新），不再当场等 baw 报价。汇率只用来估算要换多少报价币，买入数量按实际到账 + 链上报价 + 滑点保护
     const reads = (pd, qt) => Promise.all([isWbnb(qt) ? 18 : this.decimals(qt), this.balanceOf(qt, wallet), this.call(qt, erc20, 'allowance', [wallet, pd]).then((x) => x[0]).catch(() => 0n), this.call(pd, pad, 'walletRoom', [token, wallet]).then((x) => x[0]).catch(() => null), isWbnb(qt) ? 1 : this.quoteRate(qt, { stale: 300_000 })]);
@@ -259,14 +261,17 @@ export class GangV2 {
 
   // 真实卖出：授权代币（本次数量）→ sell → 收到的报价币换回 BNB（WBNB 直接解包）
   async sell({ wallet, token, pct, slippage, step, toBnb = true }) {
-    const { pad: p, c } = await this.curve(token); this.notGraduated(c); if (c.v3) assertV3Trade(); const q = this.quoteToken(c); const hashes = [];
-    const bal = await this.balanceOf(token, wallet); if (bal <= 0n) throw new Error('没有可卖出的余额');
+    await this.unwrapDone(wallet);   // 上一笔 WBNB 还在后台解包：等它结束，不然这笔的报价币到账数量会算错
+    const [{ pad: p, c }, bal] = await Promise.all([this.curve(token), this.balanceOf(token, wallet)]);   // 曲线和余额同一轮读
+    this.notGraduated(c); if (c.v3) assertV3Trade(); const q = this.quoteToken(c); const hashes = [];
+    if (bal <= 0n) throw new Error('没有可卖出的余额');
     const amt = pct >= 100 ? bal : (bal * BigInt(Math.round(pct * 100))) / 10000n;
     const ap = await this.ensureAllowance({ wallet, token, spender: p, amount: amt, label: '授权卖出', step, kind: 'sell' }); if (ap) hashes.push(ap);
-    const { c: c2 } = await this.curve(token); const r = this.sellQuote(c2, amt);
+    // 没发授权（几百毫秒内）就用开头读的曲线，否则重读；数量偏差由滑点保护兜底，下面还有链上模拟
+    const { c: c2 } = ap ? await this.curve(token) : { c }; const r = this.sellQuote(c2, amt);
     const data = pad.encodeFunctionData('sell', [token, amt, minOut(r.out, slippage)]);
-    try { await this.provider.call({ from: wallet, to: p, data }); } catch (e) { throw new Error(`链上模拟失败：${e.shortMessage || e.message}`); }
-    const before = await this.balanceOf(q, wallet);
+    const [simErr, before] = await Promise.all([this.provider.call({ from: wallet, to: p, data }).then(() => null, (e) => e), this.balanceOf(q, wallet)]);   // 模拟和报价币余额同时读
+    if (simErr) throw new Error(`链上模拟失败：${simErr.shortMessage || simErr.message}`);
     try { hashes.push(await this.send({ wallet, to: p, inputData: data, label: c.v3 ? 'Gang V3 sell' : 'Gang V2 sell', step })); }
     catch (e) {
       // 卖出那笔要在币安 App 里确认（或已提交、结果未知）：报价币要等确认后才到账。交给上层 followUp 在确认后接着换回 BNB；
@@ -287,7 +292,16 @@ export class GangV2 {
 
   // 卖出到账的报价币换回 BNB：WBNB 直接解包；其他用 baw（Ondo 类经 USDT），失败最多再试 2 次
   async swapBack({ wallet, q, got, slippage, step, hashes }) {
-    if (isWbnb(q)) { hashes.push(await this.send({ wallet, to: WBNB, inputData: erc20.encodeFunctionData('withdraw', [got]), label: 'WBNB→BNB 解包', step })); return { venue: 'Gang V2 sell → BNB', expected: Number(ethers.formatEther(got)), txHash: hashes.at(-1), hashes }; }
+    // WBNB 和 BNB 1:1，卖出这笔上链就知道换回多少 BNB：解包放到后台，卖单不再多等一笔交易（约 2～3 秒）。
+    // 解包没成功的话 WBNB 留在钱包，下次买 WBNB 盘会直接用；同一钱包下一笔 Gang 买卖会先等解包结束
+    if (isWbnb(q)) {
+      const k = wallet.toLowerCase(), log = (n, ms) => step(n, ms);   // 不把解包的 txHash 记成订单的 pendingTx（订单已经结束）
+      const job = this.send({ wallet, to: WBNB, inputData: erc20.encodeFunctionData('withdraw', [got]), label: 'WBNB→BNB 解包（后台）', step: log })
+        .catch((e) => { console.warn(`[gang] WBNB 后台解包没成功，WBNB 留在钱包：${e.message}`); return null; })
+        .finally(() => { if (this.unwrapping.get(k) === job) this.unwrapping.delete(k); });
+      this.unwrapping.set(k, job);
+      return { venue: 'Gang V2 sell → WBNB（后台解包成 BNB）', expected: Number(ethers.formatEther(got)), txHash: hashes.at(-1), hashes };
+    }
     const dec = await this.decimals(q);
     // 第二步：只换这次卖出实际到账的报价币（链上余额差，整数），失败最多再试 2 次
     let o = null, usdtGot = null;
